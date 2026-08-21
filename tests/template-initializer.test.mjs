@@ -99,6 +99,18 @@ function configuration() {
 }
 
 describe("template initialization", () => {
+  it("ignores Git administrative files while retaining ordinary project files in source scans", async () => {
+    const root = await sourceFixture();
+    const project = sourceProject();
+    await writeFile(path.join(root, ".git"), `gitdir: /workspace/${project.github.repository}/.git/worktrees/fixture\n`, "utf8");
+    await writeFile(path.join(root, "ordinary.txt"), `${project.github.repository}\n`, "utf8");
+
+    const occurrences = await discoverOccurrences(root, projectTokens(project));
+
+    expect(occurrences.githubRepository).not.toHaveProperty(".git");
+    expect(occurrences.githubRepository).toHaveProperty("ordinary.txt", 1);
+  });
+
   it("replaces every reviewed source occurrence and is idempotent for identical input", async () => {
     const target = await sourceFixture();
     const source = await readTemplateState(target);
