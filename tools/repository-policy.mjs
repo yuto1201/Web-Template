@@ -248,6 +248,9 @@ export async function validateRepository(root = defaultRoot) {
     !reviewWorkflow.includes("ref: ${{ github.event.pull_request.base.sha }}") ||
     !reviewWorkflow.includes('BASE_SHA" != "62da0e1699ddfcf39f35914b54ad963fe5aa0740"') ||
     !reviewWorkflow.includes('HEAD_REF" != "codex/22-exact-head-review"') ||
+    !reviewWorkflow.includes('HEAD_REPOSITORY" != "$BASE_REPOSITORY"') ||
+    !reviewWorkflow.includes("github.event.pull_request.head.repo.full_name") ||
+    !reviewWorkflow.includes("github.event.pull_request.base.repo.full_name") ||
     !reviewWorkflow.includes("Review gate produced no result.") ||
     reviewWorkflow.includes("pull_request_target") ||
     reviewWorkflow.includes("github.event.pull_request.body") ||

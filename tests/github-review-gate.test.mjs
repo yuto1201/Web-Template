@@ -1,4 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { evaluateGitHubReviewGate } from "../tools/github-review-gate.mjs";
@@ -70,6 +72,8 @@ describe("GitHub exact-Head review gate", () => {
     expect(() => evaluateGitHubReviewGate({ event: event(`${reviewBody()}- Reviewed SHA: \`${headSha}\`\n`), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/exactly once/u);
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody().replace("- Reviewed SHA", "```\n- Reviewed SHA")), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/fenced/u);
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody().replace("- Primary", "<!--\n- Primary")), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/HTML comment/u);
+    expect(() => evaluateGitHubReviewGate({ event: event(`\`\`\`text\n${reviewBody()}\`\`\``), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/fenced/u);
+    expect(() => evaluateGitHubReviewGate({ event: event(`<!--\n${reviewBody()}-->`), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/HTML comment/u);
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody({ reviewer: "codex" })), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/opposite model/u);
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody({ verdict: "changes-requested" })), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/approved/u);
     expect(() => evaluateGitHubReviewGate({ event: event(), changedPaths: ["supabase/migrations/001.sql"], diff: "", workflow })).toThrow(/supabase-auditor/u);
@@ -105,5 +109,39 @@ describe("GitHub exact-Head review gate", () => {
     expect(source).not.toContain("github.event.pull_request.body");
     expect(source).not.toMatch(/^\s*paths:/mu);
     expect(source).not.toMatch(/^\s*if:/mu);
+    expect(source).toContain("HEAD_REPOSITORY");
+    expect(source).toContain("BASE_REPOSITORY");
+  });
+
+  it("runs the committed CLI and derives pull-request changes from merge-base", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "github-review-gate-"));
+    /** @param {string[]} args */
+    const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    try {
+      git("init", "-b", "main");
+      git("config", "user.name", "Template Test");
+      git("config", "user.email", "template-test@example.invalid");
+      await writeFile(path.join(root, "README.md"), "base\n", "utf8");
+      git("add", "README.md");
+      git("commit", "-m", "base");
+      git("switch", "-c", "feature");
+      await writeFile(path.join(root, "README.md"), "base\nfeature\n", "utf8");
+      git("commit", "-am", "feature");
+      const featureSha = git("rev-parse", "HEAD");
+      git("switch", "main");
+      await mkdir(path.join(root, "supabase", "migrations"), { recursive: true });
+      await writeFile(path.join(root, "supabase", "migrations", "001.sql"), "select 1;\n", "utf8");
+      git("add", "supabase/migrations/001.sql");
+      git("commit", "-m", "base advanced");
+      const baseSha = git("rev-parse", "HEAD");
+      const eventPath = path.join(root, "event.json");
+      const workflowPath = path.join(root, "workflow.json");
+      await writeFile(eventPath, `${JSON.stringify({ pull_request: { ...event(reviewBody({ sha: featureSha })).pull_request, base: { sha: baseSha, repo: { full_name: "yuto1201/Web-Template" } }, head: { sha: featureSha, ref: "feature", repo: { full_name: "yuto1201/Web-Template" } } } })}\n`, "utf8");
+      await writeFile(workflowPath, `${JSON.stringify(workflow)}\n`, "utf8");
+      const output = execFileSync(process.execPath, [path.resolve("tools/github-review-gate.mjs"), "--event", eventPath, "--repository", root, "--workflow", workflowPath, "--base", baseSha, "--head", featureSha], { encoding: "utf8" });
+      expect(JSON.parse(output)).toMatchObject({ ok: true, mode: "independent-review", headSha: featureSha });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

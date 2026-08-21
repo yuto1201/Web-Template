@@ -40,12 +40,14 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
         shell: bash
         run: |
           gate_path="trusted/tools/github-review-gate.mjs"
           workflow_path="trusted/config/workflow.json"
           if [[ ! -f "$gate_path" ]]; then
-            if [[ "$BASE_SHA" != "62da0e1699ddfcf39f35914b54ad963fe5aa0740" || "$HEAD_REF" != "codex/22-exact-head-review" ]]; then
+            if [[ "$BASE_SHA" != "62da0e1699ddfcf39f35914b54ad963fe5aa0740" || "$HEAD_REF" != "codex/22-exact-head-review" || "$HEAD_REPOSITORY" != "$BASE_REPOSITORY" ]]; then
               echo "Candidate bootstrap is not authorized for this pull request." >&2
               exit 1
             fi

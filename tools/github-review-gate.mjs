@@ -19,6 +19,22 @@ function uniqueBodyField(body, label) {
   return matches[0].slice(prefix.length).trim();
 }
 
+/** @param {string} body @param {number} headingIndex @param {string} section */
+function assertReviewSectionVisible(body, headingIndex, section) {
+  const prefix = body.slice(0, headingIndex);
+  let fence = null;
+  for (const line of prefix.split(/\r?\n/u)) {
+    const marker = /^\s{0,3}(`{3,}|~{3,})/u.exec(line)?.[1];
+    if (!marker) continue;
+    if (!fence) fence = marker;
+    else if (marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+  }
+  assert(!fence, "Review evidence must not be inside a fenced code block.");
+  assert(prefix.lastIndexOf("<!--") <= prefix.lastIndexOf("-->"), "Review evidence must not be inside an HTML comment.");
+  assert(!/(?:^|\n)\s{0,3}(?:`{3,}|~{3,})/u.test(section), "Review evidence must not be inside a fenced code block.");
+  assert(!section.includes("<!--") && !section.includes("-->"), "Review evidence must not be inside an HTML comment.");
+}
+
 /** @param {string} body */
 function parseReviewBody(body) {
   const headings = [...body.matchAll(/^## Opposite-model review\s*$/gimu)];
@@ -27,8 +43,7 @@ function parseReviewBody(body) {
   const tail = body.slice(start);
   const end = tail.search(/^##\s+/mu);
   const section = end === -1 ? tail : tail.slice(0, end);
-  assert(!section.includes("```"), "Review evidence must not be inside a fenced code block.");
-  assert(!section.includes("<!--") && !section.includes("-->"), "Review evidence must not be inside an HTML comment.");
+  assertReviewSectionVisible(body, headings[0].index ?? 0, section);
   for (const label of ["Primary", "Reviewer", "Reviewed SHA", "Verdict", "Contracts"]) {
     assert(section.split(/\r?\n/u).filter((line) => line.startsWith(`- ${label}:`)).length === 1, `${label} must appear inside the review section.`);
   }
@@ -92,9 +107,10 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow }
   const headSha = pullRequest.head?.sha;
   assert(typeof headSha === "string" && shaPattern.test(headSha), "Pull request Head SHA is invalid.");
   assert(Array.isArray(changedPaths) && changedPaths.length > 0, "Pull request must contain at least one changed path.");
+  requiredContracts(changedPaths, workflow);
 
   const policy = workflow.githubReviewGate?.dependabot;
-  if (pullRequest.user?.login === policy?.login) {
+  if (policy && pullRequest.user?.login === policy.login) {
     assert(pullRequest.user.id === policy.userId && pullRequest.user.type === policy.userType, "Dependabot identity does not match the pinned GitHub bot.");
     assert(pullRequest.head?.repo?.full_name === pullRequest.base?.repo?.full_name, "Dependabot exception requires a same repository branch.");
     assert(String(pullRequest.head?.ref ?? "").startsWith(policy.headPrefix), "Dependabot exception requires a GitHub Actions branch.");
@@ -144,8 +160,10 @@ export async function runCli(argv = process.argv.slice(2)) {
   const event = JSON.parse(await readFile(path.resolve(eventPath), "utf8"));
   assert(event.pull_request?.base?.sha === baseSha, "CLI base SHA must match the GitHub event.");
   assert(event.pull_request?.head?.sha === headSha, "CLI Head SHA must match the GitHub event.");
-  const changedPaths = gitBuffer("-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", baseSha, headSha, "--").toString("utf8").split("\0").filter(Boolean);
-  const diff = git("diff", "--unified=0", "--no-ext-diff", "--no-textconv", "--no-renames", baseSha, headSha, "--");
+  const diffBaseSha = git("merge-base", baseSha, headSha).trim();
+  assert(shaPattern.test(diffBaseSha), "Git merge-base is invalid.");
+  const changedPaths = gitBuffer("-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", diffBaseSha, headSha, "--").toString("utf8").split("\0").filter(Boolean);
+  const diff = git("diff", "--unified=0", "--no-ext-diff", "--no-textconv", "--no-renames", diffBaseSha, headSha, "--");
   process.stdout.write(`${JSON.stringify(evaluateGitHubReviewGate({ event, changedPaths, diff, workflow }), null, 2)}\n`);
 }
 
