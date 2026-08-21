@@ -61,6 +61,7 @@ try {
   run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
   run("git", ["add", "-A"], target, "stage clean-room files for policy inspection");
   run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
+  run(process.execPath, [npmCli, "run", "workstation:doctor"], target, "verify clean-room workstation contract");
   run(process.execPath, [npmCli, "run", "check"], target, "run clean-room repository checks");
   const readiness = run(process.execPath, [npmCli, "run", "readiness"], target, "verify clean-room readiness distinction");
   if (!readiness.includes('"status": "ready"') || !readiness.includes('"status": "needs-codex"')) {
@@ -74,6 +75,7 @@ try {
     packageName: generatedPackage.name,
     sourceLeakage: 0,
     idempotence: "passed",
+    workstation: "passed",
     checks: "passed",
     readiness: "passed",
     browserSmoke: "passed",

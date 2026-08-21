@@ -96,3 +96,38 @@ jobs:
         if: always()
         continue-on-error: true
         run: npm run db:stop
+
+  macos:
+    name: macOS onboarding and browser checks
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Pin npm
+        run: npm install --global npm@11.6.2
+
+      - name: Install dependencies from lockfile
+        run: npm ci
+
+      - name: Verify workstation contract
+        run: npm run workstation:doctor
+
+      - name: Run policy, lint, types, and tests
+        run: npm run check
+
+      - name: Install Chromium
+        run: npx playwright install chromium
+
+      - name: Run desktop and mobile browser checks
+        run: npm run test:e2e

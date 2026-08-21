@@ -5,8 +5,8 @@
   "description": "Issue-driven Next.js, Supabase, Vercel, and Cloudflare web application template",
   "packageManager": "npm@11.6.2",
   "engines": {
-    "node": ">=24.13.0 <25",
-    "npm": ">=11.6.0 <12"
+    "node": "24.13.0",
+    "npm": "11.6.2"
   },
   "scripts": {
     "dev": "node tools/run-next-dev.mjs",
@@ -15,6 +15,7 @@
     "template:source-check": "node tools/template-manifest.mjs",
     "template:readiness": "node tools/template-readiness.mjs",
     "template:verify": "node tools/verify-template-instantiation.mjs",
+    "workstation:doctor": "node tools/workstation-doctor.mjs",
     "readiness": "npm run template:readiness",
     "check:links": "node tools/verify-links.mjs",
     "audit:trace": "node tools/verify-acceptance-trace.mjs",

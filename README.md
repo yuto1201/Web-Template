@@ -23,6 +23,19 @@ npm run check
 
 初期化の詳細と外部サービスの順序は [activation runbook](docs/activation.md) を参照してください。
 
+## 作業PCをMacへ移す
+
+Macへの移行は、既存PCのフォルダや認証情報を丸ごとコピーせず、fresh cloneから再構築します。Apple Silicon/Intelの前提、Node/npm/Docker、アカウント境界、秘密値の再入力、復旧方法と完了ゲートは [macOS workstation onboarding](docs/onboarding-macos.md) を参照してください。
+
+依存関係を導入した後、秘密値を表示しない自動診断を実行できます。
+
+```bash
+npm run workstation:doctor
+npm run workstation:doctor -- --require-env --require-docker
+```
+
+通常診断では `.env.local` と Docker を optional として扱い、後者の厳格モードではMac移行完了に必要な項目としてfail closedで検査します。
+
 ## ローカル準備とライブ準備
 
 `npm run readiness` は次を別々に表示します。
@@ -69,10 +82,11 @@ npm run audit:completion -- --include-integration --require-all
 
 - [AGENTS.md](AGENTS.md): 全モデル共通の実行規約
 - [specs/README.md](specs/README.md): 仕様の正本と更新ルール
-- [completion audit trace](specs/completion-audit.md): Issue #1–#8 と現在の実装/検証の対応
+- [completion audit trace](specs/completion-audit.md): Issue #1–#8・#19 と現在の実装/検証の対応
 - [authority boundary](docs/authority.md): アカウントと外部操作の権限境界
 - [workflow](docs/workflow.md): Issue から squash merge までの標準手順
 - [security](docs/security.md): 秘密情報と Claude 実行ガード
 - [verification](docs/verification.md): 必須検証と証跡
+- [macOS onboarding](docs/onboarding-macos.md): fresh cloneによる作業PC移行と完了ゲート
 
 この golden repository の実装履歴は [GitHub Issues](https://github.com/yuto1201/Web-Template/issues) にあります。生成後はリンクが生成先 owner/repository に置き換わり、そのリポジトリの Issue が作業の正本になります。

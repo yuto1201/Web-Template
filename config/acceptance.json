@@ -48,6 +48,12 @@
       "title": "Safe template instantiation and completion audit",
       "evidence": ["config/template.json", "tools/initialize-template.mjs", "tools/verify-template-instantiation.mjs", "tests/template-initializer.test.mjs", "specs/completion-audit.md"],
       "commands": ["template:source-check", "check:links", "audit:trace", "template:verify"]
+    },
+    {
+      "issue": 19,
+      "title": "macOS workstation onboarding and migration readiness",
+      "evidence": ["docs/onboarding-macos.md", "tools/workstation-doctor.mjs", "tests/workstation-doctor.test.mjs", ".github/workflows/ci.yml"],
+      "commands": ["workstation:doctor", "check", "test:e2e"]
     }
   ]
 }

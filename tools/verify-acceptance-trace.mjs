@@ -7,8 +7,8 @@ try {
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   if (trace.schemaVersion !== 1 || !Array.isArray(trace.issues)) throw new Error("config/acceptance.json is malformed.");
   const issueNumbers = trace.issues.map(/** @param {Record<string, any>} entry */ (entry) => entry.issue);
-  if (JSON.stringify(issueNumbers) !== JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8])) {
-    throw new Error("Acceptance trace must cover Issues #1 through #8 exactly once and in order.");
+  if (JSON.stringify(issueNumbers) !== JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 19])) {
+    throw new Error("Acceptance trace must cover Issues #1 through #8 and #19 exactly once and in order.");
   }
   let evidenceCount = 0;
   for (const entry of trace.issues) {
@@ -27,7 +27,7 @@ try {
       if (!packageJson.scripts?.[command]) throw new Error(`Issue #${entry.issue} references missing npm script: ${command}.`);
     }
   }
-  process.stdout.write(`${JSON.stringify({ ok: true, issues: 8, evidenceFiles: evidenceCount }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, issues: issueNumbers.length, evidenceFiles: evidenceCount }, null, 2)}\n`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
