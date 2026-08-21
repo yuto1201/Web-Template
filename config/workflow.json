@@ -3,6 +3,17 @@
   "artifactRoot": ".artifacts",
   "baseRef": "main",
   "reviewerMap": { "codex": "claude", "claude": "codex" },
+  "githubReviewGate": {
+    "checkName": "Exact Head review policy",
+    "dependabot": {
+      "userId": 49699333,
+      "login": "dependabot[bot]",
+      "userType": "Bot",
+      "headPrefix": "dependabot/github_actions/",
+      "allowedActions": ["actions/checkout", "actions/setup-node"],
+      "allowedPathPrefixes": [".github/workflows/"]
+    }
+  },
   "states": [
     "proposed", "approved", "claimed", "in-progress", "verify-passed",
     "review-requested", "changes-requested", "approved-for-merge", "merged", "done",

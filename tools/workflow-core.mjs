@@ -41,6 +41,7 @@ export const operationNames = [
   "github.create_pr",
   "github.merge_pr",
   "github.delete_branch",
+  "github.update_ruleset",
   "supabase.inspect_project",
   "supabase.apply_migrations",
   "vercel.inspect_project",
@@ -114,6 +115,20 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["verified-cleanup"],
     inputs: z.object({ branch: branchSchema, mergedPrNumber: z.number().int().positive(), headSha: shaSchema }).strict(),
     evidence: ["merged PR identity", "deleted exact remote branch"],
+  },
+  "github.update_ruleset": {
+    targetKind: "github.repository",
+    targetIdentifier: targetSources.github,
+    environments: ["production"],
+    reasonCodes: ["reviewed-release"],
+    inputs: z.object({
+      issue: z.number().int().positive(),
+      rulesetName: z.literal("main exact-Head review"),
+      targetBranch: z.literal("main"),
+      requiredCheckName: z.literal("Exact Head review policy"),
+      enforcement: z.literal("active"),
+    }).strict(),
+    evidence: ["authenticated GitHub owner", "ruleset ID", "active enforcement", "required exact-Head check"],
   },
   "supabase.inspect_project": {
     targetKind: "supabase.project",

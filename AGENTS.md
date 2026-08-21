@@ -19,11 +19,13 @@ Do not silently resolve a material conflict. Record the decision or ask the user
 ## Workflow
 
 - Work on one GitHub Issue per branch and pull request.
+- The only exception is a Dependabot GitHub Actions version-only pull request that passes the pinned bot, same-repository branch, workflow-path, action allowlist, and diff-shape checks in `tools/github-review-gate.mjs`; it does not require a synthetic Issue or opposite-model body evidence.
 - Branch names use `codex/<issue-number>-<slug>` for Codex-led work and `claude/<issue-number>-<slug>` for Claude-led local work.
 - Read the Issue before editing. Keep changes inside its scope.
 - Add or update tests with behavior changes.
 - Run `npm run check` before review and again before merge.
 - Obtain an independent cross-model review before marking a PR ready.
+- Keep the generated PR body's opposite-model review section synchronized with the exact final Head; GitHub's `Exact Head review policy` check rejects stale or structurally invalid evidence.
 - Prefer squash merge. The PR description must close its Issue and summarize verification evidence.
 - Never stage unrelated user changes or rewrite unrelated history.
 

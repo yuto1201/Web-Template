@@ -27,65 +27,74 @@ async function copyProject(source, target) {
 const source = process.cwd();
 const npmCli = process.env.npm_execpath;
 if (!npmCli) throw new Error("npm_execpath is unavailable; run this verifier through npm run template:verify.");
-const temporaryParent = path.resolve(os.tmpdir());
-const target = await mkdtemp(path.join(temporaryParent, "web-starter-clean-room-"));
-try {
-  const sourceState = await readTemplateState(source);
-  await copyProject(source, target);
-  const config = {
-    schemaVersion: 1,
-    appName: "Clean Room App",
-    slug: "clean-room-app",
-    github: { owner: "example-owner", repository: "clean-room-app" },
-    localPorts: { app: 4310, supabaseBase: 56320 },
-    publicUrls: { production: "https://clean-room-app.example.invalid" },
-    ownership: {
-      supabase: { organizationName: null, projectRef: null },
-      vercel: { scope: null, projectId: null },
-      cloudflare: { accountId: null, accountName: null, zoneId: null, zoneName: "example.invalid" },
-    },
-  };
-  const inputDirectory = path.join(target, ".artifacts");
-  await mkdir(inputDirectory, { recursive: true });
-  const inputPath = path.join(inputDirectory, "template-init.json");
-  await writeFile(inputPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  const first = run(process.execPath, ["tools/initialize-template.mjs", "--config", inputPath], target, "first initialization");
-  const second = run(process.execPath, ["tools/initialize-template.mjs", "--config", inputPath], target, "idempotence check");
-  if (!first.includes('"status": "initialized"') || !second.includes('"status": "idempotent"')) {
-    throw new Error("Initialization did not report initialized then idempotent status.");
-  }
-  const leakage = await discoverOccurrences(target, projectTokens(sourceState.project));
-  const leakedFiles = [...new Set(Object.values(leakage).flatMap((files) => Object.keys(files)))];
-  if (leakedFiles.length > 0) throw new Error(`Template source values leaked into clean-room output: ${leakedFiles.join(", ")}`);
-
-  run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
-  run("git", ["add", "-A"], target, "stage clean-room files for policy inspection");
-  run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
-  run(process.execPath, [npmCli, "run", "workstation:doctor"], target, "verify clean-room workstation contract");
-  run(process.execPath, [npmCli, "run", "check"], target, "run clean-room repository checks");
-  const readiness = run(process.execPath, [npmCli, "run", "readiness"], target, "verify clean-room readiness distinction");
-  if (!readiness.includes('"status": "ready"') || !readiness.includes('"status": "needs-codex"')) {
-    throw new Error("Clean-room readiness did not distinguish local readiness from pending live providers.");
-  }
-  run(process.execPath, [npmCli, "run", "test:e2e"], target, "run clean-room browser smoke checks");
-  const generatedPackage = JSON.parse(await readFile(path.join(target, "package.json"), "utf8"));
+const sourceState = await readTemplateState(source);
+if (sourceState.status === "initialized") {
   process.stdout.write(`${JSON.stringify({
     ok: true,
-    status: "clean-room-verified",
-    packageName: generatedPackage.name,
-    sourceLeakage: 0,
-    idempotence: "passed",
-    workstation: "passed",
-    checks: "passed",
-    readiness: "passed",
-    browserSmoke: "passed",
+    status: "initialized-repository",
+    cleanRoom: "not-applicable",
+    reason: "Clean-room instantiation applies only to the template source.",
   }, null, 2)}\n`);
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-} finally {
-  const relative = path.relative(temporaryParent, target);
-  if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-    await rm(target, { recursive: true, force: true });
+} else {
+  const temporaryParent = path.resolve(os.tmpdir());
+  const target = await mkdtemp(path.join(temporaryParent, "web-starter-clean-room-"));
+  try {
+    await copyProject(source, target);
+    const config = {
+      schemaVersion: 1,
+      appName: "Clean Room App",
+      slug: "clean-room-app",
+      github: { owner: "example-owner", repository: "clean-room-app" },
+      localPorts: { app: 4310, supabaseBase: 56320 },
+      publicUrls: { production: "https://clean-room-app.example.invalid" },
+      ownership: {
+        supabase: { organizationName: null, projectRef: null },
+        vercel: { scope: null, projectId: null },
+        cloudflare: { accountId: null, accountName: null, zoneId: null, zoneName: "example.invalid" },
+      },
+    };
+    const inputDirectory = path.join(target, ".artifacts");
+    await mkdir(inputDirectory, { recursive: true });
+    const inputPath = path.join(inputDirectory, "template-init.json");
+    await writeFile(inputPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    const first = run(process.execPath, ["tools/initialize-template.mjs", "--config", inputPath], target, "first initialization");
+    const second = run(process.execPath, ["tools/initialize-template.mjs", "--config", inputPath], target, "idempotence check");
+    if (!first.includes('"status": "initialized"') || !second.includes('"status": "idempotent"')) {
+      throw new Error("Initialization did not report initialized then idempotent status.");
+    }
+    const leakage = await discoverOccurrences(target, projectTokens(sourceState.project));
+    const leakedFiles = [...new Set(Object.values(leakage).flatMap((files) => Object.keys(files)))];
+    if (leakedFiles.length > 0) throw new Error(`Template source values leaked into clean-room output: ${leakedFiles.join(", ")}`);
+
+    run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
+    run("git", ["add", "-A"], target, "stage clean-room files for policy inspection");
+    run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
+    run(process.execPath, [npmCli, "run", "workstation:doctor"], target, "verify clean-room workstation contract");
+    run(process.execPath, [npmCli, "run", "check"], target, "run clean-room repository checks");
+    const readiness = run(process.execPath, [npmCli, "run", "readiness"], target, "verify clean-room readiness distinction");
+    if (!readiness.includes('"status": "ready"') || !readiness.includes('"status": "needs-codex"')) {
+      throw new Error("Clean-room readiness did not distinguish local readiness from pending live providers.");
+    }
+    run(process.execPath, [npmCli, "run", "test:e2e"], target, "run clean-room browser smoke checks");
+    const generatedPackage = JSON.parse(await readFile(path.join(target, "package.json"), "utf8"));
+    process.stdout.write(`${JSON.stringify({
+      ok: true,
+      status: "clean-room-verified",
+      packageName: generatedPackage.name,
+      sourceLeakage: 0,
+      idempotence: "passed",
+      workstation: "passed",
+      checks: "passed",
+      readiness: "passed",
+      browserSmoke: "passed",
+    }, null, 2)}\n`);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  } finally {
+    const relative = path.relative(temporaryParent, target);
+    if (relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+      await rm(target, { recursive: true, force: true });
+    }
   }
 }

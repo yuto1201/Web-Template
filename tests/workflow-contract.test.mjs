@@ -86,6 +86,34 @@ describe("workflow contracts", () => {
     expect(() => validateExternalOperationRequest(request, path.resolve("."), outOfScopeContract)).toThrow(/outside the frozen/u);
   });
 
+  it("allows only the fixed active exact-Head ruleset update", () => {
+    const frozenContract = snapshotIssueContract({
+      ...contractInput(),
+      externalOperations: ["github.update_ruleset"],
+    }, "2026-08-21T01:00:00+09:00");
+    const request = {
+      schemaVersion: 1,
+      requestId: "issue-5-github-update-ruleset-1",
+      issue: 5,
+      operation: "github.update_ruleset",
+      target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+      environment: "production",
+      reasonCode: "reviewed-release",
+      inputs: {
+        issue: 5,
+        rulesetName: "main exact-Head review",
+        targetBranch: "main",
+        requiredCheckName: "Exact Head review policy",
+        enforcement: "active",
+      },
+    };
+    expect(validateExternalOperationRequest(request, path.resolve("."), frozenContract).expectedEvidence).toContain("active enforcement");
+    expect(() => validateExternalOperationRequest({
+      ...request,
+      inputs: { ...request.inputs, requiredCheckName: "spoofed check" },
+    }, path.resolve("."), frozenContract)).toThrow();
+  });
+
   it("rejects operation request paths outside the fixed request subtree", async () => {
     const root = path.resolve("C:/workspace/web-template");
     await expect(readExternalOperationRequest(root, "../request.json")).rejects.toThrow(/escapes/u);
