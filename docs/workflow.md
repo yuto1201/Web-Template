@@ -47,8 +47,17 @@ The canonical state names, transitions, reviewer mapping, and privileged-path co
 - Open a draft PR linked with `Closes #<number>`.
 - Include scope, verification evidence, external changes, and known limitations.
 - Mark ready only after local checks and independent review.
+- The `Exact Head review policy` workflow reads the GitHub event file and compares the PR body's reviewed SHA with the current GitHub-supplied Head. It also enforces the configured opposite-model mapping and required contracts for changed privileged paths. Editing the body reruns the check; any new commit makes the prior reviewed SHA stale.
 - Wait for required CI. Squash merge and verify `main` contains the result and the Issue is closed.
 - Run the current-Head gate before rendering the PR body or requesting merge. External merge remains a Codex operation.
+
+### GitHub evidence boundary
+
+The PR body is an auditable mirror of local exact-Head evidence, not an authenticated identity for Codex or Claude. The GitHub check prevents stale or malformed review claims and runs the verifier from the base branch after initial rollout, but a repository administrator or a malicious workflow change can bypass it. Local `.artifacts/` remain ignored and authoritative for Codex's merge request gate. Do not use `pull_request_target`, interpolate PR body text into shell commands, or add path/job filters to the required workflow.
+
+The single Issue/branch/PR rule has one narrow exception: Dependabot GitHub Actions updates. The exception passes only when GitHub reports the pinned `dependabot[bot]` identity, the branch belongs to the same repository and uses the `dependabot/github_actions/` prefix, every changed file is an allowlisted workflow YAML path, and every changed diff line only replaces the version of an allowlisted `uses:` action. npm and application dependency PRs, forks, new actions, workflow logic changes, and mixed changes require the normal Issue and opposite-model review path.
+
+The workflow initially falls back to the candidate verifier only for the fixed #22 branch on its recorded pre-gate base SHA; any other missing base verifier fails closed. Codex enables the branch ruleset only after the bootstrap PR is merged and a base-sourced live run passes. The active ruleset name and required check name are fixed in `config/workflow.json`, and the exported ruleset pins the exact-Head check plus all three repository CI jobs to the GitHub Actions App. Changing any of these requires a reviewed migration and corresponding provider update. Strict status checks intentionally require an updated branch and a fresh opposite-model review after concurrent changes land on `main`.
 
 ## State machine
 
