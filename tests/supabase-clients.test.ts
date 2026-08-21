@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+
+vi.mock("next/headers", () => ({
+  cookies: vi.fn(async () => ({
+    getAll: () => [],
+    set: vi.fn(),
+  })),
+}));
 
 describe("Supabase public client factories", () => {
   it("creates a typed browser client from publishable configuration", () => {
@@ -8,13 +15,9 @@ describe("Supabase public client factories", () => {
     expect(client.from).toBeTypeOf("function");
   });
 
-  it("creates a new server client per cookie adapter without a secret key", () => {
-    const cookieAdapter = {
-      getAll: () => [],
-      setAll: () => undefined,
-    };
-    const first = createSupabaseServerClient(cookieAdapter);
-    const second = createSupabaseServerClient(cookieAdapter);
+  it("creates a new request-scoped server client without a secret key", async () => {
+    const first = await createSupabaseServerClient();
+    const second = await createSupabaseServerClient();
 
     expect(first).not.toBe(second);
     expect(first.from).toBeTypeOf("function");

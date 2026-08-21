@@ -5,11 +5,16 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const nextBinary = path.join(repositoryRoot, "node_modules", "next", "dist", "bin", "next");
 const runningOnVercel = Boolean(process.env.VERCEL);
-const requiredPublicVariables = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"];
+const requiredDeploymentVariables = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+  "APP_ORIGIN",
+  "AUTH_SIGNUP_MODE",
+];
 const serverOnlySentinel = ["sb", "secret", "SERVER_ONLY_BUILD_SENTINEL_1234567890"].join("_");
 
 if (runningOnVercel) {
-  const missingVariables = requiredPublicVariables.filter((name) => !process.env[name]?.trim());
+  const missingVariables = requiredDeploymentVariables.filter((name) => !process.env[name]?.trim());
   if (missingVariables.length > 0) {
     throw new Error(`Refusing CI placeholders on Vercel. Missing: ${missingVariables.join(", ")}.`);
   }
@@ -23,6 +28,8 @@ const safeEnvironment = {
   SUPABASE_SERVICE_ROLE_KEY:
     process.env.SUPABASE_SERVICE_ROLE_KEY
     ?? (runningOnVercel ? "" : serverOnlySentinel),
+  APP_ORIGIN: process.env.APP_ORIGIN ?? (runningOnVercel ? "" : "http://127.0.0.1:3000"),
+  AUTH_SIGNUP_MODE: process.env.AUTH_SIGNUP_MODE ?? (runningOnVercel ? "" : "disabled"),
 };
 
 /**
