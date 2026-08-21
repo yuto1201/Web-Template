@@ -21,8 +21,21 @@ Node.js 24 と npm 11 を使います。
 
 ```powershell
 npm ci
-npm run check
+npm run dev
 ```
+
+初回起動前に `.env.example` を `.env.local` にコピーし、対象プロジェクトの公開可能な Supabase URL と publishable key を設定します。`NEXT_PUBLIC_` 変数には service-role key やプロバイダートークンを入れないでください。
+
+全検証は次のコマンドで実行します。
+
+```powershell
+npm run check
+npm run test:e2e
+```
+
+`npm run check` はポリシー、lint、型、単体テストに加え、Server-only モジュールの誤 import が実際にビルドを拒否することと、ブラウザ用 bundle に秘密情報パターンが含まれないことを確認します。
+
+ESLint 9 と TypeScript 6 は Next.js 16.3.1 のlint構成（`typescript-eslint` を含む）が宣言する互換範囲に固定しています。新しいmajorへ上げる場合は、`npm ls` のpeer dependencyと全チェックを同時に確認します。
 
 生成されたエージェント定義を更新する場合は、`config/agents.json` と `docs/agent-contracts/` を変更してから次を実行します。
 

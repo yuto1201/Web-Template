@@ -41,6 +41,12 @@ jobs:
       - name: Run policy, lint, types, and tests
         run: npm run check
 
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run desktop and mobile browser checks
+        run: npm run test:e2e
+
       - name: Check patch whitespace
         shell: bash
         run: |

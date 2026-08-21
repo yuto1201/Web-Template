@@ -6,6 +6,7 @@ Application deployment is introduced in Issue #6 and DNS routing in Issue #7. Un
 - Cloudflare remains the registrar and authoritative DNS provider.
 - Initial application DNS records are DNS-only and point to values supplied by the verified Vercel project.
 - Production environment variables are never copied to preview automatically.
+- Vercel uses `npm run build:ci` only after preview and production public environment variables are configured; its Vercel guard rejects placeholder fallback and scans static, HTML, and RSC browser artifacts.
 - Codex verifies Vercel scope/project and Cloudflare account/zone immediately before changes.
 - Deployment and DNS changes are reported separately so either layer can be diagnosed without guessing.
 
