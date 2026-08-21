@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "agents": [
+    {
+      "slug": "change-evaluator",
+      "description": "Use this read-only agent after implementation or before merge to find correctness, security, accessibility, and test gaps. Typical triggers include reviewing a branch against its Issue, evaluating a pull request diff, and checking whether verification evidence supports release readiness. See the agent body for worked scenarios.",
+      "color": "blue",
+      "contract": "docs/agent-contracts/change-evaluator.md"
+    },
+    {
+      "slug": "supabase-auditor",
+      "description": "Use this read-only agent for Supabase schema, migration, Auth, RLS, grant, and database-test review. Typical triggers include auditing a new migration, checking authenticated versus anonymous access, and reviewing App Router authentication boundaries. See the agent body for worked scenarios.",
+      "color": "yellow",
+      "contract": "docs/agent-contracts/supabase-auditor.md"
+    }
+  ]
+}

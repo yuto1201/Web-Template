@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "github": {
+    "owner": "yuto1201",
+    "repository": "Web-Template"
+  },
+  "supabase": {
+    "organizationName": "yuto1201's Org",
+    "projectRef": null
+  },
+  "vercel": {
+    "scope": null,
+    "projectId": null
+  },
+  "cloudflare": {
+    "accountName": "Yuto Dev",
+    "zoneId": null,
+    "domains": []
+  }
+}
