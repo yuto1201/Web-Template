@@ -1,18 +1,29 @@
 const development = process.env.NODE_ENV === "development";
+const supabaseConnectSources = (() => {
+  const value = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!value) return [];
+  try {
+    const url = new URL(value);
+    if (!(["https:", "http:"]).includes(url.protocol)) return [];
+    const websocket = new URL(url.origin);
+    websocket.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return [url.origin, websocket.origin];
+  } catch {
+    return [];
+  }
+})();
 const contentSecurityPolicy = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${development ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  `connect-src 'self' ${supabaseConnectSources.join(" ")}`.trim(),
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
 ].join("; ");
-
-// Issue #4 must add the verified Supabase HTTPS/WSS origins when browser access is introduced.
 
 const securityHeaders = [
   { key: "Content-Security-Policy", value: contentSecurityPolicy },

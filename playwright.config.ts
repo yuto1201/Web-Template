@@ -15,6 +15,8 @@ export default defineConfig({
     env: {
       NEXT_PUBLIC_SUPABASE_URL: "https://template-e2e.supabase.co",
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_TEMPLATE_E2E_VALUE_123456",
+      APP_ORIGIN: "http://127.0.0.1:3000",
+      AUTH_SIGNUP_MODE: "disabled",
     },
     url: "http://127.0.0.1:3000",
     reuseExistingServer: false,

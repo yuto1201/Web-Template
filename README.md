@@ -39,10 +39,13 @@ Supabaseのmigration、RLS、grant、生成型はDockerを使う別検証で確�
 
 ```powershell
 npm run db:verify
+npm run auth:verify
 npm run db:stop
 ```
 
 `db:verify` は固定CLIでlocal Postgresを起動し、空DB reset、schema lint、pgTAP否定テスト、生成型比較を行います。Docker daemonへ接続できない場合は`NOT RUN`とexit code 2を返し、成功として扱いません。標準ポートを使う他プロジェクトを妨げないよう、このテンプレートは`5532x`帯を使用します。
+
+認証には `APP_ORIGIN` と `AUTH_SIGNUP_MODE` の明示設定が必要です。`auth:verify` はローカル Auth が発行する実 JWT と Data API を使い、2ユーザー間の RLS 分離を確認します。verified claims、redirect allowlist、招待制と公開登録の境界は [docs/authentication.md](docs/authentication.md) を参照してください。
 
 ESLint 9 と TypeScript 6 は Next.js 16.3.1 のlint構成（`typescript-eslint` を含む）が宣言する互換範囲に固定しています。新しいmajorへ上げる場合は、`npm ls` のpeer dependencyと全チェックを同時に確認します。
 

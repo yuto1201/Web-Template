@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "next dev",
+    "auth:verify": "node tools/verify-auth-integration.mjs",
     "db:verify": "node tools/verify-database.mjs",
     "db:stop": "npm exec -- supabase stop --no-backup",
     "build": "next build",

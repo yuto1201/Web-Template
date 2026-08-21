@@ -26,7 +26,10 @@ export default function Home() {
           <span aria-hidden="true" className="wordmark-mark">W/</span>
           <span>Web application baseline</span>
         </Link>
-        <span className="status"><i aria-hidden="true" /> boundary checks ready</span>
+        <div className="header-actions">
+          <span className="status"><i aria-hidden="true" /> boundary checks ready</span>
+          <Link className="header-link" href="/login">Sign in</Link>
+        </div>
       </header>
 
       <main id="main-content">

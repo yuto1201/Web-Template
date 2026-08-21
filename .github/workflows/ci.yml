@@ -57,7 +57,7 @@ jobs:
           fi
 
   database:
-    name: Database policy checks
+    name: Database and Auth policy checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -79,6 +79,9 @@ jobs:
 
       - name: Reset, lint, test, and compare generated types
         run: npm run db:verify
+
+      - name: Verify real local JWTs preserve RLS isolation
+        run: npm run auth:verify
 
       - name: Stop local Supabase
         if: always()
