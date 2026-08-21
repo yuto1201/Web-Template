@@ -62,6 +62,11 @@ try {
   run("git", ["add", "-A"], target, "stage clean-room files for policy inspection");
   run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
   run(process.execPath, [npmCli, "run", "check"], target, "run clean-room repository checks");
+  const readiness = run(process.execPath, [npmCli, "run", "readiness"], target, "verify clean-room readiness distinction");
+  if (!readiness.includes('"status": "ready"') || !readiness.includes('"status": "needs-codex"')) {
+    throw new Error("Clean-room readiness did not distinguish local readiness from pending live providers.");
+  }
+  run(process.execPath, [npmCli, "run", "test:e2e"], target, "run clean-room browser smoke checks");
   const generatedPackage = JSON.parse(await readFile(path.join(target, "package.json"), "utf8"));
   process.stdout.write(`${JSON.stringify({
     ok: true,
@@ -70,6 +75,8 @@ try {
     sourceLeakage: 0,
     idempotence: "passed",
     checks: "passed",
+    readiness: "passed",
+    browserSmoke: "passed",
   }, null, 2)}\n`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));

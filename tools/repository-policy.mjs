@@ -27,6 +27,8 @@ const requiredFiles = [
   "docs/activation.md",
   "docs/workflow.md",
   "tools/issue-workflow.mjs",
+  "tools/run-next-dev.mjs",
+  "tools/run-next-start.mjs",
   "tools/deployment-core.mjs",
   "tools/deployment-workflow.mjs",
   "tools/domain-core.mjs",
@@ -45,6 +47,20 @@ const secretPatterns = [
   /(?:SERVICE_ROLE|SUPABASE_SERVICE_ROLE_KEY)\s*[:=]\s*["']?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/iu,
   /\bv1\.0-[A-Za-z0-9_-]{40,}\b/u,
 ];
+
+/** @param {unknown} value @returns {unknown} */
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonical(child)]));
+  }
+  return value;
+}
+
+/** @param {unknown} left @param {unknown} right */
+function equal(left, right) {
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
 
 /** @param {string} root @returns {string[]} */
 function collectTrackedFiles(root) {
@@ -82,22 +98,28 @@ export async function validateRepository(root = defaultRoot) {
   const ownership = JSON.parse(await readFile(path.join(root, "config", "ownership.json"), "utf8"));
   const template = JSON.parse(await readFile(path.join(root, "config", "template.json"), "utf8"));
   const project = template.project ?? {};
-  if (JSON.stringify(ownership.github) !== JSON.stringify(project.github)) {
+  if (!equal(ownership.github, project.github)) {
     errors.push("config/ownership.json GitHub ownership does not match config/template.json.");
   }
-  if (JSON.stringify(ownership.supabase) !== JSON.stringify(project.ownership?.supabase)) {
+  if (!equal(ownership.supabase, project.ownership?.supabase)) {
     errors.push("config/ownership.json Supabase ownership does not match config/template.json.");
   }
-  if (JSON.stringify(ownership.vercel) !== JSON.stringify(project.ownership?.vercel)) {
+  if (!equal(ownership.vercel, project.ownership?.vercel)) {
     errors.push("config/ownership.json Vercel ownership does not match config/template.json.");
   }
   const expectedCloudflare = project.ownership?.cloudflare;
+  let expectedHostname;
+  try {
+    expectedHostname = new URL(project.publicUrls?.production).hostname;
+  } catch {
+    errors.push("config/template.json has an invalid production URL.");
+  }
   if (
     ownership.cloudflare?.accountId !== expectedCloudflare?.accountId ||
     ownership.cloudflare?.accountName !== expectedCloudflare?.accountName ||
     ownership.cloudflare?.zoneId !== expectedCloudflare?.zoneId ||
     ownership.cloudflare?.domains?.length !== 1 ||
-    ownership.cloudflare.domains[0] !== new URL(project.publicUrls?.production).hostname
+    ownership.cloudflare.domains[0] !== expectedHostname
   ) {
     errors.push("config/ownership.json Cloudflare ownership does not match config/template.json.");
   }

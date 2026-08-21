@@ -9,7 +9,7 @@
     "npm": ">=11.6.0 <12"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "node tools/run-next-dev.mjs",
     "policy": "node tools/repository-policy.mjs",
     "template:init": "node tools/initialize-template.mjs",
     "template:source-check": "node tools/template-manifest.mjs",
@@ -26,7 +26,7 @@
     "domain:lint": "node tools/domain-workflow.mjs lint",
     "build": "next build",
     "build:ci": "node tools/build-ci.mjs",
-    "start": "next start",
+    "start": "node tools/run-next-start.mjs",
     "generate": "node tools/generate-agent-wrappers.mjs",
     "workflow": "node tools/issue-workflow.mjs",
     "check:generated": "node tools/generate-agent-wrappers.mjs --check",

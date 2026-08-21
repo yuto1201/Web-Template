@@ -17,7 +17,7 @@
       "supabaseMail": 55324,
       "supabaseAnalytics": 55327,
       "supabasePooler": 55329,
-      "supabaseInspector": 5583
+      "supabaseInspector": 55383
     },
     "publicUrls": {
       "localhost": "http://localhost:3000",

@@ -11,9 +11,10 @@ Codex を主担当、Claude を独立評価者または相談者として使う�
 3. 初期化し、同じ入力で再実行できることを確認します。
 
 ```powershell
-node tools/initialize-template.mjs --config .template-init.json
-node tools/initialize-template.mjs --config .template-init.json
+npm run template:init -- --config .template-init.json
+npm run template:init -- --config .template-init.json
 npm ci
+npx playwright install chromium
 npm run readiness
 npm run check
 ```
@@ -62,7 +63,7 @@ Docker daemon に接続できない場合は `NOT RUN` と exit code 2 を返し
 npm run audit:completion -- --include-integration --require-all
 ```
 
-クリーンルームで別名アプリを生成し、依存関係の固定インストールと `npm run check` まで実行する検証は `npm run template:verify` です。
+クリーンルームで別名アプリを生成し、依存関係の固定インストール、`npm run check`、readiness、desktop/mobile smoke まで実行する検証は `npm run template:verify` です。
 
 ## リポジトリの正本
 

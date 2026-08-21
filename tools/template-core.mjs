@@ -11,6 +11,11 @@ export const providerPlaceholders = Object.freeze({
   cloudflareZoneId: "11111111111111111111111111111111",
 });
 
+/** @param {string} value */
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 const ignoredDirectories = new Set([
   ".artifacts", ".git", ".next", ".supabase", ".vercel", ".worktrees",
   "coverage", "node_modules", "out", "playwright-report", "test-results",
@@ -231,15 +236,22 @@ export async function discoverOccurrences(root, tokens) {
 /** @param {unknown} value */
 export function validateTemplateState(value) {
   const state = object(value, "config/template.json");
-  exactKeys(state, ["schemaVersion", "status", "project", "occurrences", "initializationFingerprint"], "config/template.json");
+  exactKeys(state, ["schemaVersion", "status", "project", "occurrences", "initializationFingerprint", "managedHashes"], "config/template.json");
   assert(state.schemaVersion === 1, "config/template.json schemaVersion must be 1.");
   assert(state.status === "template-source" || state.status === "initialized", "config/template.json status is invalid.");
   object(state.project, "config/template.json project");
   object(state.occurrences, "config/template.json occurrences");
   if (state.status === "initialized") {
     string(state.initializationFingerprint, "config/template.json initializationFingerprint", /^[0-9a-f]{64}$/u);
+    const managedHashes = object(state.managedHashes, "config/template.json managedHashes");
+    assert(Object.keys(managedHashes).length > 0, "Initialized template state needs managed file hashes.");
+    for (const [relative, digest] of Object.entries(managedHashes)) {
+      assert(!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith("../"), "A managed hash path escapes the repository.");
+      string(digest, `managedHashes.${relative}`, /^[0-9a-f]{64}$/u);
+    }
   } else {
     assert(state.initializationFingerprint === undefined, "The template source must not have an initialization fingerprint.");
+    assert(state.managedHashes === undefined, "The template source must not have managed file hashes.");
   }
   return state;
 }
@@ -265,7 +277,7 @@ export async function verifyTemplateSource(root, state) {
 
 /** @param {unknown} value */
 function fingerprint(value) {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return sha256(JSON.stringify(value));
 }
 
 /** @param {string} value */
@@ -281,6 +293,10 @@ export async function initializeTemplate(root, configValue) {
   if (state.status === "initialized") {
     if (state.initializationFingerprint !== desiredFingerprint) {
       throw new Error("This repository is already initialized with different values.");
+    }
+    for (const [relative, expected] of Object.entries(state.managedHashes)) {
+      const actual = sha256(await readFile(path.join(root, relative), "utf8"));
+      if (actual !== expected) throw new Error(`Initialized managed file changed: ${relative}; refusing to report idempotence.`);
     }
     return { ok: true, status: "idempotent", changedFiles: [] };
   }
@@ -322,12 +338,16 @@ export async function initializeTemplate(root, configValue) {
   outputs.set(domainPath, `${JSON.stringify(domain, null, 2)}\n`);
 
   const statePath = "config/template.json";
+  const managedHashes = Object.fromEntries([...outputs.entries()]
+    .filter(([relative]) => relative !== statePath)
+    .map(([relative, output]) => [relative, sha256(output)]));
   const initializedState = {
     schemaVersion: 1,
     status: "initialized",
     project,
     occurrences: {},
     initializationFingerprint: desiredFingerprint,
+    managedHashes,
   };
   outputs.set(statePath, `${JSON.stringify(initializedState, null, 2)}\n`);
 
@@ -337,7 +357,9 @@ export async function initializeTemplate(root, configValue) {
   }
   changedFiles.sort();
   for (const [relative, output] of outputs) {
+    if (relative === statePath) continue;
     await writeFile(path.join(root, relative), output, "utf8");
   }
+  await writeFile(path.join(root, statePath), outputs.get(statePath), "utf8");
   return { ok: true, status: "initialized", changedFiles };
 }

@@ -2,7 +2,7 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ignoredDirectories = new Set([".artifacts", ".git", ".next", "node_modules", "out", "playwright-report", "test-results"]);
+const ignoredDirectories = new Set([".artifacts", ".git", ".next", ".worktrees", "node_modules", "out", "playwright-report", "test-results"]);
 
 /** @param {string} root @param {string} [relative] @returns {Promise<string[]>} */
 async function markdownFiles(root, relative = "") {
@@ -20,10 +20,10 @@ export async function findBrokenMarkdownLinks(root) {
   const errors = [];
   for (const relative of await markdownFiles(root)) {
     const content = await readFile(path.join(root, relative), "utf8");
-    const withoutFences = content.replace(/```[\s\S]*?```/gu, "");
+    const withoutFences = content.replace(/```[\s\S]*?```/gu, "").replace(/`[^`\r\n]*`/gu, "");
     for (const match of withoutFences.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/gu)) {
       const rawTarget = match[1].trim().replace(/^<|>$/gu, "");
-      if (!rawTarget || rawTarget.startsWith("#") || /^(?:https?:|mailto:|app:)/u.test(rawTarget)) continue;
+      if (!rawTarget || rawTarget.startsWith("#") || rawTarget.startsWith("//") || /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(rawTarget)) continue;
       const targetWithoutAnchor = rawTarget.split("#", 1)[0].split("?", 1)[0];
       let decoded;
       try {

@@ -7,7 +7,7 @@
 1. GitHub の **Use this template** から新しいリポジトリを作成する。
 2. `template-init.example.json` を `.template-init.json` にコピーする。
 3. アプリ名、slug、GitHub owner/repository、衝突しないローカルポート、予定する HTTPS ホスト名と Cloudflare zone を設定する。
-4. `node tools/initialize-template.mjs --config .template-init.json` を実行する。
+4. `npm run template:init -- --config .template-init.json` を実行する。
 5. 同じコマンドをもう一度実行し、`idempotent` を確認する。
 6. `npm ci`、`npm run readiness`、`npm run check` を実行する。
 

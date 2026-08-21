@@ -7,6 +7,20 @@ function configured(value) {
   return typeof value === "string" && value.length > 0 && !value.includes("REPLACEWITHCODEX") && value !== "REPLACE WITH CODEX";
 }
 
+/** @param {unknown} value @returns {unknown} */
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonical(child)]));
+  }
+  return value;
+}
+
+/** @param {unknown} left @param {unknown} right */
+function equal(left, right) {
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
 try {
   const root = process.cwd();
   const state = await readTemplateState(root);
@@ -16,12 +30,15 @@ try {
   const expectedHostname = new URL(state.project.publicUrls.production).hostname;
   const localChecks = {
     packageSlug: packageJson.name === state.project.slug,
-    githubOwnership: JSON.stringify(ownership.github) === JSON.stringify(state.project.github),
+    githubOwnership: equal(ownership.github, state.project.github),
     productionHostname: domain.hostname === expectedHostname && ownership.cloudflare.domains?.[0] === expectedHostname,
     localPorts: new Set(Object.values(state.project.localPorts)).size === Object.values(state.project.localPorts).length,
   };
   const providers = {
-    github: { status: configured(ownership.github?.owner) && configured(ownership.github?.repository) ? "configured" : "needs-codex" },
+    github: {
+      status: configured(ownership.github?.owner) && configured(ownership.github?.repository) ? "identity-recorded" : "needs-codex",
+      reason: "Repository existence and permissions require a live Codex check.",
+    },
     supabase: {
       status: configured(ownership.supabase?.organizationName) && Boolean(ownership.supabase?.projectRef) ? "configured" : "needs-codex",
       reason: ownership.supabase?.projectRef ? null : "No hosted projectRef is recorded.",

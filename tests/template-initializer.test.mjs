@@ -1,13 +1,20 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   discoverOccurrences,
   initializeTemplate,
   projectTokens,
   readTemplateState,
 } from "../tools/template-core.mjs";
+
+/** @type {string[]} */
+const temporaryRoots = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 function sourceProject() {
   return {
@@ -45,6 +52,7 @@ function sourceProject() {
 
 async function sourceFixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "template-init-"));
+  temporaryRoots.push(root);
   await mkdir(path.join(root, "config"));
   const project = sourceProject();
   await writeFile(path.join(root, "package.json"), `${JSON.stringify({ name: project.slug }, null, 2)}\n`, "utf8");
@@ -106,6 +114,8 @@ describe("template initialization", () => {
       vercel: { scope: "team_REPLACEWITHCODEX", projectId: "prj_REPLACEWITHCODEX" },
       cloudflare: { domains: ["clean-room-app.example.invalid"] },
     });
+    await writeFile(path.join(target, "package.json"), `${JSON.stringify({ name: "edited-after-init" }, null, 2)}\n`, "utf8");
+    await expect(initializeTemplate(target, configuration())).rejects.toThrow(/managed file changed/u);
   });
 
   it("refuses before writing when a managed source value was edited", async () => {
@@ -124,5 +134,13 @@ describe("template initialization", () => {
     const wrongHost = configuration();
     wrongHost.publicUrls.production = "https://different.example.invalid";
     await expect(initializeTemplate(target, wrongHost)).rejects.toThrow(/slug\.cloudflareZoneName/u);
+  });
+
+  it("refuses a different configuration after successful initialization", async () => {
+    const target = await sourceFixture();
+    await initializeTemplate(target, configuration());
+    const changed = configuration();
+    changed.appName = "Another App";
+    await expect(initializeTemplate(target, changed)).rejects.toThrow(/already initialized with different values/u);
   });
 });

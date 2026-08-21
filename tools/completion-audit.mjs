@@ -10,6 +10,7 @@ const requireAll = process.argv.includes("--require-all");
 const checks = [
   ["repository-policy", ["run", "policy"]],
   ["template-source", ["run", "template:source-check"]],
+  ["readiness", ["run", "readiness"]],
   ["markdown-links", ["run", "check:links"]],
   ["wrapper-drift", ["run", "check:generated"]],
   ["acceptance-trace", ["run", "audit:trace"]],
@@ -23,6 +24,7 @@ const checks = [
   ["server-boundary", ["run", "test:boundary"]],
   ["client-leak-scan", ["run", "test:client-scan"]],
   ["build", ["run", "build:ci"]],
+  ["clean-room", ["run", "template:verify"]],
 ];
 /** @type {Array<[string, string[]]>} */
 const integrationChecks = [
@@ -35,7 +37,7 @@ const results = [];
 for (const [name, args] of checks) {
   const started = Date.now();
   const result = spawnSync(process.execPath, [npmCli, ...args], { cwd: process.cwd(), encoding: "utf8", windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
-  const status = result.status === 0 ? "passed" : result.status === 2 ? "not-run" : "failed";
+  const status = result.status === 0 ? "passed" : "failed";
   results.push({ name, status, durationMs: Date.now() - started });
   if (status !== "passed") process.stderr.write(`${name}: ${result.error?.message ?? ""}\n${result.stdout ?? ""}\n${result.stderr ?? ""}`);
 }
@@ -46,7 +48,7 @@ for (const [name, args] of integrationChecks) {
   }
   const started = Date.now();
   const result = spawnSync(process.execPath, [npmCli, ...args], { cwd: process.cwd(), encoding: "utf8", windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
-  const status = result.status === 0 ? "passed" : result.status === 2 ? "not-run" : "failed";
+  const status = result.status === 0 ? "passed" : result.status === 2 && (name === "database-policy" || name === "auth-integration") ? "not-run" : "failed";
   results.push({ name, status, durationMs: Date.now() - started });
   if (status !== "passed") process.stderr.write(`${name}: ${result.error?.message ?? ""}\n${result.stdout ?? ""}\n${result.stderr ?? ""}`);
 }
