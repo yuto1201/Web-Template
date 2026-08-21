@@ -179,10 +179,10 @@ async function textOrNull(target) {
 }
 
 /** @param {string} command @param {string[]} args */
-function commandOutput(command, args) {
+export function commandOutput(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true });
   if (result.error || result.status !== 0) return null;
-  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+  const output = `${result.stdout ?? ""}`.trim();
   return output || null;
 }
 

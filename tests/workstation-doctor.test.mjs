@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectWorkstationSnapshot,
+  commandOutput,
   evaluateWorkstation,
   formatWorkstationReport,
 } from "../tools/workstation-doctor.mjs";
@@ -98,5 +99,14 @@ describe("workstation doctor", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("parses a successful version command from stdout without including warnings from stderr", () => {
+    const output = commandOutput(process.execPath, [
+      "-e",
+      "process.stdout.write('11.6.2\\n'); process.stderr.write('npm warning\\n');",
+    ]);
+
+    expect(output).toBe("11.6.2");
   });
 });
