@@ -44,6 +44,9 @@ jobs:
       - name: Enforce deployment workflow safety
         run: npm run deployment:lint
 
+      - name: Enforce custom-domain workflow safety
+        run: npm run domain:lint
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

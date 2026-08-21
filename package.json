@@ -14,6 +14,7 @@
     "db:verify": "node tools/verify-database.mjs",
     "db:stop": "npm exec -- supabase stop --no-backup",
     "deployment:lint": "node tools/deployment-workflow.mjs lint",
+    "domain:lint": "node tools/domain-workflow.mjs lint",
     "build": "next build",
     "build:ci": "node tools/build-ci.mjs",
     "start": "next start",
@@ -29,7 +30,7 @@
     "test:client-scan": "node tools/verify-client-scan.mjs",
     "test:e2e": "playwright test",
     "scan:client": "node tools/scan-client-bundle.mjs",
-    "check": "npm run check:generated && npm run deployment:lint && npm run lint && npm run typecheck && npm test && npm run test:boundary && npm run test:client-scan && npm run build:ci"
+    "check": "npm run check:generated && npm run deployment:lint && npm run domain:lint && npm run lint && npm run typecheck && npm test && npm run test:boundary && npm run test:client-scan && npm run build:ci"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.4",

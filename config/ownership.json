@@ -13,8 +13,9 @@
     "projectId": "prj_KCauT0Bgq4PBZjrxuA1PO3J0Q3Q8"
   },
   "cloudflare": {
+    "accountId": "7ea8e713d76506f9e303f58624829aa5",
     "accountName": "Yuto Dev",
-    "zoneId": null,
-    "domains": []
+    "zoneId": "df938e9c196edf952ff26e95f02edf49",
+    "domains": ["web-template.yutodev.com"]
   }
 }

@@ -15,18 +15,23 @@ const requiredFiles = [
   "CLAUDE.md",
   "config/agents.json",
   "config/deployment.json",
+  "config/domain.json",
   "config/ownership.json",
   "config/review-contract.schema.json",
   "config/workflow.json",
   "docs/agent-contracts/review-packet.md",
   "docs/authority.md",
   "docs/deployment.md",
+  "docs/domain.md",
   "docs/workflow.md",
   "tools/issue-workflow.mjs",
   "tools/deployment-core.mjs",
   "tools/deployment-workflow.mjs",
+  "tools/domain-core.mjs",
+  "tools/domain-workflow.mjs",
   "tools/workflow-core.mjs",
   "specs/acceptance.md",
+  "tests/domain-workflow.test.mjs",
 ];
 const secretPatterns = [
   /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----/u,
@@ -81,6 +86,9 @@ export async function validateRepository(root = defaultRoot) {
   }
   if (ownership.cloudflare?.accountName !== "Yuto Dev") {
     errors.push("config/ownership.json has an unexpected Cloudflare account.");
+  }
+  if (ownership.cloudflare?.accountId !== "7ea8e713d76506f9e303f58624829aa5") {
+    errors.push("config/ownership.json has an unexpected Cloudflare account ID.");
   }
 
   const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }> }} */ (
@@ -153,6 +161,9 @@ export async function validateRepository(root = defaultRoot) {
   const ignore = await readFile(path.join(root, ".gitignore"), "utf8");
   if (!ignore.split(/\r?\n/u).includes(".env")) {
     errors.push(".gitignore must ignore .env.");
+  }
+  if (!ignore.split(/\r?\n/u).includes(".artifacts/")) {
+    errors.push(".gitignore must ignore .artifacts/ domain evidence.");
   }
 
   const claudeSettings = JSON.parse(
