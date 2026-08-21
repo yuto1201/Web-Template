@@ -1,10 +1,13 @@
 # Issue-to-merge workflow
 
+The canonical state names, transitions, reviewer mapping, and privileged-path contracts live in `config/workflow.json`. Runtime validation lives in `tools/workflow-core.mjs`; `npm run workflow -- <command>` is its operator CLI.
+
 ## 1. Define
 
 - Create a GitHub Issue with a goal, in-scope work, out-of-scope work, acceptance criteria, and dependencies.
 - Keep a single coherent outcome per Issue.
 - Resolve material architecture or account questions before implementation.
+- Snapshot the accepted Issue contract into `.artifacts/issues/<issue>/issue-contract.json`. Its digest freezes the goal, numbered `AC-*` criteria, dependencies, and allowlisted external operations for the run.
 
 ## 2. Branch
 
@@ -19,6 +22,7 @@
 - Make the smallest complete change that satisfies the Issue.
 - Keep external provider operations separate from local code changes and run them only through Codex preflight.
 - Update durable specifications and decisions in the same change.
+- Persist state transitions so an interrupted run resumes from recorded evidence instead of inference.
 
 ## 4. Verify
 
@@ -26,12 +30,17 @@
 - Run Issue-specific database, build, browser, or deployment checks.
 - Record commands, outcomes, and any checks that could not run.
 - Do not use a successful build as a substitute for behavior or authorization tests.
+- Bind `verify.json` to the exact current Head SHA and frozen Issue digest. Map every acceptance criterion exactly once with concrete evidence.
+- After committing the implementation, run `prepare-review`; it derives the base, Head, byte-exact Git diff, changed paths, digests, and privileged contracts from Git rather than caller input.
 
 ## 5. Review
 
 - Send a bounded diff and acceptance criteria to an independent model.
 - The reviewer remains read-only and returns severity-ranked findings.
 - Address material findings or record a concrete rationale before merge.
+- Follow `docs/agent-contracts/review-packet.md`. A new commit makes the packet and review stale.
+- Codex records the opposite model's strict JSON with `record-review`; the reviewer cannot write Issue evidence directly.
+- If the opposite model is unavailable or returns invalid output, record `blocked:review`; self-approval is forbidden.
 
 ## 6. Pull request and merge
 
@@ -39,5 +48,54 @@
 - Include scope, verification evidence, external changes, and known limitations.
 - Mark ready only after local checks and independent review.
 - Wait for required CI. Squash merge and verify `main` contains the result and the Issue is closed.
+- Run the current-Head gate before rendering the PR body or requesting merge. External merge remains a Codex operation.
 
-Issue #5 adds machine-readable run state and evidence packets so this workflow can resume safely after interruption.
+## State machine
+
+The normal path is:
+
+```text
+proposed -> approved -> claimed -> in-progress -> verify-passed
+         -> review-requested -> approved-for-merge -> merged -> done
+```
+
+Review findings return to `changes-requested -> in-progress`. Blocked states record the prior state as `resumeState` and may recover only to that exact state. This prevents a resumed run from skipping verification or review.
+
+## Fixed external-operation transport
+
+Claude may write only a strict request under `.artifacts/ops-requests/<request-id>.json`. It cannot execute the request. Codex validates it with:
+
+```powershell
+npm run workflow -- validate-request --file .artifacts/ops-requests/<request-id>.json
+```
+
+Requests use `schemaVersion: 1`, a fixed operation allowlist, an ownership-config identifier, an operation-specific environment and reason code, a request ID bound to the Issue/operation, and strict inputs. The request operation must also appear in the frozen Issue contract; requests are therefore available only after Codex snapshots the Issue. Unknown or out-of-scope operations, free-form targets, additional fields such as `prompt` or `force`, path escapes, malformed JSON, and mismatched Issue inputs are rejected. The validator resolves the actual target from `config/ownership.json`; a missing target blocks execution. Merge and production release/DNS requests additionally rerun the authoritative review gate, and any supplied Head SHA must match it. Expected evidence is derived by the validator, never supplied as free-form reviewer authority. Results belong in `.artifacts/ops-results/<request-id>.result.json` after Codex preflight and execution.
+
+## Commands
+
+```powershell
+# Provider-free end-to-end fixture
+npm run workflow -- simulate --fixture tests/fixtures/workflow/happy-path.json --root <temporary-directory>
+
+# Derive packet/diff/digests from the real committed Head
+npm run workflow -- prepare-review --input <verification-input.json>
+
+# Validate and record the opposite model's strict JSON result
+npm run workflow -- record-review --issue <issue> --file <review.json>
+
+# Validate canonical evidence against the real repository before merge
+npm run workflow -- gate --issue <issue>
+
+# Render the gated PR body
+npm run workflow -- render-pr --issue <issue> --output .artifacts/issues/<issue>/<head>/pull-request.md
+
+# Create a strict squash-merge request only after the same authoritative gate passes
+npm run workflow -- request-merge --issue <issue> --pr-number <pr-number>
+
+# Validate an exact-target cleanup plan; this command does not delete anything
+npm run workflow -- cleanup-check --file <cleanup-plan.json>
+```
+
+## Cleanup
+
+Cleanup is never inferred from Git ancestry because squash merge replaces commit identity. Codex first supplies redacted provider evidence for an exact `MERGED` PR, non-null merge commit, matching `headRefOid`, recorded Head SHA, and confirmed exact remote-branch deletion. `cleanup-check` then independently re-derives the local branch SHA, matching Issue branches/worktrees, and target worktree cleanliness from Git. The validator returns the two exact local actions; Codex performs them separately. Dirty, unmerged, ambiguous, stale, escaped, or unrelated targets are refused and unrelated worktrees/branches are preserved. The validator cannot authenticate provider evidence itself; that evidence comes from Codex's personal-account preflight and post-check.

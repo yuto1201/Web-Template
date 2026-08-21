@@ -14,6 +14,19 @@ describe("Claude tool guard", () => {
   it("allows local reads and ordinary source edits", () => {
     expect(decision("Read", { file_path: path.join(root, "src", "app.ts") })).toBe("allow");
     expect(decision("Edit", { file_path: path.join(root, "src", "app.ts") })).toBe("allow");
+    expect(decision("Write", { file_path: path.join(root, ".artifacts", "ops-requests", "request.json") })).toBe("allow");
+  });
+
+  it("allows only the fixed external-request artifact write surface", () => {
+    const requestRoot = path.join(root, ".artifacts", "ops-requests");
+    expect(decision("Write", { file_path: path.join(requestRoot, "request.json") })).toBe("allow");
+    expect(decision("Write", { file_path: path.join(requestRoot, "request.txt") })).toBe("deny");
+    expect(decision("Write", { file_path: path.join(requestRoot, "nested", "request.json") })).toBe("deny");
+    expect(decision("Write", { file_path: path.join(root, ".artifacts", "issues", "5", "review.json") })).toBe("deny");
+    expect(decision("Write", { file_path: path.join(root, ".artifacts", "ops-results", "result.json") })).toBe("deny");
+    expect(decision("Write", { file_path: path.join(requestRoot, "..", "issues", "5", "review.json") })).toBe("deny");
+    expect(decision("Write", { file_path: path.join(root, ".ARTIFACTS", "issues", "5", "review.json") })).toBe("deny");
+    expect(decision("Write", { file_path: path.join(root, ".Artifacts", "ops-requests", "request.JSON") })).toBe("allow");
   });
 
   it("denies secret, external, and protected paths", () => {

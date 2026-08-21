@@ -17,6 +17,7 @@
     "build:ci": "node tools/build-ci.mjs",
     "start": "next start",
     "generate": "node tools/generate-agent-wrappers.mjs",
+    "workflow": "node tools/issue-workflow.mjs",
     "check:generated": "node tools/generate-agent-wrappers.mjs --check",
     "lint": "eslint .",
     "typegen": "next typegen",

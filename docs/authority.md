@@ -40,25 +40,33 @@ Do not treat tool availability as proof that authentication is valid. Never prin
 
 ## Claude delegation request
 
-When Claude needs an external action, it returns this JSON object and continues with any remaining local work:
+When Claude needs an external action, it writes one versioned request beneath `.artifacts/ops-requests/` and continues with any remaining local work. This example is accepted by the strict runtime validator:
 
 ```json
 {
-  "type": "codex_delegation_request",
-  "provider": "supabase",
-  "operation": "apply reviewed migration",
-  "target": "project ref from config/ownership.json",
-  "reason": "database acceptance test requires the hosted schema",
-  "inputs": ["supabase/migrations/<timestamp>_<name>.sql"],
-  "expectedEvidence": ["verified account and project", "applied migration list", "redacted test result"],
-  "risk": "schema write; use forward-only recovery migration"
+  "schemaVersion": 1,
+  "requestId": "issue-5-supabase-apply-migrations-1",
+  "issue": 5,
+  "operation": "supabase.apply_migrations",
+  "target": {
+    "kind": "supabase.project",
+    "identifier": "config/ownership.json#supabase.projectRef"
+  },
+  "environment": "production",
+  "reasonCode": "acceptance-evidence",
+  "inputs": {
+    "projectRefSource": "config/ownership.json",
+    "migrations": ["supabase/migrations/20260821010000_example.sql"]
+  }
 }
 ```
 
-The request is not authorization. Codex still performs the preflight and follows the active Issue scope.
+The request is not authorization. Codex validates it with `npm run workflow -- validate-request`, resolves the fixed identifier from `config/ownership.json`, performs the preflight, and follows the frozen Issue scope. Unknown operations, free-form targets or instructions, invalid operation/environment/reason combinations, mismatched request IDs, caller-supplied evidence or approval claims, additional inputs, and paths outside the request directory fail closed. Required post-operation evidence is derived from the operation allowlist.
 
 ## Enforcement limits
 
-`.claude/settings.json` and `tools/guard-claude-tool.mjs` deny shell execution, PowerShell and background execution, Claude network tools, MCP calls, sensitive paths, and changes to policy/configuration or `.git`. Generated evaluator agents are read-only. If the hook cannot start or is syntactically broken, Claude Code may fall back to its ordinary permission handling; the committed deny rules remain a second layer but are not a complete sandbox. Search tools normally respect ignored files, and explicit secret paths are rejected, but these controls are not a substitute for keeping credentials outside the working account. A process running under the same Windows user can potentially access the same filesystem and credentials. Strong isolation requires a separate OS account, VM, or container with no personal credentials.
+`.claude/settings.json` and `tools/guard-claude-tool.mjs` deny shell execution, PowerShell and background execution, Claude network tools, MCP calls, sensitive paths, and changes to policy/configuration or `.git`. Generated evaluator agents are read-only. A Claude implementation session may edit assigned application source, but its only writable workflow artifact surface is a one-level `.json` file in `.artifacts/ops-requests/`; Issue evidence, reviews, state, and operation results are Codex-owned. `reviewerModel` is structured evidence, not an authenticated identity by itself, so the write boundary and opposite-model invocation record remain part of the control.
+
+If the hook cannot start or is syntactically broken, Claude Code may fall back to its ordinary permission handling; the committed deny rules remain a second layer but are not a complete sandbox. Search tools normally respect ignored files, and explicit secret paths are rejected, but these controls are not a substitute for keeping credentials outside the working account. A process running under the same Windows user can potentially access the same filesystem and credentials. Strong isolation requires a separate OS account, VM, or container with no personal credentials.
 
 Claude Code must be launched from the repository root. Live validation showed that a nested-directory launch did not reliably apply the root project hook, while a root launch denied the non-allowlisted `Task/general-purpose` call. If the project hook is not visible in `/hooks` or hook debug output, stop the Claude session and restart it from the root; do not continue on ordinary permission prompts.

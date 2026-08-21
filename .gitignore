@@ -4,6 +4,8 @@ out/
 coverage/
 playwright-report/
 test-results/
+.artifacts/
+.worktrees/
 *.tsbuildinfo
 
 .env

@@ -125,6 +125,11 @@ function isProtectedPath(relative) {
   );
 }
 
+/** @param {string} relative */
+function isAllowedOperationRequest(relative) {
+  return /^\.artifacts\/ops-requests\/[^/]+\.json$/u.test(relative);
+}
+
 /**
  * @param {string} toolName
  * @param {Record<string, unknown>} input
@@ -137,13 +142,17 @@ function inspectPaths(toolName, input, projectRoot) {
   }
   for (const candidate of paths) {
     const { outside, relative } = normalizeRelative(projectRoot, candidate);
+    const normalizedRelative = relative.toLowerCase();
     if (outside) {
       return deny(`${toolName} is limited to files inside the repository.`);
     }
     if (isSensitivePath(relative)) {
       return deny(`${toolName} cannot access credential or secret path: ${relative}.`);
     }
-    if (editTools.has(toolName) && isProtectedPath(relative)) {
+    if (editTools.has(toolName) && normalizedRelative.startsWith(".artifacts/") && !isAllowedOperationRequest(normalizedRelative)) {
+      return deny("Claude may write only one-level JSON requests beneath .artifacts/ops-requests/.");
+    }
+    if (editTools.has(toolName) && isProtectedPath(normalizedRelative)) {
       return deny(`${relative} is Codex-owned policy and cannot be changed by Claude.`);
     }
   }
