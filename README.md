@@ -35,6 +35,15 @@ npm run test:e2e
 
 `npm run check` はポリシー、lint、型、単体テストに加え、Server-only モジュールの誤 import が実際にビルドを拒否することと、ブラウザ用 bundle に秘密情報パターンが含まれないことを確認します。
 
+Supabaseのmigration、RLS、grant、生成型はDockerを使う別検証で確認します。
+
+```powershell
+npm run db:verify
+npm run db:stop
+```
+
+`db:verify` は固定CLIでlocal Postgresを起動し、空DB reset、schema lint、pgTAP否定テスト、生成型比較を行います。Docker daemonへ接続できない場合は`NOT RUN`とexit code 2を返し、成功として扱いません。標準ポートを使う他プロジェクトを妨げないよう、このテンプレートは`5532x`帯を使用します。
+
 ESLint 9 と TypeScript 6 は Next.js 16.3.1 のlint構成（`typescript-eslint` を含む）が宣言する互換範囲に固定しています。新しいmajorへ上げる場合は、`npm ls` のpeer dependencyと全チェックを同時に確認します。
 
 生成されたエージェント定義を更新する場合は、`config/agents.json` と `docs/agent-contracts/` を変更してから次を実行します。

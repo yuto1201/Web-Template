@@ -1,0 +1,2 @@
+-- Keep the reusable template free of product data.
+-- Add only synthetic local-development rows in generated projects.
