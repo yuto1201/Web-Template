@@ -24,6 +24,7 @@ export default defineConfig([
   },
   globalIgnores([
     ".next/**",
+    ".worktrees/**",
     "build/**",
     "coverage/**",
     "node_modules/**",
