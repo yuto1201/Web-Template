@@ -36,6 +36,10 @@ Run `npm test -- guard-claude-tool` after changing the guard. Codex owns changes
 - Review dependency changes separately from feature behavior.
 - Do not run `npx` or ad-hoc downloaded executables from Claude sessions.
 
+## Build artifact scope
+
+The CI scanner checks public static assets plus prerendered HTML and RSC payloads. It also compares secret-shaped server environment values without printing their values. Dynamic SSR responses must be checked by feature-specific browser tests when introduced; a successful build scan does not prove that arbitrary future runtime code cannot serialize a secret.
+
 ## Reporting
 
 If a secret may have been exposed, stop using it, avoid reproducing it in output, rotate it through Codex on the verified personal account, and document only the secret name, scope, and rotation time.

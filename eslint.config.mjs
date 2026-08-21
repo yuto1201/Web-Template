@@ -1,18 +1,13 @@
-import { defineConfig } from "eslint/config";
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTypeScript from "eslint-config-next/typescript";
 import globals from "globals";
 
 export default defineConfig([
+  ...nextVitals,
+  ...nextTypeScript,
   {
-    ignores: [
-      ".next/**",
-      "coverage/**",
-      "node_modules/**",
-      "playwright-report/**",
-      "test-results/**",
-    ],
-  },
-  {
-    files: ["**/*.js", "**/*.mjs", "**/*.cjs"],
+    files: ["*.config.mjs", "tools/**/*.mjs", "tests/**/*.mjs"],
     languageOptions: {
       ecmaVersion: "latest",
       globals: globals.node,
@@ -27,4 +22,15 @@ export default defineConfig([
       "prefer-const": "error",
     },
   },
+  globalIgnores([
+    ".next/**",
+    "build/**",
+    "coverage/**",
+    "node_modules/**",
+    "out/**",
+    "playwright-report/**",
+    "test-results/**",
+    "tests/fixtures/**/.next/**",
+    "next-env.d.ts",
+  ]),
 ]);
