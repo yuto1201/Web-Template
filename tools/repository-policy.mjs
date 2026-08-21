@@ -11,11 +11,13 @@ const requiredFiles = [
   ".codex/agents/supabase-auditor.toml",
   ".gitattributes",
   ".github/pull_request_template.md",
+  ".github/workflows/review-gate.yml",
   "AGENTS.md",
   "CLAUDE.md",
   "config/agents.json",
   "config/deployment.json",
   "config/domain.json",
+  "config/github-ruleset.json",
   "config/ownership.json",
   "config/review-contract.schema.json",
   "config/template.json",
@@ -28,6 +30,7 @@ const requiredFiles = [
   "docs/onboarding-macos.md",
   "docs/workflow.md",
   "tools/issue-workflow.mjs",
+  "tools/github-review-gate.mjs",
   "tools/workstation-doctor.mjs",
   "tools/run-next-dev.mjs",
   "tools/run-next-start.mjs",
@@ -152,6 +155,40 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("config/workflow.json must map each primary model to the opposite reviewer.");
   }
   if (workflow.baseRef !== "main") errors.push("config/workflow.json must derive review scope from main.");
+  const reviewGate = workflow.githubReviewGate;
+  if (reviewGate?.checkName !== "Exact Head review policy") {
+    errors.push("GitHub review gate must keep the required check name stable.");
+  }
+  if (
+    reviewGate?.dependabot?.userId !== 49699333 ||
+    reviewGate?.dependabot?.login !== "dependabot[bot]" ||
+    reviewGate?.dependabot?.userType !== "Bot" ||
+    reviewGate?.dependabot?.headPrefix !== "dependabot/github_actions/" ||
+    !equal(reviewGate?.dependabot?.allowedActions, ["actions/checkout", "actions/setup-node"]) ||
+    !equal(reviewGate?.dependabot?.allowedPathPrefixes, [".github/workflows/"])
+  ) {
+    errors.push("Dependabot review exception must remain pinned to the GitHub Actions bot and allowlist.");
+  }
+  const githubRuleset = JSON.parse(await readFile(path.join(root, "config", "github-ruleset.json"), "utf8"));
+  const statusRule = githubRuleset.rules?.find(/** @param {{type?: string}} rule */ (rule) => rule.type === "required_status_checks");
+  const pullRequestRule = githubRuleset.rules?.find(/** @param {{type?: string}} rule */ (rule) => rule.type === "pull_request");
+  if (
+    githubRuleset.name !== "main exact-Head review" ||
+    githubRuleset.target !== "branch" ||
+    githubRuleset.enforcement !== "active" ||
+    !equal(githubRuleset.conditions?.ref_name, { include: ["~DEFAULT_BRANCH"], exclude: [] }) ||
+    !equal(statusRule?.parameters?.required_status_checks, [
+      { context: "Repository checks", integration_id: 15368 },
+      { context: "Database and Auth policy checks", integration_id: 15368 },
+      { context: "macOS onboarding and browser checks", integration_id: 15368 },
+      { context: "Exact Head review policy", integration_id: 15368 },
+    ]) ||
+    statusRule?.parameters?.strict_required_status_checks_policy !== true ||
+    pullRequestRule?.parameters?.required_approving_review_count !== 0 ||
+    !equal(pullRequestRule?.parameters?.allowed_merge_methods, ["squash"])
+  ) {
+    errors.push("GitHub ruleset export must require the strict exact-Head check and squash pull requests on main.");
+  }
   for (const state of states.filter((state) => !state.startsWith("blocked:") && state !== "paused")) {
     if (!Array.isArray(workflow.transitions?.[state])) errors.push(`Workflow state ${state} needs a transition list.`);
   }
@@ -203,6 +240,24 @@ export async function validateRepository(root = defaultRoot) {
   const ciWorkflow = await readFile(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
   if (!ciWorkflow.includes("runs-on: macos-latest") || !ciWorkflow.includes("npm run workstation:doctor")) {
     errors.push("CI must verify the workstation contract on a real macOS runner.");
+  }
+  const reviewWorkflow = await readFile(path.join(root, ".github", "workflows", "review-gate.yml"), "utf8");
+  if (
+    !reviewWorkflow.includes("name: Exact Head review policy") ||
+    !reviewWorkflow.includes("types: [opened, synchronize, reopened, edited, ready_for_review]") ||
+    !reviewWorkflow.includes("ref: ${{ github.event.pull_request.base.sha }}") ||
+    !reviewWorkflow.includes('BASE_SHA" != "62da0e1699ddfcf39f35914b54ad963fe5aa0740"') ||
+    !reviewWorkflow.includes('HEAD_REF" != "codex/22-exact-head-review"') ||
+    !reviewWorkflow.includes('HEAD_REPOSITORY" != "$BASE_REPOSITORY"') ||
+    !reviewWorkflow.includes("github.event.pull_request.head.repo.full_name") ||
+    !reviewWorkflow.includes("github.event.pull_request.base.repo.full_name") ||
+    !reviewWorkflow.includes("Review gate produced no result.") ||
+    reviewWorkflow.includes("pull_request_target") ||
+    reviewWorkflow.includes("github.event.pull_request.body") ||
+    /^\s*paths:/mu.test(reviewWorkflow) ||
+    /^\s*if:/mu.test(reviewWorkflow)
+  ) {
+    errors.push("Exact-Head GitHub workflow must run from trusted base code on every relevant PR event without body interpolation.");
   }
   const attributes = await readFile(path.join(root, ".gitattributes"), "utf8");
   if (!attributes.includes("* text=auto eol=lf")) {

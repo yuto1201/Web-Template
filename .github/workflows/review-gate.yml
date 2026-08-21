@@ -1,0 +1,67 @@
+name: Exact Head review policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  review-gate:
+    name: Exact Head review policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out trusted base
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out candidate for initial rollout only
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: trusted/.node-version
+
+      - name: Verify exact-Head review evidence
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+        shell: bash
+        run: |
+          gate_path="trusted/tools/github-review-gate.mjs"
+          workflow_path="trusted/config/workflow.json"
+          if [[ ! -f "$gate_path" ]]; then
+            if [[ "$BASE_SHA" != "62da0e1699ddfcf39f35914b54ad963fe5aa0740" || "$HEAD_REF" != "codex/22-exact-head-review" || "$HEAD_REPOSITORY" != "$BASE_REPOSITORY" ]]; then
+              echo "Candidate bootstrap is not authorized for this pull request." >&2
+              exit 1
+            fi
+            gate_path="candidate/tools/github-review-gate.mjs"
+            workflow_path="candidate/config/workflow.json"
+          fi
+          gate_output="$(node "$gate_path" \
+            --event "$GITHUB_EVENT_PATH" \
+            --repository "candidate" \
+            --workflow "$workflow_path" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA")"
+          if [[ -z "$gate_output" ]]; then
+            echo "Review gate produced no result." >&2
+            exit 1
+          fi
+          printf '%s\n' "$gate_output"

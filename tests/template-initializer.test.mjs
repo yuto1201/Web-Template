@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -82,6 +83,20 @@ async function sourceFixture() {
   return root;
 }
 
+async function initializedVerifierFixture() {
+  const root = await sourceFixture();
+  await initializeTemplate(root, configuration());
+  await mkdir(path.join(root, "tools"));
+  await copyFile(path.resolve("tools/template-core.mjs"), path.join(root, "tools", "template-core.mjs"));
+  await copyFile(path.resolve("tools/verify-template-instantiation.mjs"), path.join(root, "tools", "verify-template-instantiation.mjs"));
+  /** @param {string[]} args */
+  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true });
+  if (git("init", "--quiet").status !== 0 || git("add", "config/template.json", "package.json", "tools/template-core.mjs", "tools/verify-template-instantiation.mjs").status !== 0) {
+    throw new Error("Failed to create initialized verifier fixture.");
+  }
+  return root;
+}
+
 function configuration() {
   return {
     schemaVersion: 1,
@@ -99,6 +114,36 @@ function configuration() {
 }
 
 describe("template initialization", () => {
+  it("ignores Git administrative files while retaining ordinary project files in source scans", async () => {
+    const root = await sourceFixture();
+    const project = sourceProject();
+    await writeFile(path.join(root, ".git"), `gitdir: /workspace/${project.github.repository}/.git/worktrees/fixture\n`, "utf8");
+    await writeFile(path.join(root, "ordinary.txt"), `${project.github.repository}\n`, "utf8");
+
+    const occurrences = await discoverOccurrences(root, projectTokens(project));
+
+    expect(occurrences.githubRepository).not.toHaveProperty(".git");
+    expect(occurrences.githubRepository).toHaveProperty("ordinary.txt", 1);
+  });
+
+  it("reports clean-room verification as not applicable for an initialized repository", async () => {
+    const root = await initializedVerifierFixture();
+    const command = spawnSync(process.execPath, ["tools/verify-template-instantiation.mjs"], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, npm_execpath: process.env.npm_execpath ?? process.execPath },
+      windowsHide: true,
+    });
+
+    expect(command.status, command.stderr).toBe(0);
+    expect(JSON.parse(command.stdout)).toEqual({
+      ok: true,
+      status: "initialized-repository",
+      cleanRoom: "not-applicable",
+      reason: "Clean-room instantiation applies only to the template source.",
+    });
+  });
+
   it("replaces every reviewed source occurrence and is idempotent for identical input", async () => {
     const target = await sourceFixture();
     const source = await readTemplateState(target);

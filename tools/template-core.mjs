@@ -200,6 +200,7 @@ async function textFiles(root, relative = "") {
       if (!ignoredDirectories.has(entry.name)) files.push(...await textFiles(root, child));
       continue;
     }
+    if (entry.name === ".git") continue;
     if (!entry.isFile() || ignoredFileExtensions.has(path.extname(entry.name).toLowerCase())) continue;
     if ((entry.name === ".env" || entry.name.startsWith(".env.")) && entry.name !== ".env.example") continue;
     const content = await readFile(path.join(root, child));
