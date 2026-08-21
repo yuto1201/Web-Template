@@ -9,6 +9,7 @@ const requireAll = process.argv.includes("--require-all");
 /** @type {Array<[string, string[]]>} */
 const checks = [
   ["repository-policy", ["run", "policy"]],
+  ["workstation", ["run", "workstation:doctor"]],
   ["template-source", ["run", "template:source-check"]],
   ["readiness", ["run", "readiness"]],
   ["markdown-links", ["run", "check:links"]],

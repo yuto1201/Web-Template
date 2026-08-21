@@ -25,8 +25,10 @@ const requiredFiles = [
   "docs/deployment.md",
   "docs/domain.md",
   "docs/activation.md",
+  "docs/onboarding-macos.md",
   "docs/workflow.md",
   "tools/issue-workflow.mjs",
+  "tools/workstation-doctor.mjs",
   "tools/run-next-dev.mjs",
   "tools/run-next-start.mjs",
   "tools/deployment-core.mjs",
@@ -36,6 +38,7 @@ const requiredFiles = [
   "tools/workflow-core.mjs",
   "specs/acceptance.md",
   "tests/domain-workflow.test.mjs",
+  "tests/workstation-doctor.test.mjs",
 ];
 const secretPatterns = [
   /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----/u,
@@ -181,11 +184,25 @@ export async function validateRepository(root = defaultRoot) {
   const nodeVersion = (await readFile(path.join(root, ".node-version"), "utf8")).trim();
   const nvmVersion = (await readFile(path.join(root, ".nvmrc"), "utf8")).trim();
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
-  if (nodeVersion !== nvmVersion || !packageJson.engines?.node?.includes(nodeVersion)) {
-    errors.push(".node-version, .nvmrc, and package.json engines.node must agree.");
+  if (nodeVersion !== nvmVersion || packageJson.engines?.node !== nodeVersion) {
+    errors.push(".node-version, .nvmrc, and package.json engines.node must agree exactly.");
   }
   if (packageJson.packageManager !== "npm@11.6.2") {
     errors.push("package.json must pin npm@11.6.2.");
+  }
+  if (packageJson.engines?.npm !== packageJson.packageManager.replace(/^npm@/u, "")) {
+    errors.push("package.json engines.npm must exactly match packageManager.");
+  }
+  const packageLock = JSON.parse(await readFile(path.join(root, "package-lock.json"), "utf8"));
+  if (!equal(packageLock.packages?.[""]?.engines, packageJson.engines)) {
+    errors.push("package-lock.json root engines must match package.json.");
+  }
+  if (packageJson.scripts?.["workstation:doctor"] !== "node tools/workstation-doctor.mjs") {
+    errors.push("package.json must expose the cross-platform workstation doctor.");
+  }
+  const ciWorkflow = await readFile(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
+  if (!ciWorkflow.includes("runs-on: macos-latest") || !ciWorkflow.includes("npm run workstation:doctor")) {
+    errors.push("CI must verify the workstation contract on a real macOS runner.");
   }
   const attributes = await readFile(path.join(root, ".gitattributes"), "utf8");
   if (!attributes.includes("* text=auto eol=lf")) {

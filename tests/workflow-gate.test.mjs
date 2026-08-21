@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   prepareReviewArtifacts,
   readExternalOperationRequest,
+  resolveInside,
   runAuthoritativePremergeGate,
   runPremergeGate,
   simulateWorkflowFixture,
@@ -160,5 +161,21 @@ describe("current-Head pre-merge gate", () => {
     });
     expect(prepared.packet.changedPaths).toEqual(["src/lib/auth/session.ts", "src/lib/session.ts"]);
     expect(prepared.packet.requiredContracts).toContain("supabase-auditor");
+  });
+
+  it("accepts a canonical artifact path when the repository root is a filesystem alias", async () => {
+    const container = await mkdtemp(path.join(os.tmpdir(), "repository-path-alias-"));
+    const realRoot = path.join(container, "real-root");
+    const aliasRoot = path.join(container, "alias-root");
+    try {
+      const artifact = path.join(realRoot, ".artifacts", "issues", "42", "issue-contract.json");
+      await mkdir(path.dirname(artifact), { recursive: true });
+      await writeFile(artifact, "{}\n", "utf8");
+      await symlink(realRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+
+      expect(resolveInside(aliasRoot, artifact, ".artifacts")).toBe(await realpath(artifact));
+    } finally {
+      await rm(container, { recursive: true, force: true });
+    }
   });
 });
