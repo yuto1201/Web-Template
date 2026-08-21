@@ -41,6 +41,9 @@ jobs:
       - name: Run policy, lint, types, and tests
         run: npm run check
 
+      - name: Enforce deployment workflow safety
+        run: npm run deployment:lint
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
