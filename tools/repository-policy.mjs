@@ -18,11 +18,13 @@ const requiredFiles = [
   "config/domain.json",
   "config/ownership.json",
   "config/review-contract.schema.json",
+  "config/template.json",
   "config/workflow.json",
   "docs/agent-contracts/review-packet.md",
   "docs/authority.md",
   "docs/deployment.md",
   "docs/domain.md",
+  "docs/activation.md",
   "docs/workflow.md",
   "tools/issue-workflow.mjs",
   "tools/deployment-core.mjs",
@@ -46,7 +48,7 @@ const secretPatterns = [
 
 /** @param {string} root @returns {string[]} */
 function collectTrackedFiles(root) {
-  const result = spawnSync("git", ["ls-files", "-z"], {
+  const result = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
     cwd: root,
     encoding: "utf8",
     windowsHide: true,
@@ -78,17 +80,26 @@ export async function validateRepository(root = defaultRoot) {
   }
 
   const ownership = JSON.parse(await readFile(path.join(root, "config", "ownership.json"), "utf8"));
-  if (ownership.github?.owner !== "yuto1201" || ownership.github?.repository !== "Web-Template") {
-    errors.push("config/ownership.json does not identify yuto1201/Web-Template.");
+  const template = JSON.parse(await readFile(path.join(root, "config", "template.json"), "utf8"));
+  const project = template.project ?? {};
+  if (JSON.stringify(ownership.github) !== JSON.stringify(project.github)) {
+    errors.push("config/ownership.json GitHub ownership does not match config/template.json.");
   }
-  if (ownership.supabase?.organizationName !== "yuto1201's Org") {
-    errors.push("config/ownership.json has an unexpected Supabase organization.");
+  if (JSON.stringify(ownership.supabase) !== JSON.stringify(project.ownership?.supabase)) {
+    errors.push("config/ownership.json Supabase ownership does not match config/template.json.");
   }
-  if (ownership.cloudflare?.accountName !== "Yuto Dev") {
-    errors.push("config/ownership.json has an unexpected Cloudflare account.");
+  if (JSON.stringify(ownership.vercel) !== JSON.stringify(project.ownership?.vercel)) {
+    errors.push("config/ownership.json Vercel ownership does not match config/template.json.");
   }
-  if (ownership.cloudflare?.accountId !== "7ea8e713d76506f9e303f58624829aa5") {
-    errors.push("config/ownership.json has an unexpected Cloudflare account ID.");
+  const expectedCloudflare = project.ownership?.cloudflare;
+  if (
+    ownership.cloudflare?.accountId !== expectedCloudflare?.accountId ||
+    ownership.cloudflare?.accountName !== expectedCloudflare?.accountName ||
+    ownership.cloudflare?.zoneId !== expectedCloudflare?.zoneId ||
+    ownership.cloudflare?.domains?.length !== 1 ||
+    ownership.cloudflare.domains[0] !== new URL(project.publicUrls?.production).hostname
+  ) {
+    errors.push("config/ownership.json Cloudflare ownership does not match config/template.json.");
   }
 
   const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }> }} */ (

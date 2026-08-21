@@ -53,6 +53,9 @@ jobs:
       - name: Run desktop and mobile browser checks
         run: npm run test:e2e
 
+      - name: Verify clean-room template instantiation
+        run: npm run template:verify
+
       - name: Check patch whitespace
         shell: bash
         run: |

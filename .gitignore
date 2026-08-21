@@ -6,6 +6,7 @@ playwright-report/
 test-results/
 .artifacts/
 .worktrees/
+.template-init.json
 *.tsbuildinfo
 
 .env

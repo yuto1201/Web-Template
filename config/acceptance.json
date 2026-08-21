@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "issues": [
+    {
+      "issue": 1,
+      "title": "Repository policy and authority foundation",
+      "evidence": ["AGENTS.md", "docs/authority.md", "tools/repository-policy.mjs", "tests/repository-policy.test.mjs"],
+      "commands": ["policy"]
+    },
+    {
+      "issue": 2,
+      "title": "Next.js application and environment boundary",
+      "evidence": ["src/app/page.tsx", "src/lib/env/server.ts", "tools/verify-server-boundary.mjs", "tools/verify-client-scan.mjs"],
+      "commands": ["typecheck", "test:boundary", "test:client-scan", "build:ci"]
+    },
+    {
+      "issue": 3,
+      "title": "Supabase schema, RLS, grants, and generated types",
+      "evidence": ["supabase/migrations/20260821040140_create_owner_items.sql", "supabase/tests/database/owner_items.test.sql", "tools/verify-database.mjs"],
+      "commands": ["db:verify"]
+    },
+    {
+      "issue": 4,
+      "title": "Supabase Auth and request-scoped session policy",
+      "evidence": ["src/lib/auth/claims.ts", "src/lib/supabase/server.ts", "src/proxy.ts", "tools/verify-auth-integration.mjs"],
+      "commands": ["auth:verify"]
+    },
+    {
+      "issue": 5,
+      "title": "Cross-model workflow and Claude guard",
+      "evidence": ["config/workflow.json", "config/agents.json", "tools/workflow-core.mjs", "tools/guard-claude-tool.mjs", "tests/workflow-e2e.test.mjs"],
+      "commands": ["check:generated", "test"]
+    },
+    {
+      "issue": 6,
+      "title": "Vercel deployment gates and release evidence",
+      "evidence": ["config/deployment.json", "docs/deployment.md", "tools/deployment-core.mjs", "tests/deployment-release.test.mjs"],
+      "commands": ["deployment:lint", "test:e2e"]
+    },
+    {
+      "issue": 7,
+      "title": "Cloudflare DNS-only custom domain",
+      "evidence": ["config/domain.json", "docs/domain.md", "tools/domain-core.mjs", "tests/domain-workflow.test.mjs"],
+      "commands": ["domain:lint"]
+    },
+    {
+      "issue": 8,
+      "title": "Safe template instantiation and completion audit",
+      "evidence": ["config/template.json", "tools/initialize-template.mjs", "tools/verify-template-instantiation.mjs", "tests/template-initializer.test.mjs", "specs/completion-audit.md"],
+      "commands": ["template:source-check", "check:links", "audit:trace", "template:verify"]
+    }
+  ]
+}

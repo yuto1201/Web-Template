@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "status": "template-source",
+  "project": {
+    "appName": "Web Template",
+    "slug": "web-template",
+    "github": {
+      "owner": "yuto1201",
+      "repository": "Web-Template"
+    },
+    "localPorts": {
+      "app": 3000,
+      "supabaseBase": 55320,
+      "supabaseApi": 55321,
+      "supabaseDb": 55322,
+      "supabaseStudio": 55323,
+      "supabaseMail": 55324,
+      "supabaseAnalytics": 55327,
+      "supabasePooler": 55329,
+      "supabaseInspector": 5583
+    },
+    "publicUrls": {
+      "localhost": "http://localhost:3000",
+      "loopback": "http://127.0.0.1:3000",
+      "production": "https://web-template.yutodev.com"
+    },
+    "ownership": {
+      "supabase": {
+        "organizationName": "yuto1201's Org",
+        "projectRef": null
+      },
+      "vercel": {
+        "scope": "team_ANEUn6gVL8dccPaY08wkvxFt",
+        "projectId": "prj_KCauT0Bgq4PBZjrxuA1PO3J0Q3Q8"
+      },
+      "cloudflare": {
+        "accountId": "7ea8e713d76506f9e303f58624829aa5",
+        "accountName": "Yuto Dev",
+        "zoneId": "df938e9c196edf952ff26e95f02edf49",
+        "zoneName": "yutodev.com"
+      }
+    }
+  },
+  "occurrences": {
+    "productionUrl": {
+      "config/template.json": 1
+    },
+    "productionHostname": {
+      "config/domain.json": 1,
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "docs/domain.md": 1,
+      "tests/domain-workflow.test.mjs": 10
+    },
+    "localhostOrigin": {
+      ".env.example": 1,
+      "config/template.json": 1,
+      "supabase/config.toml": 2
+    },
+    "loopbackOrigin": {
+      "config/template.json": 1,
+      "playwright.config.ts": 3,
+      "supabase/config.toml": 2,
+      "tests/setup.ts": 1,
+      "tools/build-ci.mjs": 1
+    },
+    "supabaseOrganizationName": {
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "docs/authority.md": 1
+    },
+    "vercelProjectId": {
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "tests/domain-workflow.test.mjs": 1
+    },
+    "vercelScope": {
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "tests/domain-workflow.test.mjs": 1
+    },
+    "cloudflareAccountId": {
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "tests/domain-workflow.test.mjs": 1
+    },
+    "cloudflareAccountName": {
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "docs/authority.md": 1,
+      "docs/domain.md": 1,
+      "tests/domain-workflow.test.mjs": 1
+    },
+    "cloudflareZoneId": {
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "tests/domain-workflow.test.mjs": 2
+    },
+    "cloudflareZoneName": {
+      "config/domain.json": 2,
+      "config/ownership.json": 1,
+      "config/template.json": 2,
+      "docs/domain.md": 1,
+      "tests/domain-workflow.test.mjs": 15
+    },
+    "githubRepository": {
+      "README.md": 1,
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "docs/authority.md": 1,
+      "tests/fixtures/workflow/happy-path.json": 1,
+      "tests/workflow-cleanup.test.mjs": 2,
+      "tests/workflow-contract.test.mjs": 1,
+      "tests/workflow-e2e.test.mjs": 1,
+      "tests/workflow-gate.test.mjs": 2
+    },
+    "githubOwner": {
+      "README.md": 1,
+      "config/ownership.json": 2,
+      "config/template.json": 2,
+      "docs/authority.md": 2,
+      "tests/fixtures/workflow/happy-path.json": 1,
+      "tests/workflow-cleanup.test.mjs": 2,
+      "tests/workflow-contract.test.mjs": 1,
+      "tests/workflow-e2e.test.mjs": 1,
+      "tests/workflow-gate.test.mjs": 2
+    },
+    "appName": {
+      "README.md": 1,
+      "config/template.json": 1
+    },
+    "slug": {
+      "config/domain.json": 2,
+      "config/ownership.json": 1,
+      "config/template.json": 2,
+      "docs/domain.md": 1,
+      "package-lock.json": 2,
+      "package.json": 1,
+      "supabase/config.toml": 1,
+      "tests/client-bundle-scan.test.ts": 1,
+      "tests/deployment-preflight.test.mjs": 1,
+      "tests/deployment-release.test.mjs": 2,
+      "tests/deployment-workflow-lint.test.mjs": 1,
+      "tests/domain-workflow.test.mjs": 10,
+      "tests/guard-claude-tool.test.mjs": 1,
+      "tests/workflow-cleanup.test.mjs": 2,
+      "tests/workflow-contract.test.mjs": 1,
+      "tests/workflow-e2e.test.mjs": 1,
+      "tests/workflow-gate.test.mjs": 2
+    },
+    "supabaseBasePort": {
+      "config/template.json": 1,
+      "supabase/config.toml": 1
+    },
+    "supabaseApiPort": {
+      "config/template.json": 1,
+      "supabase/config.toml": 1
+    },
+    "supabaseDbPort": {
+      "config/template.json": 1,
+      "supabase/config.toml": 1
+    },
+    "supabaseStudioPort": {
+      "config/template.json": 1,
+      "supabase/config.toml": 1
+    },
+    "supabaseMailPort": {
+      "config/template.json": 1,
+      "supabase/config.toml": 1
+    },
+    "supabaseAnalyticsPort": {
+      "config/template.json": 1,
+      "supabase/config.toml": 1
+    },
+    "supabasePoolerPort": {
+      "config/template.json": 1,
+      "supabase/config.toml": 1
+    },
+    "supabaseInspectorPort": {
+      "config/template.json": 1,
+      "supabase/config.toml": 1
+    }
+  }
+}
