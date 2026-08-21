@@ -13,6 +13,8 @@
 
 初期化ツールは `config/template.json` に記録されたレビュー済み出現箇所だけを書き換えます。対象値が先に編集されていた場合は、部分的に上書きせず失敗します。異なる設定での再初期化も拒否します。
 
+生成後に baseline の migration、Auth、deployment、domain 機能を変更または削除する場合は、`config/acceptance.json` の証拠パスと検証コマンドも同じ Issue で更新します。古い完了証拠を残したまま機能だけを外す変更は `npm run audit:trace` が拒否します。
+
 ## 2. ローカル準備完了を確認する
 
 `npm run readiness` の `local.status` が `ready` なら、アプリ名、package slug、所有者設定、公開ホスト名、ローカルポートの整合が取れています。プロバイダーごとの `needs-codex` はエラーではなく、ライブ有効化が未完了という独立状態です。

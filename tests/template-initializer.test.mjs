@@ -134,6 +134,12 @@ describe("template initialization", () => {
     const wrongHost = configuration();
     wrongHost.publicUrls.production = "https://different.example.invalid";
     await expect(initializeTemplate(target, wrongHost)).rejects.toThrow(/slug\.cloudflareZoneName/u);
+    const unsafeOrganization = /** @type {any} */ (configuration());
+    unsafeOrganization.ownership.supabase.organizationName = "unsafe\norganization";
+    await expect(initializeTemplate(target, unsafeOrganization)).rejects.toThrow(/organizationName is invalid/u);
+    const unsafeCloudflareName = /** @type {any} */ (configuration());
+    unsafeCloudflareName.ownership.cloudflare.accountName = 'unsafe "account"';
+    await expect(initializeTemplate(target, unsafeCloudflareName)).rejects.toThrow(/accountName is invalid/u);
   });
 
   it("refuses a different configuration after successful initialization", async () => {

@@ -86,7 +86,7 @@ export function normalizeInitializationConfig(value) {
   const input = object(value, "Initialization config");
   exactKeys(input, ["schemaVersion", "appName", "slug", "github", "localPorts", "publicUrls", "ownership"], "Initialization config");
   assert(input.schemaVersion === 1, "Initialization config schemaVersion must be 1.");
-  const appName = string(input.appName, "appName", /^(?=.{2,64}$)[^\r\n\t]+$/u);
+  const appName = string(input.appName, "appName", /^(?=.{2,64}$)[^\r\n\t"\\]+$/u);
   const slug = string(input.slug, "slug", /^(?=.{2,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 
   const github = object(input.github, "github");
@@ -112,6 +112,7 @@ export function normalizeInitializationConfig(value) {
   const supabase = object(ownership.supabase, "ownership.supabase");
   exactKeys(supabase, ["organizationName", "projectRef"], "ownership.supabase");
   const supabaseOrganization = nullableString(supabase.organizationName, "ownership.supabase.organizationName") ?? providerPlaceholders.supabaseOrganizationName;
+  string(supabaseOrganization, "ownership.supabase.organizationName", /^(?=.{1,128}$)[^\r\n"\\]+$/u);
   const supabaseProjectRef = nullableString(supabase.projectRef, "ownership.supabase.projectRef");
   if (supabaseProjectRef !== null) string(supabaseProjectRef, "ownership.supabase.projectRef", /^[a-z0-9]{20}$/u);
 
@@ -130,7 +131,7 @@ export function normalizeInitializationConfig(value) {
   const cloudflareZoneName = string(cloudflare.zoneName, "ownership.cloudflare.zoneName", /^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/u);
   string(cloudflareAccountId, "ownership.cloudflare.accountId", /^[0-9a-f]{32}$/u);
   string(cloudflareZoneId, "ownership.cloudflare.zoneId", /^[0-9a-f]{32}$/u);
-  string(cloudflareAccountName, "ownership.cloudflare.accountName", /^(?=.{1,128}$)[^\r\n]+$/u);
+  string(cloudflareAccountName, "ownership.cloudflare.accountName", /^(?=.{1,128}$)[^\r\n"\\]+$/u);
 
   const hostname = new URL(production).hostname;
   assert(hostname === `${slug}.${cloudflareZoneName}`, "The production hostname must be slug.cloudflareZoneName for the DNS-only starter policy.");
