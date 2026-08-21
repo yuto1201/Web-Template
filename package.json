@@ -10,6 +10,8 @@
   },
   "scripts": {
     "dev": "next dev",
+    "db:verify": "node tools/verify-database.mjs",
+    "db:stop": "npm exec -- supabase stop --no-backup",
     "build": "next build",
     "build:ci": "node tools/build-ci.mjs",
     "start": "next start",
@@ -27,6 +29,8 @@
     "check": "npm run check:generated && npm run lint && npm run typecheck && npm test && npm run test:boundary && npm run test:client-scan && npm run build:ci"
   },
   "dependencies": {
+    "@supabase/ssr": "0.12.4",
+    "@supabase/supabase-js": "2.112.3",
     "next": "16.3.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -46,6 +50,7 @@
     "eslint-config-next": "16.3.1",
     "globals": "17.11.0",
     "jsdom": "29.1.1",
+    "supabase": "2.115.0",
     "typescript": "6.0.3",
     "vitest": "4.1.11"
   }
