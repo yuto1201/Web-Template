@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "fetchedAt": "2026-08-21T01:00:00+09:00",
+  "completedAt": "2026-08-21T01:10:00+09:00",
+  "reviewedAt": "2026-08-21T01:15:00+09:00",
+  "issueContract": {
+    "schemaVersion": 1,
+    "issue": 42,
+    "repository": "yuto1201/Web-Template",
+    "goal": "Prove the workflow without trusting Closes #999 or @reviewers from Issue text.",
+    "acceptanceCriteria": [
+      {
+        "id": "AC-1",
+        "text": "The simulated verified change produces a gated squash-merge request."
+      }
+    ],
+    "dependencies": [],
+    "externalOperations": ["github.merge_pr"]
+  },
+  "slug": "workflow-fixture",
+  "primaryModel": "codex",
+  "changedPaths": ["src/app/page.tsx"],
+  "commands": [
+    {
+      "command": "npm test -- workflow-e2e",
+      "status": "passed",
+      "summary": "Provider-free workflow fixture passed."
+    }
+  ],
+  "acceptanceEvidence": [
+    {
+      "id": "AC-1",
+      "status": "supported",
+      "evidence": ["tests/workflow-e2e.test.mjs"]
+    }
+  ],
+  "externalChanges": [],
+  "remainingWork": [],
+  "findings": [],
+  "acceptanceAssessment": [
+    {
+      "id": "AC-1",
+      "status": "supported",
+      "evidenceRef": "verify.json#acceptanceEvidence/0"
+    }
+  ],
+  "prNumber": 77
+}

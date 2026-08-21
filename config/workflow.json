@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "artifactRoot": ".artifacts",
+  "baseRef": "main",
+  "reviewerMap": { "codex": "claude", "claude": "codex" },
+  "states": [
+    "proposed", "approved", "claimed", "in-progress", "verify-passed",
+    "review-requested", "changes-requested", "approved-for-merge", "merged", "done",
+    "blocked:user", "blocked:ops", "blocked:review", "blocked:conflict",
+    "blocked:dependency", "blocked:environment", "blocked:repeated-failure",
+    "paused", "superseded"
+  ],
+  "transitions": {
+    "proposed": ["approved", "blocked:user", "superseded"],
+    "approved": ["claimed", "blocked:dependency", "paused", "superseded"],
+    "claimed": ["in-progress", "blocked:conflict", "paused"],
+    "in-progress": ["verify-passed", "blocked:user", "blocked:ops", "blocked:review", "blocked:conflict", "blocked:dependency", "blocked:environment", "blocked:repeated-failure", "paused"],
+    "verify-passed": ["review-requested", "in-progress", "blocked:review"],
+    "review-requested": ["changes-requested", "approved-for-merge", "blocked:review"],
+    "changes-requested": ["in-progress", "blocked:user", "paused"],
+    "approved-for-merge": ["merged", "in-progress", "blocked:conflict", "blocked:ops"],
+    "merged": ["done"],
+    "done": [],
+    "superseded": []
+  },
+  "privilegedPathRules": [
+    { "type": "prefix", "path": ".claude/", "contracts": ["change-evaluator"] },
+    { "type": "prefix", "path": ".codex/", "contracts": ["change-evaluator"] },
+    { "type": "prefix", "path": ".github/", "contracts": ["change-evaluator"] },
+    { "type": "prefix", "path": "config/", "contracts": ["change-evaluator"] },
+    { "type": "prefix", "path": "tools/", "contracts": ["change-evaluator"] },
+    { "type": "exact", "path": "next.config.mjs", "contracts": ["change-evaluator"] },
+    { "type": "prefix", "path": "supabase/", "contracts": ["change-evaluator", "supabase-auditor"] },
+    { "type": "prefix", "path": "src/app/api/", "contracts": ["change-evaluator", "supabase-auditor"] },
+    { "type": "prefix", "path": "src/lib/auth/", "contracts": ["change-evaluator", "supabase-auditor"] },
+    { "type": "prefix", "path": "src/lib/env", "contracts": ["change-evaluator", "supabase-auditor"] },
+    { "type": "prefix", "path": "src/lib/supabase/", "contracts": ["change-evaluator", "supabase-auditor"] },
+    { "type": "exact", "path": "src/proxy.ts", "contracts": ["change-evaluator", "supabase-auditor"] }
+  ]
+}

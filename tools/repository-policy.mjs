@@ -10,11 +10,18 @@ const requiredFiles = [
   ".codex/agents/change-evaluator.toml",
   ".codex/agents/supabase-auditor.toml",
   ".gitattributes",
+  ".github/pull_request_template.md",
   "AGENTS.md",
   "CLAUDE.md",
   "config/agents.json",
   "config/ownership.json",
+  "config/review-contract.schema.json",
+  "config/workflow.json",
+  "docs/agent-contracts/review-packet.md",
   "docs/authority.md",
+  "docs/workflow.md",
+  "tools/issue-workflow.mjs",
+  "tools/workflow-core.mjs",
   "specs/acceptance.md",
 ];
 const secretPatterns = [
@@ -72,12 +79,47 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("config/ownership.json has an unexpected Cloudflare account.");
   }
 
-  const agents = /** @type {{ agents?: Array<{ slug: string }> }} */ (
+  const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }> }} */ (
     JSON.parse(await readFile(path.join(root, "config", "agents.json"), "utf8"))
   );
   const slugs = agents.agents?.map((agent) => agent.slug) ?? [];
   if (slugs.join(",") !== "change-evaluator,supabase-auditor") {
     errors.push("The initial evaluator set must contain only change-evaluator and supabase-auditor.");
+  }
+  if (agents.schemaVersion !== 2 || agents.reviewContract !== "config/review-contract.schema.json") {
+    errors.push("config/agents.json must use schema version 2 and the canonical review contract.");
+  }
+  const reviewSchema = JSON.parse(await readFile(path.join(root, "config", "review-contract.schema.json"), "utf8"));
+  const reviewProperties = Object.keys(reviewSchema.properties ?? {}).sort();
+  const expectedReviewProperties = [...(reviewSchema.required ?? []), "unavailableReason"].sort();
+  if (reviewSchema.additionalProperties !== false || reviewProperties.join(",") !== expectedReviewProperties.join(",")) {
+    errors.push("The review JSON schema must be strict and keep required/optional properties synchronized.");
+  }
+
+  const workflow = JSON.parse(await readFile(path.join(root, "config", "workflow.json"), "utf8"));
+  const states = /** @type {string[]} */ (Array.isArray(workflow.states) ? workflow.states : []);
+  const stateSet = new Set(states);
+  if (stateSet.size !== states.length) errors.push("config/workflow.json states must be unique.");
+  if (workflow.reviewerMap?.codex !== "claude" || workflow.reviewerMap?.claude !== "codex") {
+    errors.push("config/workflow.json must map each primary model to the opposite reviewer.");
+  }
+  if (workflow.baseRef !== "main") errors.push("config/workflow.json must derive review scope from main.");
+  for (const state of states.filter((state) => !state.startsWith("blocked:") && state !== "paused")) {
+    if (!Array.isArray(workflow.transitions?.[state])) errors.push(`Workflow state ${state} needs a transition list.`);
+  }
+  for (const [state, targets] of Object.entries(workflow.transitions ?? {})) {
+    if (!stateSet.has(state)) errors.push(`Workflow transition source is unknown: ${state}.`);
+    for (const target of /** @type {string[]} */ (targets)) {
+      if (!stateSet.has(target)) errors.push(`Workflow transition target is unknown: ${target}.`);
+    }
+  }
+  for (const rule of workflow.privilegedPathRules ?? []) {
+    if (!["prefix", "exact"].includes(rule.type) || typeof rule.path !== "string" || rule.path !== rule.path.toLowerCase()) {
+      errors.push("Workflow privileged path rules must use lower-case exact/prefix canonical paths.");
+    }
+    if (!Array.isArray(rule.contracts) || rule.contracts.some(/** @param {string} contract */ (contract) => !slugs.includes(contract))) {
+      errors.push(`Workflow path rule uses an unknown review contract: ${rule.path ?? "<missing>"}.`);
+    }
   }
 
   const expectedClaudeAgents = slugs.map((slug) => `${slug}.md`).sort();
