@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -434,10 +434,22 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
   };
 }
 
+/** @param {string} candidate */
+function canonicalPath(candidate) {
+  const resolved = path.resolve(candidate);
+  try {
+    return realpathSync.native(resolved);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return resolved;
+    throw error;
+  }
+}
+
 /** @param {string} root @param {string} candidate @param {string} subtree */
 export function resolveInside(root, candidate, subtree) {
-  const base = path.resolve(root, subtree);
-  const resolved = path.resolve(root, candidate);
+  const canonicalRoot = canonicalPath(root);
+  const base = path.resolve(canonicalRoot, subtree);
+  const resolved = canonicalPath(path.isAbsolute(candidate) ? candidate : path.resolve(canonicalRoot, candidate));
   const relative = path.relative(base, resolved);
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`Path escapes ${subtree}.`);
@@ -865,6 +877,7 @@ export function collectAndValidateCleanupPlan(evidenceValue, root) {
   const evidence = cleanupEvidenceSchema.parse(evidenceValue);
   const worktree = worktreeSchema.parse(evidence.worktree);
   const worktreeAbsolute = resolveInside(root, worktree, ".worktrees");
+  const canonicalRoot = canonicalPath(root);
   const localBranchSha = runGit(root, ["rev-parse", `refs/heads/${evidence.branch}`]).trim();
   const candidateBranches = runGit(root, [
     "for-each-ref",
@@ -875,7 +888,7 @@ export function collectAndValidateCleanupPlan(evidenceValue, root) {
   const candidateWorktrees = runGit(root, ["worktree", "list", "--porcelain"])
     .split(/\r?\n/u)
     .filter((line) => line.startsWith("worktree "))
-    .map((line) => path.relative(root, line.slice("worktree ".length)).replaceAll("\\", "/"))
+    .map((line) => path.relative(canonicalRoot, canonicalPath(line.slice("worktree ".length))).replaceAll("\\", "/"))
     .filter((candidate) => worktreeSchema.safeParse(candidate).success)
     .filter((candidate) => Number(candidate.slice(".worktrees/".length).split("-")[0]) === evidence.issue)
     .toSorted();
