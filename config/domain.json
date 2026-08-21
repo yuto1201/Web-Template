@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "hostname": "web-template.yutodev.com",
+  "zoneName": "yutodev.com",
+  "recordName": "web-template",
+  "allowedRecordTypes": ["CNAME"],
+  "requiredProxied": false,
+  "defaultTtl": 1,
+  "forbiddenOperations": [
+    "domain.transfer",
+    "nameserver.replace",
+    "dns.bulk_replace",
+    "cloudflare.proxy.enable"
+  ],
+  "smokeChecks": [
+    { "path": "/", "status": 200, "contains": "Start with the boundaries already drawn." },
+    { "path": "/health", "status": 200, "jsonStatus": "ok" }
+  ]
+}
