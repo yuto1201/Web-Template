@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "appName": "My App",
+  "slug": "my-app",
+  "github": {
+    "owner": "your-github-user",
+    "repository": "my-app"
+  },
+  "localPorts": {
+    "app": 3100,
+    "supabaseBase": 56320
+  },
+  "publicUrls": {
+    "production": "https://my-app.example.com"
+  },
+  "ownership": {
+    "supabase": {
+      "organizationName": null,
+      "projectRef": null
+    },
+    "vercel": {
+      "scope": null,
+      "projectId": null
+    },
+    "cloudflare": {
+      "accountId": null,
+      "accountName": null,
+      "zoneId": null,
+      "zoneName": "example.com"
+    }
+  }
+}

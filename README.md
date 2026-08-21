@@ -1,41 +1,55 @@
 # Web Template
 
-Codex を主担当、Claude を独立評価者または相談者として使う、個人向け Web アプリ開発テンプレートです。
+Codex を主担当、Claude を独立評価者または相談者として使う、個人向け Web アプリ開発の guarded golden template です。標準構成は Next.js App Router、strict TypeScript、Supabase、Vercel、Cloudflare DNS です。
 
-標準構成は Next.js App Router、TypeScript、Supabase、Vercel、Cloudflare DNS です。GitHub の **Template repository** として利用し、生成後のプロジェクトごとに仕様、環境、外部サービスの所有者を確定します。
+このリポジトリは最小のコード断片ではありません。生成後のアプリにも、Auth/RLS、秘密情報境界、Preview/Production、DNS、反対モデル評価を実際に検査するガードを残します。サンプル業務機能は含めず、ライブ Supabase・Vercel・Cloudflare の有効化は選択可能な別工程です。
 
-## 現在地
+## GitHub Template から始める
 
-このリポジトリは Issue 単位で構築中です。実装順と完了条件は [GitHub Issues](https://github.com/yuto1201/Web-Template/issues) を正本とし、リポジトリ内では次を参照してください。
-
-- [AGENTS.md](AGENTS.md): 全モデル共通の実行規約
-- [specs/README.md](specs/README.md): 仕様の正本と更新ルール
-- [docs/authority.md](docs/authority.md): アカウントと外部操作の権限境界
-- [docs/workflow.md](docs/workflow.md): Issue から squash merge までの標準手順
-- [docs/security.md](docs/security.md): 秘密情報と Claude 実行ガード
-- [docs/verification.md](docs/verification.md): 必須検証と証跡
-
-## ローカル確認
-
-Node.js 24 と npm 11 を使います。
+1. GitHub の **Use this template** から新しいリポジトリを作成して clone します。
+2. `template-init.example.json` を `.template-init.json` にコピーし、アプリ名、slug、生成先 GitHub、ローカルポート、予定する公開 URL と Cloudflare zone を編集します。
+3. 初期化し、同じ入力で再実行できることを確認します。
 
 ```powershell
+npm run template:init -- --config .template-init.json
+npm run template:init -- --config .template-init.json
 npm ci
-npm run dev
+npx playwright install chromium
+npm run readiness
+npm run check
 ```
 
-初回起動前に `.env.example` を `.env.local` にコピーし、対象プロジェクトの公開可能な Supabase URL と publishable key を設定します。`NEXT_PUBLIC_` 変数には service-role key やプロバイダートークンを入れないでください。
+1回目は `initialized`、2回目は `idempotent` を返します。レビュー済みのテンプレート値が先に編集されていた場合や、異なる入力で再初期化しようとした場合は、既存値を上書きせず失敗します。
 
-全検証は次のコマンドで実行します。
+初期化の詳細と外部サービスの順序は [activation runbook](docs/activation.md) を参照してください。
+
+## ローカル準備とライブ準備
+
+`npm run readiness` は次を別々に表示します。
+
+- `local.status: ready`: package slug、所有者設定、URL、ローカルポートが整合し、ローカル実装を開始できる。
+- `liveProviders.*.status: needs-codex`: 対象の個人アカウントや hosted project がまだ確定していない。
+
+ローカル準備完了は、デプロイやドメイン公開の成功を意味しません。Supabase、Vercel、Cloudflare、GitHub の認証済み外部操作は Codex だけが行います。Claude はローカル実装と読み取り評価に使い、外部情報が必要な場合は Codex へ委譲します。
+
+## 環境変数
+
+`.env.example` を `.env.local` にコピーし、対象プロジェクトのブラウザ公開可能な Supabase URL と publishable key を設定します。`NEXT_PUBLIC_` 変数には service-role key やプロバイダートークンを入れないでください。
+
+認証には `APP_ORIGIN` と `AUTH_SIGNUP_MODE` の明示設定が必要です。verified claims、redirect allowlist、招待制と公開登録の境界は [authentication runbook](docs/authentication.md) を参照してください。
+
+## 検証
+
+日常の全検証は次です。
 
 ```powershell
 npm run check
 npm run test:e2e
 ```
 
-`npm run check` はポリシー、lint、型、単体テストに加え、Server-only モジュールの誤 import が実際にビルドを拒否することと、ブラウザ用 bundle に秘密情報パターンが含まれないことを確認します。
+`npm run check` は初期化マニフェスト、所有者ポリシー、Markdown link、受け入れ条件トレース、生成 wrapper、デプロイ/DNS policy、lint、型、unit、Server-only 違反の実ビルド拒否、ブラウザ bundle の秘密情報 scan、production build を検証します。
 
-Supabaseのmigration、RLS、grant、生成型はDockerを使う別検証で確認します。
+Supabase の migration、RLS、grant、生成型、実 JWT は Docker を使う別検証です。
 
 ```powershell
 npm run db:verify
@@ -43,19 +57,22 @@ npm run auth:verify
 npm run db:stop
 ```
 
-`db:verify` は固定CLIでlocal Postgresを起動し、空DB reset、schema lint、pgTAP否定テスト、生成型比較を行います。Docker daemonへ接続できない場合は`NOT RUN`とexit code 2を返し、成功として扱いません。標準ポートを使う他プロジェクトを妨げないよう、このテンプレートは`5532x`帯を使用します。
-
-認証には `APP_ORIGIN` と `AUTH_SIGNUP_MODE` の明示設定が必要です。`auth:verify` はローカル Auth が発行する実 JWT と Data API を使い、2ユーザー間の RLS 分離を確認します。verified claims、redirect allowlist、招待制と公開登録の境界は [docs/authentication.md](docs/authentication.md) を参照してください。
-
-ESLint 9 と TypeScript 6 は Next.js 16.3.1 のlint構成（`typescript-eslint` を含む）が宣言する互換範囲に固定しています。新しいmajorへ上げる場合は、`npm ls` のpeer dependencyと全チェックを同時に確認します。
-
-生成されたエージェント定義を更新する場合は、`config/agents.json` と `docs/agent-contracts/` を変更してから次を実行します。
+Docker daemon に接続できない場合は `NOT RUN` と exit code 2 を返し、成功として扱いません。最終完了監査は全項目を個別ステータスで保存します。
 
 ```powershell
-npm run generate
-npm run check
+npm run audit:completion -- --include-integration --require-all
 ```
 
-## 安全境界
+クリーンルームで別名アプリを生成し、依存関係の固定インストール、`npm run check`、readiness、desktop/mobile smoke まで実行する検証は `npm run template:verify` です。
 
-Supabase、Vercel、Cloudflare、GitHub など、個人アカウントに認証された外部操作は Codex のみが実行します。Claude はローカル実装と読み取り評価に利用できますが、外部サービスの認証、照会、変更、デプロイは行いません。詳細は [docs/authority.md](docs/authority.md) を参照してください。
+## リポジトリの正本
+
+- [AGENTS.md](AGENTS.md): 全モデル共通の実行規約
+- [specs/README.md](specs/README.md): 仕様の正本と更新ルール
+- [completion audit trace](specs/completion-audit.md): Issue #1–#8 と現在の実装/検証の対応
+- [authority boundary](docs/authority.md): アカウントと外部操作の権限境界
+- [workflow](docs/workflow.md): Issue から squash merge までの標準手順
+- [security](docs/security.md): 秘密情報と Claude 実行ガード
+- [verification](docs/verification.md): 必須検証と証跡
+
+この golden repository の実装履歴は [GitHub Issues](https://github.com/yuto1201/Web-Template/issues) にあります。生成後はリンクが生成先 owner/repository に置き換わり、そのリポジトリの Issue が作業の正本になります。

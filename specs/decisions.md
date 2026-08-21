@@ -36,3 +36,10 @@ Decisions are append-only. To change one, add a new entry that explicitly supers
 - Date: 2026-08-21
 - Decision: ship only `change-evaluator` and `supabase-auditor` initially. Add specialized agents only after repeated evidence shows a separate contract is useful.
 - Reason: narrow agents are easier to trigger, test, and keep within least privilege.
+
+## D-006: Generated repositories retain the guardrails
+
+- Status: accepted
+- Date: 2026-08-21
+- Decision: treat this repository as a guarded golden template rather than a minimal code snippet. Initialization changes app identity, ports, URLs, and provider ownership placeholders, but retains the tested Auth, RLS, deployment, DNS, review, and secret-boundary checks.
+- Reason: the generated application stays product-neutral while keeping the failure controls that make reuse safe. Local readiness and optional live provider activation are reported separately so repository size is not confused with mandatory cloud provisioning.

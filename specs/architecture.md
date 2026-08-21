@@ -33,3 +33,4 @@
 - Auth session behavior is introduced in Issue #4.
 - Cross-model execution wrappers and resumable workflow automation are completed in Issue #5.
 - Vercel and Cloudflare external setup are handled independently in Issues #6 and #7.
+- Issue #8 keeps this repository as the guarded golden template: initialization replaces only reviewed identity values, while provider activation remains a separate Codex-owned workflow.

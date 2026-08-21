@@ -9,7 +9,16 @@
     "npm": ">=11.6.0 <12"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "node tools/run-next-dev.mjs",
+    "policy": "node tools/repository-policy.mjs",
+    "template:init": "node tools/initialize-template.mjs",
+    "template:source-check": "node tools/template-manifest.mjs",
+    "template:readiness": "node tools/template-readiness.mjs",
+    "template:verify": "node tools/verify-template-instantiation.mjs",
+    "readiness": "npm run template:readiness",
+    "check:links": "node tools/verify-links.mjs",
+    "audit:trace": "node tools/verify-acceptance-trace.mjs",
+    "audit:completion": "node tools/completion-audit.mjs",
     "auth:verify": "node tools/verify-auth-integration.mjs",
     "db:verify": "node tools/verify-database.mjs",
     "db:stop": "npm exec -- supabase stop --no-backup",
@@ -17,7 +26,7 @@
     "domain:lint": "node tools/domain-workflow.mjs lint",
     "build": "next build",
     "build:ci": "node tools/build-ci.mjs",
-    "start": "next start",
+    "start": "node tools/run-next-start.mjs",
     "generate": "node tools/generate-agent-wrappers.mjs",
     "workflow": "node tools/issue-workflow.mjs",
     "check:generated": "node tools/generate-agent-wrappers.mjs --check",
@@ -30,7 +39,7 @@
     "test:client-scan": "node tools/verify-client-scan.mjs",
     "test:e2e": "playwright test",
     "scan:client": "node tools/scan-client-bundle.mjs",
-    "check": "npm run check:generated && npm run deployment:lint && npm run domain:lint && npm run lint && npm run typecheck && npm test && npm run test:boundary && npm run test:client-scan && npm run build:ci"
+    "check": "npm run template:source-check && npm run policy && npm run check:links && npm run audit:trace && npm run check:generated && npm run deployment:lint && npm run domain:lint && npm run lint && npm run typecheck && npm test && npm run test:boundary && npm run test:client-scan && npm run build:ci"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.4",
