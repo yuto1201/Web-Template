@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "provider": "vercel",
+  "productionBranch": "main",
+  "releaseEvidenceMaxAgeMinutes": 30,
+  "releaseEvidenceFutureSkewMinutes": 5,
+  "environments": {
+    "development": {
+      "requiredKeys": [
+        "APP_ORIGIN",
+        "AUTH_SIGNUP_MODE",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL"
+      ],
+      "allowedKeys": [
+        "APP_ORIGIN",
+        "AUTH_SIGNUP_MODE",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY"
+      ]
+    },
+    "preview": {
+      "requiredKeys": [
+        "APP_ORIGIN",
+        "AUTH_SIGNUP_MODE",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL"
+      ],
+      "allowedKeys": [
+        "APP_ORIGIN",
+        "AUTH_SIGNUP_MODE",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL"
+      ]
+    },
+    "production": {
+      "requiredKeys": [
+        "APP_ORIGIN",
+        "AUTH_SIGNUP_MODE",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL"
+      ],
+      "allowedKeys": [
+        "APP_ORIGIN",
+        "AUTH_SIGNUP_MODE",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY"
+      ]
+    }
+  },
+  "keyClasses": {
+    "APP_ORIGIN": "public-policy",
+    "AUTH_SIGNUP_MODE": "public-policy",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "public-staging",
+    "NEXT_PUBLIC_SUPABASE_URL": "public-staging",
+    "SUPABASE_SERVICE_ROLE_KEY": "production-secret"
+  },
+  "smokeChecks": [
+    { "path": "/", "status": 200, "contains": "Start with the boundaries already drawn." },
+    { "path": "/health", "status": 200, "jsonStatus": "ok" }
+  ],
+  "remoteSchemaOrder": [
+    { "stage": "expand", "requiresExplicitApproval": false },
+    { "stage": "deploy", "requiresExplicitApproval": false },
+    { "stage": "contract", "requiresExplicitApproval": true }
+  ],
+  "forbiddenProductionOperations": ["database.reset", "migration.down", "schema.drop"]
+}
