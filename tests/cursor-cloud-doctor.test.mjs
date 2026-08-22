@@ -11,6 +11,78 @@ import {
   validateActivationEvidence,
 } from "../tools/cursor-cloud-doctor.mjs";
 
+/** @typedef {{ build: { dockerfile: string, context: string }, install: string, start: string }} CursorEnvironment */
+/**
+ * @typedef RepositorySnapshot
+ * @property {string[]} policyErrors
+ * @property {string} nodeVersion
+ * @property {string} nvmVersion
+ * @property {string} packageNodeVersion
+ * @property {string} packageNpmVersion
+ * @property {string} packageManager
+ * @property {string} branch
+ * @property {string} headSha
+ * @property {CursorEnvironment} environment
+ * @property {string} dockerfile
+ */
+/** @typedef {{ node: string, npm: string, docker: boolean, chromium: boolean }} RuntimeSnapshot */
+/**
+ * @typedef OwnershipSnapshot
+ * @property {number} schemaVersion
+ * @property {{ owner: string, repository: string }} github
+ * @property {{ organizationName: string, projectRef: string }} supabase
+ * @property {{ scope: string, projectId: string }} vercel
+ * @property {{ accountId: string, accountName: string, zoneId: string, domains: string[] }} cloudflare
+ */
+/** @typedef {{ cursorModels: { openai: string, anthropic: string } }} ExecutionPolicy */
+/**
+ * @typedef ReadySnapshot
+ * @property {RepositorySnapshot} repository
+ * @property {RuntimeSnapshot} runtime
+ * @property {OwnershipSnapshot} ownership
+ * @property {ExecutionPolicy} executionPolicy
+ */
+/**
+ * @typedef ReadySnapshotOverrides
+ * @property {RepositorySnapshot} [repository]
+ * @property {RuntimeSnapshot} [runtime]
+ * @property {OwnershipSnapshot} [ownership]
+ * @property {ExecutionPolicy} [executionPolicy]
+ */
+/** @typedef {Omit<ReadySnapshot, "repository"> & { repository: Omit<RepositorySnapshot, "branch"> & { branch: null } }} MissingBranchSnapshot */
+/** @typedef {Omit<ReadySnapshot, "repository"> & { repository: Omit<RepositorySnapshot, "headSha"> & { headSha: null } }} MissingHeadSnapshot */
+/** @typedef {Omit<ReadySnapshot, "ownership"> & { ownership: Omit<OwnershipSnapshot, "supabase"> & { supabase: { organizationName: string, projectRef: null } } }} MissingSupabaseProjectSnapshot */
+/** @typedef {ReadySnapshot | MissingBranchSnapshot | MissingHeadSnapshot | MissingSupabaseProjectSnapshot} EvaluationSnapshot */
+/**
+ * @typedef ReviewerEvidence
+ * @property {string} observed
+ * @property {string} repositoryReadProbe
+ * @property {string} fileProbe
+ * @property {string} shellProbe
+ * @property {string} providerToolProbe
+ * @property {string} completionProbe
+ */
+/**
+ * @typedef ProviderEvidence
+ * @property {{ owner: string, fullName: string, status: string }} github
+ * @property {{ organizationName: string, projectRef: string, status: string }} supabase
+ * @property {{ scope: string, projectId: string, status: string }} vercel
+ * @property {{ accountId: string, accountName: string, zoneId: string, domain: string, status: string }} cloudflare
+ */
+/**
+ * @typedef ActivationEvidence
+ * @property {number} schemaVersion
+ * @property {string} surface
+ * @property {{ id: string, modelObserved: string }} run
+ * @property {{ fullName: string, branch: string, headSha: string }} repository
+ * @property {{ status: string, node: string, npm: string, docker: boolean, chromium: boolean }} build
+ * @property {{ openai: ReviewerEvidence, anthropic: ReviewerEvidence }} reviewers
+ * @property {ProviderEvidence} providers
+ * @property {string} verifiedAt
+ */
+/** @typedef {{ build?: boolean, activation?: ActivationEvidence }} EvaluationOptions */
+
+/** @type {CursorEnvironment} */
 const environment = {
   build: { dockerfile: "Dockerfile", context: ".." },
   install: "npm ci && npm exec -- playwright install --with-deps chromium && npm run cursor:doctor -- --build",
@@ -30,6 +102,7 @@ RUN apt-get update \\
     && rm -rf /var/lib/apt/lists/*
 `;
 
+/** @type {OwnershipSnapshot} */
 const ownership = {
   schemaVersion: 1,
   github: { owner: "yuto1201", repository: "Web-Template" },
@@ -43,6 +116,7 @@ const ownership = {
   },
 };
 
+/** @type {ExecutionPolicy} */
 const executionPolicy = {
   cursorModels: {
     openai: "gpt-5.6-sol[effort=high]",
@@ -53,6 +127,7 @@ const executionPolicy = {
 const referenceTime = new Date("2026-08-22T12:05:00+09:00");
 const headSha = "a".repeat(40);
 
+/** @type {ActivationEvidence} */
 const ready = {
   schemaVersion: 1,
   surface: "cursor-cloud",
@@ -92,7 +167,7 @@ const ready = {
   verifiedAt: "2026-08-22T12:00:00+09:00",
 };
 
-/** @param {Record<string, any>} [overrides] */
+/** @param {ReadySnapshotOverrides} [overrides] @returns {ReadySnapshot} */
 function readySnapshot(overrides = {}) {
   return {
     repository: {
@@ -114,12 +189,42 @@ function readySnapshot(overrides = {}) {
   };
 }
 
-/** @param {unknown} value */
+/** @returns {MissingSupabaseProjectSnapshot} */
+function snapshotWithoutSupabaseProject() {
+  const snapshot = readySnapshot();
+  return {
+    ...snapshot,
+    ownership: {
+      ...snapshot.ownership,
+      supabase: { ...snapshot.ownership.supabase, projectRef: null },
+    },
+  };
+}
+
+/** @returns {MissingBranchSnapshot} */
+function snapshotWithoutBranch() {
+  const snapshot = readySnapshot();
+  return {
+    ...snapshot,
+    repository: { ...snapshot.repository, branch: null },
+  };
+}
+
+/** @returns {MissingHeadSnapshot} */
+function snapshotWithoutHead() {
+  const snapshot = readySnapshot();
+  return {
+    ...snapshot,
+    repository: { ...snapshot.repository, headSha: null },
+  };
+}
+
+/** @param {ActivationEvidence} value */
 function validateActivation(value) {
   return validateActivationEvidence(value, executionPolicy, { referenceTime });
 }
 
-/** @param {Record<string, any>} snapshot @param {Record<string, any>} [options] */
+/** @param {EvaluationSnapshot} snapshot @param {EvaluationOptions} [options] */
 function evaluate(snapshot, options = {}) {
   return evaluateCursorCloud(snapshot, { ...options, referenceTime });
 }
@@ -286,12 +391,7 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("blocks activation when any configured provider target is unavailable", () => {
-    const snapshot = readySnapshot({
-      ownership: {
-        ...structuredClone(ownership),
-        supabase: { ...structuredClone(ownership.supabase), projectRef: null },
-      },
-    });
+    const snapshot = snapshotWithoutSupabaseProject();
 
     const report = evaluate(snapshot, { build: true, activation: ready });
 
@@ -306,12 +406,16 @@ describe("Cursor Cloud doctor", () => {
     expect(staleReport.status).toBe("blocked:conflict");
     expect(staleReport.blockers).toContain("activation-branch-mismatch");
 
-    for (const branch of [null, "codex/29-cursor-cloud-mode", "feature"] ) {
+    const unavailableBranchReport = evaluate(snapshotWithoutBranch(), { build: true, activation: ready });
+    expect(unavailableBranchReport.status).toBe("blocked:conflict");
+    expect(unavailableBranchReport.blockers).toContain("current-branch-unavailable");
+
+    for (const branch of ["codex/29-cursor-cloud-mode", "feature"] ) {
       const report = evaluate(readySnapshot({
         repository: { ...readySnapshot().repository, branch },
       }), { build: true, activation: ready });
       expect(report.status).toBe("blocked:conflict");
-      expect(report.blockers).toContain(branch === null ? "current-branch-unavailable" : "current-branch-not-cursor");
+      expect(report.blockers).toContain("current-branch-not-cursor");
     }
   });
 
@@ -324,9 +428,7 @@ describe("Cursor Cloud doctor", () => {
     expect(report.status).toBe("blocked:conflict");
     expect(report.blockers).toContain("activation-head-mismatch");
 
-    const unavailable = readySnapshot({
-      repository: { ...readySnapshot().repository, headSha: null },
-    });
+    const unavailable = snapshotWithoutHead();
     expect(evaluate(unavailable, { build: true, activation: ready })).toMatchObject({
       status: "blocked:conflict",
       blockers: expect.arrayContaining(["current-head-unavailable"]),
