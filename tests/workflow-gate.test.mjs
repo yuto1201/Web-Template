@@ -204,6 +204,37 @@ describe("current-Head pre-merge gate", () => {
     await expect(runAuthoritativePremergeGate(root, 42)).rejects.toThrow();
   });
 
+  it("binds review preparation and authoritative evidence to the real surface and Issue branch", async () => {
+    expect(spawnSync("git", ["branch", "-m", "codex/42-wrong-surface"], { cwd: root, windowsHide: true }).status).toBe(0);
+    await expect(runAuthoritativePremergeGate(root, 42)).rejects.toThrow(/surface cursor-cloud/u);
+    await expect(prepareReviewArtifacts(root, {
+      schemaVersion: 2,
+      issue: 42,
+      executionSurface: "cursor-cloud",
+      primaryModel: model("composer-2.5", "composer-2.5", "cursor"),
+      status: "passed",
+      commands: [{ command: "npm test", status: "passed", summary: "Passed." }],
+      acceptanceEvidence: [{ id: "AC-1", status: "supported", evidence: ["test"] }],
+      externalChanges: [],
+      remainingWork: [],
+      completedAt: "2026-08-21T01:10:00+09:00",
+    })).rejects.toThrow(/surface cursor-cloud/u);
+
+    expect(spawnSync("git", ["branch", "-m", "codex/41-wrong-issue"], { cwd: root, windowsHide: true }).status).toBe(0);
+    await expect(prepareReviewArtifacts(root, {
+      schemaVersion: 2,
+      issue: 42,
+      executionSurface: "codex-local",
+      primaryModel: model("gpt-5.6-sol", "gpt-5.6-sol", "openai"),
+      status: "passed",
+      commands: [{ command: "npm test", status: "passed", summary: "Passed." }],
+      acceptanceEvidence: [{ id: "AC-1", status: "supported", evidence: ["test"] }],
+      externalChanges: [],
+      remainingWork: [],
+      completedAt: "2026-08-21T01:10:00+09:00",
+    })).rejects.toThrow(/issue 42/u);
+  });
+
   it("re-derives the base SHA from the configured base ref", async () => {
     const packetPath = path.join(root, `.artifacts/issues/42/${bundle.currentHeadSha}/review-packet.json`);
     await writeFile(packetPath, `${JSON.stringify({ ...bundle.packet, baseSha: bundle.currentHeadSha }, null, 2)}\n`, "utf8");

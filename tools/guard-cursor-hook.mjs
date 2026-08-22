@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
 import { loadExecutionPolicy } from "./execution-policy.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
@@ -140,13 +141,35 @@ function allowedSubagents(executionPolicy) {
   );
 }
 
+/** @param {string} candidate */
+function canonicalizeWithNearestExistingParent(candidate) {
+  const suffix = [];
+  let current = path.resolve(candidate);
+  while (true) {
+    try {
+      return path.resolve(realpathSync(current), ...suffix);
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error ? error.code : null;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 /** @param {string} root @param {string} candidate */
 function repositoryPath(root, candidate) {
-  const resolvedRoot = path.resolve(root);
-  const resolved = path.resolve(resolvedRoot, candidate);
+  const lexicalRoot = path.resolve(root);
+  const resolvedRoot = canonicalizeWithNearestExistingParent(lexicalRoot);
+  const lexicalCandidate = path.resolve(lexicalRoot, candidate);
+  const resolved = canonicalizeWithNearestExistingParent(lexicalCandidate);
   const relative = path.relative(resolvedRoot, resolved).replaceAll("\\", "/");
+  const lexicalRelative = path.relative(lexicalRoot, lexicalCandidate).replaceAll("\\", "/");
   const outside = relative === ".." || relative.startsWith("../") || path.isAbsolute(relative);
-  return { outside, relative: relative || "." };
+  const alias = !outside && lexicalRelative !== relative;
+  return { outside, alias, relative: relative || "." };
 }
 
 /** @param {string} relative */
@@ -185,8 +208,8 @@ function evaluatePathTool(toolName, input, root, readonly) {
   if ((isEdit || pathRequiredReadTools.has(toolName)) && paths.length === 0) return deny();
   if (isEdit && readonly) return deny();
   for (const candidate of paths) {
-    const { outside, relative } = repositoryPath(root, candidate);
-    if (outside || isSensitivePath(relative) || (isEdit && isProtectedWrite(relative))) return deny();
+    const { outside, alias, relative } = repositoryPath(root, candidate);
+    if (outside || alias || isSensitivePath(relative) || (isEdit && isProtectedWrite(relative))) return deny();
   }
   return allow();
 }
@@ -282,7 +305,8 @@ function isAllowedShellCommand(command) {
 /** @param {Record<string, unknown>} event @param {string} root */
 function evaluateShell(event, root) {
   if (typeof event.command !== "string" || typeof event.cwd !== "string") return deny();
-  if (repositoryPath(root, event.cwd).outside || !isAllowedShellCommand(event.command)) return deny();
+  const cwd = repositoryPath(root, event.cwd);
+  if (cwd.outside || cwd.alias || !isAllowedShellCommand(event.command)) return deny();
   return allow();
 }
 
@@ -336,8 +360,8 @@ export function evaluateCursorHook(input, context) {
     }
     if (event.hook_event_name === "afterFileEdit") {
       if (typeof event.file_path !== "string") return deny();
-      const { outside, relative } = repositoryPath(root, event.file_path);
-      return outside || isSensitivePath(relative) || isProtectedWrite(relative) ? deny() : allow();
+      const { outside, alias, relative } = repositoryPath(root, event.file_path);
+      return outside || alias || isSensitivePath(relative) || isProtectedWrite(relative) ? deny() : allow();
     }
     return deny();
   } catch {

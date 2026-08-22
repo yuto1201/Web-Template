@@ -6,6 +6,7 @@ import {
   classifyRisk,
   normalizeModelIdentity,
   requiredReviewerFamilies,
+  validateBranchForSurface,
   validateReviewerFamilies,
 } from "./execution-policy.mjs";
 
@@ -88,6 +89,20 @@ function assertReviewSectionVisible(body, headingIndex, section) {
   assert(prefix.lastIndexOf("<!--") <= prefix.lastIndexOf("-->"), "Review evidence must not be inside an HTML comment.");
   assert(!/(?:^|\n)\s{0,3}(?:`{3,}|~{3,})/u.test(section), "Review evidence must not be inside a fenced code block.");
   assert(!section.includes("<!--") && !section.includes("-->"), "Review evidence must not be inside an HTML comment.");
+  const htmlContainerPattern = /<\/?(?:details|div)\b[^>]*>/giu;
+  const openContainers = [];
+  for (const match of prefix.matchAll(htmlContainerPattern)) {
+    const tag = /^<\/(details|div)\b/iu.exec(match[0])?.[1]?.toLowerCase();
+    if (tag) {
+      assert(openContainers.at(-1) === tag, "Review evidence must not be inside a raw HTML container.");
+      openContainers.pop();
+    } else {
+      const opening = /^<(details|div)\b/iu.exec(match[0])?.[1]?.toLowerCase();
+      if (opening && !/\/\s*>$/u.test(match[0])) openContainers.push(opening);
+    }
+  }
+  assert(openContainers.length === 0, "Review evidence must not be inside a raw HTML container.");
+  assert(!htmlContainerPattern.test(section), "Review evidence must not contain raw HTML containers.");
 }
 
 /** @param {string} value @param {string} label @param {RegExp} itemPattern */
@@ -113,6 +128,9 @@ export function parseReviewBody(body) {
   const end = tail.search(/^##\s+/mu);
   const section = end === -1 ? tail : tail.slice(0, end);
   assertReviewSectionVisible(body, headings[0].index ?? 0, section);
+  const issueClaims = [...body.matchAll(/^Closes #([1-9][0-9]*)[ \t]*$/gmu)];
+  assert(issueClaims.length === 1, "PR body must contain exactly one canonical Closes Issue claim.");
+  const issue = Number(issueClaims[0][1]);
 
   const labels = [
     "Execution surface",
@@ -158,20 +176,27 @@ export function parseReviewBody(body) {
   assert(bodyReviewLines.length === reviewLines.length, "Reviewer claims must appear only inside the review section.");
   assert(reviewLines.length > 0, "Cross-model review must contain at least one reviewer.");
   const reviews = reviewLines.map((line) => {
-    const match = /^- Reviewer ([a-z][a-z0-9-]*): ([^|]+) \| ([^|]+) \| (.+)$/u.exec(line);
-    assert(match, "Reviewer evidence must use the canonical observed | verdict | contracts format without comma ambiguity or newline injection.");
-    const [, family, observedValue, verdictValue, contractsValue] = match;
+    const match = /^- Reviewer ([a-z][a-z0-9-]*): ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| (.+)$/u.exec(line);
+    assert(match, "Reviewer evidence must use the canonical configured | observed | family | fallback | verdict | contracts format without ambiguity or newline injection.");
+    const [, family, configuredValue, observedValue, claimedFamilyValue, fallbackValue, verdictValue, contractsValue] = match;
+    const configured = configuredValue.trim();
     const observed = observedValue.trim();
+    const claimedFamily = claimedFamilyValue.trim();
+    const fallback = fallbackValue.trim();
     const verdict = verdictValue.trim();
     assert(isModelFamily(family), `unknown reviewer model family ${family}.`);
+    assert(claimedFamily === family, `mismatched reviewer model family ${family}.`);
+    assert(modelPattern.test(configured), "Reviewer configured model must be one canonical model identifier.");
     assert(modelPattern.test(observed), "Reviewer observed model must be one canonical model identifier.");
+    assert(["true", "false"].includes(fallback), "Reviewer fallback must be true or false.");
     assert(verdict === "approved", "Cross-model review verdict must be approved.");
     const contracts = parseCanonicalList(contractsValue, "Review contracts", /^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
-    return { family, observed, verdict, contracts };
+    return { family, configured, observed, fallback: fallback === "true", verdict, contracts };
   });
   assert(new Set(reviews.map(({ family }) => family)).size === reviews.length, "Reviewer families must be unique.");
   const contracts = sorted(reviews[0].contracts.filter((contract) => reviews.every((review) => review.contracts.includes(contract))));
   return {
+    issue,
     executionSurface,
     primaryModel: {
       configured: primaryConfigured,
@@ -249,6 +274,8 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   assert(pullRequest.head?.repo?.full_name === pullRequest.base?.repo?.full_name, "Independent review requires a same repository branch.");
   assert(evidence.reviewedSha === headSha, "Reviewed SHA must match the current Head SHA.");
   assert(executionPolicy && typeof executionPolicy === "object", "Execution policy is required for independent review.");
+  assert(typeof pullRequest.head?.ref === "string", "Pull request Head branch is required.");
+  validateBranchForSurface(pullRequest.head.ref, evidence.issue, evidence.executionSurface, executionPolicy);
   const allowedOperations = new Set([
     ...(executionPolicy.routineDeliveryOperations ?? []),
     ...(executionPolicy.highRiskOperations ?? []),
@@ -274,8 +301,13 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   assert(primaryModel.fallback === evidence.primaryModel.fallback, "Primary fallback claim must match the configured and observed models.");
   assert(!primaryModel.fallback, "Primary model fallback cannot satisfy review policy.");
   for (const review of evidence.reviews) {
-    const reviewerModel = normalizeModelIdentity(review.observed, review.observed, [], executionPolicy);
+    const reviewerModel = normalizeModelIdentity(review.configured, review.observed, [], executionPolicy);
     assert(reviewerModel.family === review.family, `unknown or mismatched reviewer model family ${review.family}.`);
+    assert(reviewerModel.fallback === review.fallback, `Reviewer fallback claim must match configured and observed model IDs for ${review.family}.`);
+    assert(!reviewerModel.fallback, `Reviewer model fallback cannot satisfy review policy for ${review.family}.`);
+    if (evidence.executionSurface === "cursor-cloud" && (review.family === "openai" || review.family === "anthropic")) {
+      assert(review.configured === executionPolicy.cursorModels[review.family], `Reviewer configured reviewer model must match trusted Cursor policy for ${review.family}.`);
+    }
   }
   const derivedRisk = classifyRisk({ changedPaths, externalOperations: [] }, executionPolicy);
   if (derivedRisk.level === "high") {

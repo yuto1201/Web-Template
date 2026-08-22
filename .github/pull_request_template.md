@@ -24,8 +24,8 @@ Closes #
 - Risk: normal or high
 - Risk reasons: none, or the canonical comma-separated derived reasons
 - Reviewed SHA: `current-head-sha`
-- Reviewer anthropic: exact observed model ID | approved | change-evaluator, and any privileged-path auditors
-- Reviewer openai: exact observed model ID | approved | change-evaluator, and any privileged-path auditors
+- Reviewer anthropic: exact configured model ID | exact observed model ID | anthropic | false | approved | change-evaluator, and any privileged-path auditors
+- Reviewer openai: exact configured model ID | exact observed model ID | openai | false | approved | change-evaluator, and any privileged-path auditors
 
 ## External changes
 

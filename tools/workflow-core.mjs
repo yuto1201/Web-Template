@@ -775,6 +775,8 @@ async function readArtifactJson(root, relativePath) {
  */
 export async function prepareReviewArtifacts(root, value) {
   const evidence = verificationInputSchema.parse(value);
+  const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
+  validateBranchForSurface(currentBranch, evidence.issue, evidence.executionSurface, executionPolicy);
   const currentHeadSha = runGit(root, ["rev-parse", "HEAD"]).trim();
   const baseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
   shaSchema.parse(currentHeadSha);
@@ -875,6 +877,8 @@ export async function loadAuthoritativeGateInput(root, issue) {
   const verification = await readArtifactJson(root, `${headRoot}/verify.json`);
   const packet = await readArtifactJson(root, `${headRoot}/review-packet.json`);
   const validatedPacket = validateReviewPacket(packet, root, contract);
+  const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
+  validateBranchForSurface(currentBranch, issue, validatedPacket.executionSurface, executionPolicy);
   const reviews = await Promise.all(validatedPacket.requiredReviewerFamilies.map((family) =>
     readArtifactJson(root, `${headRoot}/reviews/${family}.json`)));
   const authoritativeBaseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
@@ -952,7 +956,7 @@ export function renderPullRequestBody(input) {
   const remainingWork = verification.remainingWork.length === 0
     ? "- None for this Issue."
     : verification.remainingWork.map((item) => `- ${safe(item)}`).join("\n");
-  const reviewLines = reviews.map((review) => `- Reviewer ${review.reviewerModel.family}: ${safe(review.reviewerModel.observed)} | ${review.verdict} | ${review.contracts.join(", ")}`).join("\n");
+  const reviewLines = reviews.map((review) => `- Reviewer ${review.reviewerModel.family}: ${safe(review.reviewerModel.configured)} | ${safe(review.reviewerModel.observed)} | ${review.reviewerModel.family} | ${review.reviewerModel.fallback} | ${review.verdict} | ${review.contracts.join(", ")}`).join("\n");
   const riskReasons = verification.risk.reasons.length > 0 ? verification.risk.reasons.map(safe).join(", ") : "none";
   return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Cross-model review\n- Execution surface: ${verification.executionSurface}\n- Primary configured model: ${safe(verification.primaryModel.configured)}\n- Primary observed model: ${safe(verification.primaryModel.observed)}\n- Primary family: ${verification.primaryModel.family}\n- Primary fallback: ${verification.primaryModel.fallback}\n- Risk: ${verification.risk.level}\n- Risk reasons: ${riskReasons}\n- Reviewed SHA: \`${gate.headSha}\`\n${reviewLines}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
 }

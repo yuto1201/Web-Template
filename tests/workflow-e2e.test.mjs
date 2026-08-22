@@ -68,6 +68,7 @@ describe("provider-free Issue workflow simulation", () => {
     expect(prBody).toContain("Risk: high");
     expect(prBody).toContain("Reviewer anthropic:");
     expect(prBody).toContain("Reviewer openai:");
+    expect(prBody).toContain("claude-opus-5[effort=high] | claude-opus-5 | anthropic | false | approved");
     expect(prBody).toContain("## External changes");
     expect(prBody).toContain("Closes \\#999");
     expect(prBody).not.toContain("@reviewers");
@@ -84,7 +85,7 @@ describe("provider-free Issue workflow simulation", () => {
       event: {
         pull_request: {
           body: prBody,
-          head: { sha: result.headSha, repo: { full_name: "yuto1201/Web-Template" } },
+          head: { sha: result.headSha, ref: "cursor/42-workflow-fixture", repo: { full_name: "yuto1201/Web-Template" } },
           base: { sha: "b".repeat(40), repo: { full_name: "yuto1201/Web-Template" } },
           user: { login: "yuto1201", id: 50611866, type: "User" },
         },

@@ -1,4 +1,6 @@
 import { Readable, Writable } from "node:stream";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadExecutionPolicy } from "../tools/execution-policy.mjs";
@@ -140,6 +142,51 @@ describe("Cursor Cloud hook guard", () => {
       file_path: path.join(fixtureRoot, "src", "app.ts"),
       edits: [],
     })).toBe("allow");
+  });
+
+  it("denies symlink aliases to protected, sensitive, and outside paths, including nonexistent descendants", async () => {
+    const container = await mkdtemp(path.join(os.tmpdir(), "cursor-hook-symlink-"));
+    const root = path.join(container, "repository");
+    const outside = path.join(container, "outside");
+    try {
+      await mkdir(path.join(root, "src"), { recursive: true });
+      await mkdir(path.join(root, "ordinary"), { recursive: true });
+      await mkdir(path.join(root, ".cursor"), { recursive: true });
+      await mkdir(outside, { recursive: true });
+      await writeFile(path.join(root, ".cursor", "hooks.json"), "{}\n", "utf8");
+      await writeFile(path.join(outside, "secret.txt"), "secret\n", "utf8");
+      await symlink(path.join(root, ".cursor"), path.join(root, "src", "policy-alias"), process.platform === "win32" ? "junction" : "dir");
+      await symlink(outside, path.join(root, "src", "outside-alias"), process.platform === "win32" ? "junction" : "dir");
+      await symlink(path.join(root, "ordinary"), path.join(root, "src", "ordinary-alias"), process.platform === "win32" ? "junction" : "dir");
+      const realContext = { root, executionPolicy };
+
+      expect(decision({
+        hook_event_name: "preToolUse",
+        tool_name: "Write",
+        tool_input: { path: path.join(root, "src", "policy-alias", "hooks.json") },
+      }, realContext)).toBe("deny");
+      expect(decision({
+        hook_event_name: "preToolUse",
+        tool_name: "Read",
+        tool_input: { path: path.join(root, "src", "outside-alias", "secret.txt") },
+      }, realContext)).toBe("deny");
+      expect(decision({
+        hook_event_name: "preToolUse",
+        tool_name: "Write",
+        tool_input: { path: path.join(root, "src", "outside-alias", "future", "file.ts") },
+      }, realContext)).toBe("deny");
+      expect(decision({
+        hook_event_name: "afterFileEdit",
+        file_path: path.join(root, "src", "policy-alias", "hooks.json"),
+      }, realContext)).toBe("deny");
+      expect(decision({
+        hook_event_name: "preToolUse",
+        tool_name: "Write",
+        tool_input: { path: path.join(root, "src", "ordinary-alias", "file.ts") },
+      }, realContext)).toBe("deny");
+    } finally {
+      await rm(container, { recursive: true, force: true });
+    }
   });
 
   it.each([

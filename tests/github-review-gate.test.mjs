@@ -37,12 +37,12 @@ function reviewBody(override = {}) {
     riskReasons: "none",
     sha: headSha,
     reviewers: [
-      { family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator" },
+      { family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
     ],
     ...override,
   };
-  const reviews = values.reviewers.map(({ family, observed, verdict, contracts }) =>
-    `- Reviewer ${family}: ${observed} | ${verdict} | ${contracts}`).join("\n");
+  const reviews = values.reviewers.map(({ family, configured, observed, fallback, verdict, contracts }) =>
+    `- Reviewer ${family}: ${configured} | ${observed} | ${family} | ${fallback} | ${verdict} | ${contracts}`).join("\n");
   return `Closes #29\n\n## Cross-model review\n- Execution surface: ${values.executionSurface}\n- Primary configured model: ${values.primaryConfigured}\n- Primary observed model: ${values.primaryObserved}\n- Primary family: ${values.primaryFamily}\n- Primary fallback: ${values.primaryFallback}\n- Risk: ${values.risk}\n- Risk reasons: ${values.riskReasons}\n- Reviewed SHA: \`${values.sha}\`\n${reviews}\n\n## Remaining work\n- None.\n`;
 }
 
@@ -51,8 +51,8 @@ function highRiskBody(override = {}) {
     risk: "high",
     riskReasons: "path:.cursor/",
     reviewers: [
-      { family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator" },
-      { family: "openai", observed: "gpt-5.6-sol", verdict: "approved", contracts: "change-evaluator" },
+      { family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
+      { family: "openai", configured: "gpt-5.6-sol[effort=high]", observed: "gpt-5.6-sol", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
     ],
     ...override,
   });
@@ -62,7 +62,7 @@ function event(body = reviewBody()) {
   return {
     pull_request: {
       body,
-      head: { sha: headSha, ref: "codex/22-exact-head-review", repo: { full_name: "yuto1201/Web-Template" } },
+      head: { sha: headSha, ref: "cursor/29-exact-head-review", repo: { full_name: "yuto1201/Web-Template" } },
       base: { sha: "b".repeat(40), repo: { full_name: "yuto1201/Web-Template" } },
       user: { login: "yuto1201", id: 50611866, type: "User" },
     },
@@ -81,6 +81,7 @@ const actionDiff = `diff --git a/.github/workflows/ci.yml b/.github/workflows/ci
 describe("GitHub exact-Head review gate", () => {
   it("parses strict visible version 2 review evidence", () => {
     expect(parseReviewBody(highRiskBody())).toEqual({
+      issue: 29,
       executionSurface: "cursor-cloud",
       primaryModel: {
         configured: "composer-2.5",
@@ -90,8 +91,8 @@ describe("GitHub exact-Head review gate", () => {
       },
       risk: { level: "high", reasons: ["path:.cursor/"] },
       reviews: [
-        { family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: ["change-evaluator"] },
-        { family: "openai", observed: "gpt-5.6-sol", verdict: "approved", contracts: ["change-evaluator"] },
+        { family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: false, verdict: "approved", contracts: ["change-evaluator"] },
+        { family: "openai", configured: "gpt-5.6-sol[effort=high]", observed: "gpt-5.6-sol", fallback: false, verdict: "approved", contracts: ["change-evaluator"] },
       ],
       reviewedSha: headSha,
       contracts: ["change-evaluator"],
@@ -112,12 +113,27 @@ describe("GitHub exact-Head review gate", () => {
       risk: "high",
     });
     expect(evaluateGitHubReviewGate({
-      event: event(reviewBody({ reviewers: [{ family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator, supabase-auditor" }] })),
+      event: event(reviewBody({ reviewers: [{ family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator, supabase-auditor" }] })),
       changedPaths: ["README.md"],
       diff: "",
       workflow,
       executionPolicy,
     })).toMatchObject({ ok: true, risk: "normal" });
+
+    const bootstrap = event(highRiskBody({
+      executionSurface: "codex-local",
+      primaryConfigured: "gpt-5.6-sol",
+      primaryObserved: "gpt-5.6-sol",
+      primaryFamily: "openai",
+    }));
+    bootstrap.pull_request.head.ref = "codex/29-cursor-cloud-mode";
+    expect(evaluateGitHubReviewGate({
+      event: bootstrap,
+      changedPaths: [".cursor/hooks.json"],
+      diff: "",
+      workflow,
+      executionPolicy,
+    })).toMatchObject({ ok: true, risk: "high", reviewers: ["anthropic", "openai"] });
   });
 
   it("requires high-risk dual-family evidence for canonical authority documentation", () => {
@@ -146,6 +162,9 @@ describe("GitHub exact-Head review gate", () => {
     expect(() => parseReviewBody(`${reviewBody()}\n## Cross-model review\n`)).toThrow(/exactly once/u);
     expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "```text\n## Cross-model review\n```"))).toThrow(/fenced/u);
     expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<!--\n## Cross-model review\n-->"))).toThrow(/HTML comment/u);
+    expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<details>\n## Cross-model review").replace("## Remaining work", "</details>\n\n## Remaining work"))).toThrow(/raw HTML/u);
+    expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<div>\n## Cross-model review").replace("## Remaining work", "</div>\n\n## Remaining work"))).toThrow(/raw HTML/u);
+    expect(() => parseReviewBody(reviewBody().replace("- Risk:", "<div>\n- Risk:").replace("## Remaining work", "</div>\n\n## Remaining work"))).toThrow(/raw HTML/u);
     expect(() => parseReviewBody(reviewBody().replace("- Risk:", "- Unsupported label: no\n- Risk:"))).toThrow(/unknown review field/u);
     expect(() => parseReviewBody(reviewBody().replace("change-evaluator", "change-evaluator,, supabase-auditor"))).toThrow(/canonical comma-separated/u);
     expect(() => parseReviewBody(reviewBody().replace("- Reviewer anthropic:", "- Reviewer anthropic:\n- Injected:"))).toThrow(/newline|unknown review field/u);
@@ -155,26 +174,35 @@ describe("GitHub exact-Head review gate", () => {
   it("rejects invalid family, fallback, verdict, contract, and path-derived risk evidence", () => {
     /** @param {string} body @param {string[]} [changedPaths] */
     const evaluate = (body, changedPaths = ["README.md"]) => evaluateGitHubReviewGate({ event: event(body), changedPaths, diff: "", workflow, executionPolicy });
-    expect(() => evaluate(reviewBody({ reviewers: [{ family: "cursor", observed: "composer-2.5", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/different from the primary/u);
-    expect(() => evaluate(reviewBody({ reviewers: [{ family: "unknown", observed: "future-model", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/unknown reviewer model family/u);
-    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", observed: "gpt-5.6-sol", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/mismatched reviewer model family/u);
+    expect(() => evaluate(reviewBody({ reviewers: [{ family: "cursor", configured: "composer-2.5", observed: "composer-2.5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/different from the primary/u);
+    expect(() => evaluate(reviewBody({ reviewers: [{ family: "unknown", configured: "future-model", observed: "future-model", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/unknown reviewer model family/u);
+    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", configured: "gpt-5.6-sol[effort=high]", observed: "gpt-5.6-sol", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/mismatched reviewer model family/u);
+    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-sonnet-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/fallback/u);
+    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", configured: "claude-sonnet-5", observed: "claude-sonnet-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/configured reviewer model/u);
     expect(() => evaluate(reviewBody({ primaryFallback: "true" }))).toThrow(/fallback/u);
-    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", observed: "claude-opus-5", verdict: "changes-requested", contracts: "change-evaluator" }] }))).toThrow(/approved/u);
-    expect(() => evaluate(highRiskBody({ reviewers: [{ family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator" }] }), [".cursor/hooks.json"])).toThrow(/openai/u);
+    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "changes-requested", contracts: "change-evaluator" }] }))).toThrow(/approved/u);
+    expect(() => evaluate(highRiskBody({ reviewers: [{ family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }), [".cursor/hooks.json"])).toThrow(/openai/u);
     expect(() => evaluate(highRiskBody({ reviewers: [
-      { family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator" },
-      { family: "anthropic", observed: "claude-sonnet-5", verdict: "approved", contracts: "change-evaluator" },
+      { family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
+      { family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
     ] }), [".cursor/hooks.json"])).toThrow(/unique/u);
     expect(() => evaluate(highRiskBody({
       riskReasons: "path:supabase/",
       reviewers: [
-        { family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator" },
-        { family: "openai", observed: "gpt-5.6-sol", verdict: "approved", contracts: "change-evaluator" },
+        { family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
+        { family: "openai", configured: "gpt-5.6-sol[effort=high]", observed: "gpt-5.6-sol", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
       ],
     }), ["supabase/migrations/001.sql"])).toThrow(/supabase-auditor/u);
     expect(() => evaluate(reviewBody(), [".cursor/hooks.json"])).toThrow(/Risk claim/u);
     expect(() => evaluate(highRiskBody({ riskReasons: "operation:not-real" }))).toThrow(/unknown operation risk reason/u);
-    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator, fictional-auditor" }] }))).toThrow(/unknown review contract/u);
+    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator, fictional-auditor" }] }))).toThrow(/unknown review contract/u);
+
+    const wrongSurface = event(reviewBody());
+    wrongSurface.pull_request.head.ref = "codex/29-exact-head-review";
+    expect(() => evaluateGitHubReviewGate({ event: wrongSurface, changedPaths: ["README.md"], diff: "", workflow, executionPolicy })).toThrow(/surface/u);
+    const wrongIssue = event(reviewBody());
+    wrongIssue.pull_request.head.ref = "cursor/30-exact-head-review";
+    expect(() => evaluateGitHubReviewGate({ event: wrongIssue, changedPaths: ["README.md"], diff: "", workflow, executionPolicy })).toThrow(/issue 29/u);
 
     const fork = event(reviewBody());
     fork.pull_request.head.repo.full_name = "attacker/Web-Template";
@@ -252,7 +280,7 @@ describe("GitHub exact-Head review gate", () => {
       const configRoot = path.join(root, "config");
       await mkdir(configRoot, { recursive: true });
       const workflowPath = path.join(configRoot, "workflow.json");
-      await writeFile(eventPath, `${JSON.stringify({ pull_request: { ...event(reviewBody({ sha: featureSha })).pull_request, base: { sha: baseSha, repo: { full_name: "yuto1201/Web-Template" } }, head: { sha: featureSha, ref: "feature", repo: { full_name: "yuto1201/Web-Template" } } } })}\n`, "utf8");
+      await writeFile(eventPath, `${JSON.stringify({ pull_request: { ...event(reviewBody({ sha: featureSha, executionSurface: "codex-local", primaryConfigured: "gpt-5.6-sol", primaryObserved: "gpt-5.6-sol", primaryFamily: "openai", reviewers: [{ family: "anthropic", configured: "claude-opus-5", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] })).pull_request, base: { sha: baseSha, repo: { full_name: "yuto1201/Web-Template" } }, head: { sha: featureSha, ref: "codex/29-feature", repo: { full_name: "yuto1201/Web-Template" } } } })}\n`, "utf8");
       await writeFile(workflowPath, `${JSON.stringify(workflow)}\n`, "utf8");
       await writeFile(path.join(configRoot, "execution.json"), `${JSON.stringify(executionPolicy)}\n`, "utf8");
       const output = execFileSync(process.execPath, [path.resolve("tools/github-review-gate.mjs"), "--event", eventPath, "--repository", root, "--workflow", workflowPath, "--base", baseSha, "--head", featureSha], { encoding: "utf8" });
