@@ -15,6 +15,16 @@ import {
 
 const headSha = "2".repeat(40);
 const contractDigest = `sha256:${"3".repeat(64)}`;
+
+/** @typedef {import("zod").infer<typeof schemas.modelIdentitySchema>} ModelIdentity */
+
+/**
+ * @param {string} configured
+ * @param {string} observed
+ * @param {ModelIdentity["family"]} family
+ * @param {boolean} [fallback]
+ * @returns {ModelIdentity}
+ */
 const model = (configured, observed, family, fallback = false) => ({
   configured,
   observed,

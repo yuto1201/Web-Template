@@ -13,6 +13,22 @@ const defaultRoot = path.resolve(path.dirname(modulePath), "..");
  * @property {string} contract
  */
 
+/** @typedef {"openai" | "anthropic"} CursorFamily */
+
+/**
+ * @typedef AgentsConfig
+ * @property {number} schemaVersion
+ * @property {AgentConfig[]} agents
+ * @property {string} reviewContract
+ * @property {{ families: CursorFamily[], roles: CursorRoleConfig[] }} cursor
+ */
+
+/**
+ * @typedef ExecutionConfig
+ * @property {{ openai: string, anthropic: string }} cursorModels
+ * @property {{ openai: string[], anthropic: string[] }} modelFamilies
+ */
+
 /**
  * @typedef CursorRoleConfig
  * @property {string} slug
@@ -152,13 +168,14 @@ async function readContainedContract(root, contract) {
 function validateModelSelector(value, family, modelFamilies) {
   const model = requireYamlScalar(value, `Cursor model selector for ${family}`);
   const match = /^(?<model>[a-z0-9][a-z0-9.-]*)\[effort=(?:low|medium|high|xhigh)\]$/u.exec(model);
-  if (!match?.groups?.model || !Array.isArray(modelFamilies)) {
+  const selectedModel = match?.groups?.model;
+  if (!selectedModel || !Array.isArray(modelFamilies)) {
     throw new Error(`Invalid Cursor model selector for ${family}: ${model}.`);
   }
   const supported = modelFamilies.some((source) => {
     if (typeof source !== "string") return false;
     try {
-      return new RegExp(source, "u").test(match.groups.model);
+      return new RegExp(source, "u").test(selectedModel);
     } catch {
       return false;
     }
@@ -171,7 +188,7 @@ function validateModelSelector(value, family, modelFamilies) {
 
 export async function buildGeneratedAssets(root = defaultRoot) {
   const configPath = path.join(root, "config", "agents.json");
-  const config = /** @type {{ schemaVersion: number, agents: AgentConfig[], reviewContract: string }} */ (
+  const config = /** @type {AgentsConfig} */ (
     JSON.parse(await readFile(configPath, "utf8"))
   );
   if (config.schemaVersion !== 2 || config.reviewContract !== "config/review-contract.schema.json") {
@@ -207,7 +224,9 @@ export async function buildGeneratedAssets(root = defaultRoot) {
   if (!cursor || !Array.isArray(cursor.families) || !Array.isArray(cursor.roles)) {
     throw new Error("config/agents.json must declare Cursor families and roles.");
   }
-  const execution = JSON.parse(await readFile(path.join(root, "config", "execution.json"), "utf8"));
+  const execution = /** @type {ExecutionConfig} */ (
+    JSON.parse(await readFile(path.join(root, "config", "execution.json"), "utf8"))
+  );
   const cursorModels = execution.cursorModels;
   const modelFamilies = execution.modelFamilies;
   if (!cursorModels || typeof cursorModels !== "object" || !modelFamilies || typeof modelFamilies !== "object") {
@@ -244,7 +263,7 @@ export async function buildGeneratedAssets(root = defaultRoot) {
     const description = requireYamlScalar(cursorRole.description, `Cursor description for ${role}`);
     const use = requireYamlScalar(cursorRole.use, `Cursor usage for ${role}`);
     const { contract } = await readContainedContract(root, cursorRole.contract);
-    for (const family of families) {
+    for (const family of cursor.families) {
       const model = validateModelSelector(cursorModels[family], family, modelFamilies[family]);
       const relativePath = path.join(".cursor", "agents", `${role}-${family}.md`);
       if (generatedPaths.has(relativePath) || assets.has(relativePath)) {

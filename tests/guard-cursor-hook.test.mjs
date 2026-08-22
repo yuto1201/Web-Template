@@ -9,6 +9,7 @@ const fixtureRoot = path.join(path.parse(repositoryRoot).root, "workspace", "web
 const executionPolicy = await loadExecutionPolicy(repositoryRoot);
 const context = { root: fixtureRoot, executionPolicy };
 
+/** @param {unknown} input @param {{ root: string, executionPolicy: unknown }} [evaluationContext] */
 function decision(input, evaluationContext = context) {
   return evaluateCursorHook(input, evaluationContext).permission;
 }

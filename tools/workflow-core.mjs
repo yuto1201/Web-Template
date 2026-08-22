@@ -622,7 +622,10 @@ export function validateReviewAgainstPacket(reviewValue, packetValue, root, cont
   if (review.executionSurface !== packet.executionSurface) throw new Error("Review executionSurface does not match the packet.");
   if (canonicalJson(review.primaryModel) !== canonicalJson(packet.primaryModel)) throw new Error("Review primaryModel does not match the packet.");
   if (canonicalJson(review.risk) !== canonicalJson(packet.risk)) throw new Error("Review risk does not match the packet.");
-  if (!packet.requiredReviewerFamilies.includes(review.reviewerModel.family)) {
+  if (
+    review.reviewerModel.family === "unknown" ||
+    !packet.requiredReviewerFamilies.includes(review.reviewerModel.family)
+  ) {
     throw new Error(`Review family ${review.reviewerModel.family} is not required by the packet.`);
   }
   if (review.headSha !== packet.headSha) throw new Error("Review headSha does not match the packet.");
@@ -793,7 +796,7 @@ export async function prepareReviewArtifacts(root, value) {
     .filter(Boolean)
     .map((candidate) => relativeFileSchema.parse(candidate));
   if (changedPaths.length === 0) throw new Error("Review preparation requires at least one committed changed path.");
-  const risk = classifyRisk({ changedPaths, externalOperations: contract.externalOperations }, executionPolicy);
+  const risk = riskSchema.parse(classifyRisk({ changedPaths, externalOperations: contract.externalOperations }, executionPolicy));
   const reviewerFamilies = requiredReviewerFamilies({ risk: risk.level, primaryFamily: evidence.primaryModel.family });
   const verification = validateVerification({
     schemaVersion: evidence.schemaVersion,

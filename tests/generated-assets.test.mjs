@@ -7,6 +7,16 @@ import { reviewResultKeys } from "../tools/workflow-core.mjs";
 
 const root = path.resolve(".");
 
+/** @typedef {{ slug: string, description: string, color: string, contract: string }} AgentConfig */
+/** @typedef {{ slug: string, description: string, use: string, contract: string }} CursorRoleConfig */
+/**
+ * @typedef AgentsConfig
+ * @property {number} schemaVersion
+ * @property {string} reviewContract
+ * @property {AgentConfig[]} agents
+ * @property {{ families: string[], roles: CursorRoleConfig[] }} cursor
+ */
+
 const cursorRoles = [
   { role: "change-evaluator", contract: "docs/agent-contracts/change-evaluator.md", strictResult: true },
   { role: "supabase-auditor", contract: "docs/agent-contracts/supabase-auditor.md", strictResult: true },
@@ -27,12 +37,16 @@ const cursorAgentPaths = [
   ".cursor/agents/supabase-auditor-openai.md",
 ];
 
+/** @type {string[]} */
 const fixtureRoots = [];
 
+/** @param {(config: AgentsConfig) => void} [mutateConfig] */
 async function createGeneratorFixture(mutateConfig = () => {}) {
   const fixtureRoot = await mkdtemp(path.join(tmpdir(), "web-template-agent-assets-"));
   fixtureRoots.push(fixtureRoot);
-  const config = JSON.parse(await readFile(path.join(root, "config", "agents.json"), "utf8"));
+  const config = /** @type {AgentsConfig} */ (
+    JSON.parse(await readFile(path.join(root, "config", "agents.json"), "utf8"))
+  );
   mutateConfig(config);
   const files = [
     "config/execution.json",
@@ -55,6 +69,7 @@ afterEach(async () => {
   await Promise.all(fixtureRoots.splice(0).map((fixtureRoot) => rm(fixtureRoot, { force: true, recursive: true })));
 });
 
+/** @param {string} content @returns {string} */
 function cursorAgentBody(content) {
   return content.slice(content.indexOf("\n---\n") + "\n---\n".length);
 }
@@ -154,7 +169,11 @@ describe("generated agent assets", () => {
     try {
       await symlink(outsideContract, escapedContract, "file");
     } catch (error) {
-      if (process.platform === "win32" && ["EACCES", "ENOSYS", "EPERM"].includes(error?.code)) {
+      if (
+        process.platform === "win32" &&
+        error && typeof error === "object" && "code" in error &&
+        typeof error.code === "string" && ["EACCES", "ENOSYS", "EPERM"].includes(error.code)
+      ) {
         context.skip("This Windows environment cannot create a file symlink.");
         return;
       }
@@ -185,7 +204,11 @@ describe("generated agent assets", () => {
     try {
       await symlink(outsideRoot, docsDirectory, "dir");
     } catch (error) {
-      if (process.platform === "win32" && ["EACCES", "ENOSYS", "EPERM"].includes(error?.code)) {
+      if (
+        process.platform === "win32" &&
+        error && typeof error === "object" && "code" in error &&
+        typeof error.code === "string" && ["EACCES", "ENOSYS", "EPERM"].includes(error.code)
+      ) {
         context.skip("This Windows environment cannot create a directory symlink.");
         return;
       }

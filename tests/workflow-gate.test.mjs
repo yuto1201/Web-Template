@@ -11,11 +11,36 @@ import {
   resolveInside,
   runAuthoritativePremergeGate,
   runPremergeGate,
+  schemas,
   simulateWorkflowFixture,
   snapshotIssueContract,
 } from "../tools/workflow-core.mjs";
 
 const fixturePath = path.resolve("tests/fixtures/workflow/happy-path.json");
+
+/** @typedef {import("zod").infer<typeof schemas.modelIdentitySchema>} ModelIdentity */
+/** @typedef {import("zod").infer<typeof schemas.riskSchema>} Risk */
+/** @typedef {import("zod").infer<typeof schemas.issueContractSchema>} IssueContract */
+/** @typedef {import("zod").infer<typeof schemas.verificationSchema>} Verification */
+/** @typedef {import("zod").infer<typeof schemas.reviewPacketSchema>} ReviewPacket */
+/** @typedef {import("zod").infer<typeof schemas.reviewResultSchema>} ReviewResult */
+/**
+ * @typedef GateBundle
+ * @property {string} currentHeadSha
+ * @property {IssueContract} contract
+ * @property {Verification} verification
+ * @property {ReviewPacket} packet
+ * @property {ReviewResult[]} reviews
+ * @property {string} root
+ */
+
+/**
+ * @param {string} configured
+ * @param {string} observed
+ * @param {ModelIdentity["family"]} family
+ * @param {boolean} [fallback]
+ * @returns {ModelIdentity}
+ */
 const model = (configured, observed, family, fallback = false) => ({
   configured,
   observed,
@@ -24,15 +49,21 @@ const model = (configured, observed, family, fallback = false) => ({
   parameters: [],
 });
 
-/** @param {string} filePath */
+/** @param {string} filePath @returns {Promise<unknown>} */
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
+}
+
+/** @param {unknown} value @returns {value is { inputs: object }} */
+function hasObjectInputs(value) {
+  if (!value || typeof value !== "object" || !("inputs" in value)) return false;
+  return Boolean(value.inputs) && typeof value.inputs === "object" && !Array.isArray(value.inputs);
 }
 
 describe("current-Head pre-merge gate", () => {
   /** @type {string} */
   let root;
-  /** @type {any} */
+  /** @type {GateBundle} */
   let bundle;
 
   beforeEach(async () => {
@@ -41,10 +72,12 @@ describe("current-Head pre-merge gate", () => {
     const result = await simulateWorkflowFixture(fixture, root);
     bundle = {
       currentHeadSha: result.headSha,
-      contract: await readJson(path.join(root, result.paths.contract)),
-      verification: await readJson(path.join(root, result.paths.verification)),
-      packet: await readJson(path.join(root, result.paths.packet)),
-      reviews: await Promise.all(result.paths.reviews.map((reviewPath) => readJson(path.join(root, reviewPath)))),
+      contract: schemas.issueContractSchema.parse(await readJson(path.join(root, result.paths.contract))),
+      verification: schemas.verificationSchema.parse(await readJson(path.join(root, result.paths.verification))),
+      packet: schemas.reviewPacketSchema.parse(await readJson(path.join(root, result.paths.packet))),
+      reviews: await Promise.all(result.paths.reviews.map(async (reviewPath) => (
+        schemas.reviewResultSchema.parse(await readJson(path.join(root, reviewPath)))
+      ))),
       root,
     };
   });
@@ -101,15 +134,18 @@ describe("current-Head pre-merge gate", () => {
   });
 
   it("preserves local Codex and Claude review-family decisions in version 2 evidence", () => {
-    for (const [executionSurface, primaryModel, reviewerModel] of [
+    /** @type {Array<["codex-local" | "claude-local", ModelIdentity, ModelIdentity]>} */
+    const cases = [
       ["codex-local", model("gpt-5.6-sol", "gpt-5.6-sol", "openai"), model("claude-opus-5", "claude-opus-5", "anthropic")],
       ["claude-local", model("claude-opus-5", "claude-opus-5", "anthropic"), model("gpt-5.6-sol", "gpt-5.6-sol", "openai")],
-    ]) {
+    ];
+    for (const [executionSurface, primaryModel, reviewerModel] of cases) {
       const contract = {
         ...bundle.contract,
         externalOperations: [],
       };
       contract.digest = digestValue(contract);
+      /** @type {Risk} */
       const risk = { level: "normal", reasons: [] };
       const packet = {
         ...bundle.packet,
@@ -177,6 +213,7 @@ describe("current-Head pre-merge gate", () => {
   it("rejects a gated external merge request with a different Head", async () => {
     const requestPath = path.join(root, `.artifacts/ops-requests/issue-42-github-merge-pr-1.json`);
     const request = await readJson(requestPath);
+    if (!hasObjectInputs(request)) throw new Error("Workflow fixture merge request is invalid.");
     await writeFile(requestPath, `${JSON.stringify({ ...request, inputs: { ...request.inputs, headSha: "9".repeat(40) } }, null, 2)}\n`, "utf8");
     await expect(readExternalOperationRequest(root, ".artifacts/ops-requests/issue-42-github-merge-pr-1.json"))
       .rejects.toThrow(/authoritative review gate/u);

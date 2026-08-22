@@ -139,6 +139,7 @@ describe("GitHub exact-Head review gate", () => {
   });
 
   it("rejects stale, duplicate, hidden, unknown, ambiguous, and injected claims", () => {
+    /** @param {string} body */
     const input = (body) => ({ event: event(body), changedPaths: ["README.md"], diff: "", workflow, executionPolicy });
     expect(() => evaluateGitHubReviewGate(input(reviewBody({ sha: "9".repeat(40) })))).toThrow(/current Head/u);
     expect(() => parseReviewBody(`${reviewBody()}- Reviewed SHA: \`${headSha}\`\n`)).toThrow(/exactly once/u);
@@ -152,6 +153,7 @@ describe("GitHub exact-Head review gate", () => {
   });
 
   it("rejects invalid family, fallback, verdict, contract, and path-derived risk evidence", () => {
+    /** @param {string} body @param {string[]} [changedPaths] */
     const evaluate = (body, changedPaths = ["README.md"]) => evaluateGitHubReviewGate({ event: event(body), changedPaths, diff: "", workflow, executionPolicy });
     expect(() => evaluate(reviewBody({ reviewers: [{ family: "cursor", observed: "composer-2.5", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/different from the primary/u);
     expect(() => evaluate(reviewBody({ reviewers: [{ family: "unknown", observed: "future-model", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/unknown reviewer model family/u);

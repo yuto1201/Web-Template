@@ -16,7 +16,43 @@ const expectedNpmVersion = "11.6.2";
 const activationMaximumAgeMilliseconds = 24 * 60 * 60 * 1_000;
 const activationMaximumFutureMilliseconds = 5 * 60 * 1_000;
 
+/**
+ * @typedef CursorRepositorySnapshot
+ * @property {unknown} [policyErrors]
+ * @property {unknown} [nodeVersion]
+ * @property {unknown} [nvmVersion]
+ * @property {unknown} [packageNodeVersion]
+ * @property {unknown} [packageNpmVersion]
+ * @property {unknown} [packageManager]
+ * @property {unknown} [branch]
+ * @property {unknown} [headSha]
+ * @property {unknown} [environment]
+ * @property {unknown} [dockerfile]
+ */
+/**
+ * @typedef CursorRuntimeSnapshot
+ * @property {unknown} [node]
+ * @property {unknown} [npm]
+ * @property {unknown} [docker]
+ * @property {unknown} [chromium]
+ */
+/**
+ * @typedef CursorOwnership
+ * @property {{ owner?: string | null, repository?: string | null }} [github]
+ * @property {{ organizationName?: string | null, projectRef?: string | null }} [supabase]
+ * @property {{ scope?: string | null, projectId?: string | null }} [vercel]
+ * @property {{ accountId?: string | null, accountName?: string | null, zoneId?: string | null, domains?: string[] }} [cloudflare]
+ */
+/**
+ * @typedef CursorCloudSnapshot
+ * @property {CursorRepositorySnapshot} [repository]
+ * @property {CursorRuntimeSnapshot} [runtime]
+ * @property {CursorOwnership} [ownership]
+ * @property {unknown} [executionPolicy]
+ */
+
 class SafeCliError extends Error {
+  /** @param {string} message */
   constructor(message) {
     super(message);
     this.name = "SafeCliError";
@@ -48,6 +84,7 @@ const buildSchema = z.strictObject({
   docker: z.literal(true),
   chromium: z.literal(true),
 });
+/** @param {RegExp} modelPattern */
 const reviewerProbeSchema = (modelPattern) => z.strictObject({
   observed: z.string().regex(modelPattern),
   repositoryReadProbe: z.literal("passed"),
@@ -115,7 +152,7 @@ const activationSchema = z.strictObject({
   verifiedAt: z.string().refine(isRfc3339Timestamp),
 });
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {boolean} */
 function hasSecretShape(value) {
   if (Array.isArray(value)) return value.some(hasSecretShape);
   if (!value || typeof value !== "object") {
@@ -129,15 +166,20 @@ function hasSecretShape(value) {
 
 /** @param {unknown} executionPolicy */
 function trustedReviewerModels(executionPolicy) {
-  const cursorModels = executionPolicy && typeof executionPolicy === "object" && "cursorModels" in executionPolicy &&
-    executionPolicy.cursorModels && typeof executionPolicy.cursorModels === "object"
-    ? executionPolicy.cursorModels
-    : null;
-  const openai = typeof cursorModels?.openai === "string"
-    ? /^(gpt-5\.6-(?:sol|terra|luna))\[[^\[\]]+\]$/u.exec(cursorModels.openai)?.[1]
+  if (!executionPolicy || typeof executionPolicy !== "object" || !("cursorModels" in executionPolicy)) {
+    throw new ActivationEvidenceError("Trusted reviewer model selectors are unavailable.", "blocked:review");
+  }
+  const cursorModels = executionPolicy.cursorModels;
+  if (!cursorModels || typeof cursorModels !== "object") {
+    throw new ActivationEvidenceError("Trusted reviewer model selectors are unavailable.", "blocked:review");
+  }
+  const openaiSelector = "openai" in cursorModels ? cursorModels.openai : undefined;
+  const anthropicSelector = "anthropic" in cursorModels ? cursorModels.anthropic : undefined;
+  const openai = typeof openaiSelector === "string"
+    ? /^(gpt-5\.6-(?:sol|terra|luna))\[[^\[\]]+\]$/u.exec(openaiSelector)?.[1]
     : undefined;
-  const anthropic = typeof cursorModels?.anthropic === "string"
-    ? /^(claude-(?:opus|sonnet|fable)-5)\[[^\[\]]+\]$/u.exec(cursorModels.anthropic)?.[1]
+  const anthropic = typeof anthropicSelector === "string"
+    ? /^(claude-(?:opus|sonnet|fable)-5)\[[^\[\]]+\]$/u.exec(anthropicSelector)?.[1]
     : undefined;
   if (!openai || !anthropic) {
     throw new ActivationEvidenceError("Trusted reviewer model selectors are unavailable.", "blocked:review");
@@ -312,24 +354,27 @@ export async function collectCursorCloudSnapshot(root = defaultRoot) {
   };
 }
 
-/** @param {string} id @param {boolean} passed */
+/** @param {string} id @param {boolean} passed @returns {{ id: string, status: "pass" | "fail" }} */
 function check(id, passed) {
   return { id, status: passed ? "pass" : "fail" };
 }
 
-/** @param {string[]} blockers @param {string} blocker @param {boolean} passed */
+/** @param {string[]} blockers @param {string} blocker @param {boolean} passed @returns {boolean} */
 function gate(blockers, blocker, passed) {
   if (!passed) blockers.push(blocker);
   return passed;
 }
 
 /**
- * @param {Awaited<ReturnType<typeof collectCursorCloudSnapshot>> | Record<string, any>} snapshot
+ * @param {CursorCloudSnapshot} snapshot
  * @param {{ build?: boolean, activation?: unknown, referenceTime?: Date | string | number }} [options]
  */
 export function evaluateCursorCloud(snapshot, options = {}) {
+  /** @type {string[]} */
   const blockers = [];
+  /** @type {Array<{ id: string, status: "pass" | "fail" }>} */
   const checks = [];
+  /** @type {string[]} */
   const warnings = [];
   const repository = snapshot.repository ?? {};
   const runtime = snapshot.runtime ?? {};
@@ -437,6 +482,7 @@ export function evaluateCursorCloud(snapshot, options = {}) {
     const expectedCloudflareAccountName = snapshot.ownership?.cloudflare?.accountName;
     const expectedCloudflareZoneId = snapshot.ownership?.cloudflare?.zoneId;
     const expectedCloudflareDomains = snapshot.ownership?.cloudflare?.domains;
+    /** @type {Array<[string, string, boolean]>} */
     const ownershipChecks = [
       ["github-owner", "github-owner-mismatch", activation.providers.github.owner === snapshot.ownership?.github?.owner],
       ["github-target", "github-target-mismatch", activation.providers.github.fullName === expectedGitHub && activation.repository.fullName === expectedGitHub],
@@ -490,14 +536,16 @@ export function evaluateCursorCloud(snapshot, options = {}) {
   };
 }
 
-/** @param {ReturnType<typeof evaluateCursorCloud>} report @param {Record<string, any>} ownership @param {boolean} [activation] */
+/** @param {ReturnType<typeof evaluateCursorCloud>} report @param {CursorOwnership} ownership @param {boolean} [activation] */
 export function formatCursorCloudReport(report, ownership, activation = false) {
   const lines = ["Cursor Cloud doctor", `Status: ${report.status}`];
   for (const entry of report.checks) lines.push(`[${entry.status.toUpperCase()}] ${entry.id}`);
   if (report.blockers.length > 0) lines.push(`Blockers: ${report.blockers.join(", ")}`);
   if (report.warnings.length > 0) lines.push(`Warnings: ${report.warnings.join(", ")}`);
   if (activation) {
-    const publicIds = [
+    /** @type {string[]} */
+    const publicIds = [];
+    const candidates = [
       ownership.github?.owner,
       ownership.github?.repository,
       ownership.supabase?.projectRef,
@@ -506,7 +554,10 @@ export function formatCursorCloudReport(report, ownership, activation = false) {
       ownership.cloudflare?.accountId,
       ownership.cloudflare?.zoneId,
       ...(ownership.cloudflare?.domains ?? []),
-    ].filter((value) => typeof value === "string" && value.length > 0);
+    ];
+    for (const value of candidates) {
+      if (typeof value === "string" && value.length > 0) publicIds.push(value);
+    }
     lines.push("Public config IDs:", ...publicIds.map((value) => `- ${value}`));
   }
   return `${lines.join("\n")}\n`;

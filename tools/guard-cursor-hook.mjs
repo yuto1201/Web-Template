@@ -95,10 +95,12 @@ const focusedTestSelectors = [
   ["guard-cursor-hook", "repository-policy", "generated-assets"],
 ];
 
+/** @returns {{ permission: "allow" }} */
 function allow() {
   return { permission: "allow" };
 }
 
+/** @returns {{ permission: "deny", user_message: string, agent_message: string }} */
 function deny() {
   return {
     permission: "deny",
@@ -168,8 +170,12 @@ function isProtectedWrite(relative) {
 
 /** @param {Record<string, unknown>} input */
 function candidatePaths(input) {
-  return [input.file_path, input.notebook_path, input.path, input.target_file]
-    .filter((value) => typeof value === "string" && value.length > 0);
+  /** @type {string[]} */
+  const paths = [];
+  for (const value of [input.file_path, input.notebook_path, input.path, input.target_file]) {
+    if (typeof value === "string" && value.length > 0) paths.push(value);
+  }
+  return paths;
 }
 
 /** @param {string} toolName @param {Record<string, unknown>} input @param {string} root @param {boolean} readonly */

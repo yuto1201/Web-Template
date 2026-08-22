@@ -129,7 +129,7 @@ RUN apt-get update \\
     && npm install --global npm@11.6.2 \\
     && rm -rf /var/lib/apt/lists/*`;
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {boolean} */
 function containsSecretShape(value) {
   if (Array.isArray(value)) return value.some(containsSecretShape);
   if (!value || typeof value !== "object") {

@@ -12,9 +12,55 @@ import {
 const modulePath = fileURLToPath(import.meta.url);
 const shaPattern = /^[0-9a-f]{40}$/u;
 
-/** @param {unknown} condition @param {string} message */
+/** @typedef {"openai" | "anthropic" | "cursor" | "xai"} ModelFamily */
+/** @typedef {"normal" | "high"} RiskLevel */
+/** @typedef {Awaited<ReturnType<typeof import("./execution-policy.mjs").loadExecutionPolicy>>} ExecutionPolicy */
+/** @typedef {{ type: string, path: string, contracts: string[] }} PrivilegedPathRule */
+/**
+ * @typedef DependabotPolicy
+ * @property {number} userId
+ * @property {string} login
+ * @property {string} userType
+ * @property {string} headPrefix
+ * @property {string[]} allowedActions
+ * @property {string[]} allowedPathPrefixes
+ */
+/**
+ * @typedef WorkflowPolicy
+ * @property {PrivilegedPathRule[]} [privilegedPathRules]
+ * @property {{ dependabot?: DependabotPolicy }} [githubReviewGate]
+ */
+/**
+ * @typedef GitHubPullRequest
+ * @property {unknown} [body]
+ * @property {{ sha?: unknown, ref?: unknown, repo?: { full_name?: unknown } }} [head]
+ * @property {{ sha?: unknown, repo?: { full_name?: unknown } }} [base]
+ * @property {{ login?: unknown, id?: unknown, type?: unknown }} [user]
+ */
+
+/** @param {unknown} condition @param {string} message @returns {asserts condition} */
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+/** @param {string} value @returns {value is "codex-local" | "claude-local" | "cursor-cloud"} */
+function isExecutionSurface(value) {
+  return value === "codex-local" || value === "claude-local" || value === "cursor-cloud";
+}
+
+/** @param {string} value @returns {value is ModelFamily} */
+function isModelFamily(value) {
+  return value === "openai" || value === "anthropic" || value === "cursor" || value === "xai";
+}
+
+/** @param {string} value @returns {value is RiskLevel} */
+function isRiskLevel(value) {
+  return value === "normal" || value === "high";
+}
+
+/** @param {unknown} value @returns {value is GitHubPullRequest} */
+function isGitHubPullRequest(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 /** @param {string} body @param {string} section @param {string} label */
@@ -94,13 +140,13 @@ export function parseReviewBody(body) {
   const riskReasonsValue = uniqueBodyField(body, section, "Risk reasons");
   const reviewedShaValue = uniqueBodyField(body, section, "Reviewed SHA");
 
-  assert(["codex-local", "claude-local", "cursor-cloud"].includes(executionSurface), "Execution surface is unknown.");
+  assert(isExecutionSurface(executionSurface), "Execution surface is unknown.");
   const modelPattern = /^[a-z0-9][a-z0-9._-]*(?:\[[a-z0-9._=-]+\])?$/u;
   assert(modelPattern.test(primaryConfigured), "Primary configured model must be one canonical model identifier.");
   assert(modelPattern.test(primaryObserved), "Primary observed model must be one canonical model identifier.");
-  assert(["openai", "anthropic", "cursor", "xai"].includes(primaryFamily), "Primary model family is unknown.");
+  assert(isModelFamily(primaryFamily), "Primary model family is unknown.");
   assert(["true", "false"].includes(primaryFallbackValue), "Primary fallback must be true or false.");
-  assert(["normal", "high"].includes(riskLevel), "Risk must be normal or high.");
+  assert(isRiskLevel(riskLevel), "Risk must be normal or high.");
   const riskReasons = riskReasonsValue === "none"
     ? []
     : parseCanonicalList(riskReasonsValue, "Risk reasons", /^(?:path:[A-Za-z0-9._/-]+|operation:[a-z0-9._-]+)$/u);
@@ -117,7 +163,7 @@ export function parseReviewBody(body) {
     const [, family, observedValue, verdictValue, contractsValue] = match;
     const observed = observedValue.trim();
     const verdict = verdictValue.trim();
-    assert(["openai", "anthropic", "cursor", "xai"].includes(family), `unknown reviewer model family ${family}.`);
+    assert(isModelFamily(family), `unknown reviewer model family ${family}.`);
     assert(modelPattern.test(observed), "Reviewer observed model must be one canonical model identifier.");
     assert(verdict === "approved", "Cross-model review verdict must be approved.");
     const contracts = parseCanonicalList(contractsValue, "Review contracts", /^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
@@ -140,7 +186,7 @@ export function parseReviewBody(body) {
   };
 }
 
-/** @param {string[]} changedPaths @param {any} workflow */
+/** @param {string[]} changedPaths @param {WorkflowPolicy} workflow */
 function requiredContracts(changedPaths, workflow) {
   const required = new Set(["change-evaluator"]);
   for (const candidate of changedPaths) {
@@ -155,7 +201,7 @@ function requiredContracts(changedPaths, workflow) {
   return [...required].sort();
 }
 
-/** @param {string} diff @param {any} policy */
+/** @param {string} diff @param {DependabotPolicy} policy */
 function validateDependabotDiff(diff, policy) {
   /** @type {string[]} */
   const removed = [];
@@ -177,11 +223,13 @@ function validateDependabotDiff(diff, policy) {
 }
 
 /**
- * @param {{event: any, changedPaths: string[], diff: string, workflow: any, executionPolicy?: any}} input
+ * @param {{event: unknown, changedPaths: string[], diff: string, workflow: WorkflowPolicy, executionPolicy?: ExecutionPolicy}} input
  */
 export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, executionPolicy }) {
-  const pullRequest = event?.pull_request;
-  assert(pullRequest && typeof pullRequest === "object", "GitHub event must contain a pull_request object.");
+  const pullRequest = event && typeof event === "object" && "pull_request" in event
+    ? event.pull_request
+    : null;
+  assert(isGitHubPullRequest(pullRequest), "GitHub event must contain a pull_request object.");
   const headSha = pullRequest.head?.sha;
   assert(typeof headSha === "string" && shaPattern.test(headSha), "Pull request Head SHA is invalid.");
   assert(Array.isArray(changedPaths) && changedPaths.length > 0, "Pull request must contain at least one changed path.");
@@ -227,7 +275,7 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   assert(!primaryModel.fallback, "Primary model fallback cannot satisfy review policy.");
   for (const review of evidence.reviews) {
     const reviewerModel = normalizeModelIdentity(review.observed, review.observed, [], executionPolicy);
-    assert(reviewerModel.family === review.family && reviewerModel.family !== "unknown", `unknown or mismatched reviewer model family ${review.family}.`);
+    assert(reviewerModel.family === review.family, `unknown or mismatched reviewer model family ${review.family}.`);
   }
   const derivedRisk = classifyRisk({ changedPaths, externalOperations: [] }, executionPolicy);
   if (derivedRisk.level === "high") {

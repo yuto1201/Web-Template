@@ -155,8 +155,17 @@ describe("repository policy", () => {
       "Cursor hook preToolUse must be a finite fail-closed project command.",
     );
 
-    const noTimeout = structuredClone(validHookConfig);
-    delete noTimeout.hooks.beforeShellExecution[0].timeout;
+    const noTimeout = {
+      ...structuredClone(validHookConfig),
+      hooks: {
+        ...structuredClone(validHookConfig.hooks),
+        beforeShellExecution: [{
+          type: "command",
+          command: "node tools/guard-cursor-hook.mjs",
+          failClosed: true,
+        }],
+      },
+    };
     expect(cursorPolicyErrors({ hooksConfig: noTimeout })).toContain(
       "Cursor hook beforeShellExecution must be a finite fail-closed project command.",
     );
@@ -249,8 +258,7 @@ describe("repository policy", () => {
   it("requires the exact Cursor Cloud environment and deterministic doctor script", () => {
     expect(cursorEnvironmentErrors()).toEqual([]);
 
-    const extra = structuredClone(validCursorEnvironment);
-    extra.secrets = {};
+    const extra = { ...structuredClone(validCursorEnvironment), secrets: {} };
     expect(cursorEnvironmentErrors({ environmentConfig: extra })).toContain(
       ".cursor/environment.json must contain only the exact build, install, and start contract.",
     );
@@ -317,8 +325,13 @@ describe("repository policy", () => {
   });
 
   it("rejects secret-shaped Cursor environment JSON even when nested", () => {
-    const withSecret = structuredClone(validCursorEnvironment);
-    withSecret.build.token = ["ghp", "_123456789012345678901234567890"].join("");
+    const withSecret = {
+      ...structuredClone(validCursorEnvironment),
+      build: {
+        ...structuredClone(validCursorEnvironment.build),
+        token: ["ghp", "_123456789012345678901234567890"].join(""),
+      },
+    };
     expect(cursorEnvironmentErrors({ environmentConfig: withSecret })).toContain(
       ".cursor/environment.json must not contain secret-shaped fields or values.",
     );
