@@ -162,4 +162,35 @@ describe("generated agent assets", () => {
     }
     await expect(buildGeneratedAssets(fixtureRoot)).rejects.toThrow("Agent contract must stay inside docs/agent-contracts");
   });
+
+  it("rejects a contract directory whose canonical path escapes the repository root", async (context) => {
+    const fixtureRoot = await createGeneratorFixture();
+    const outsideRoot = await mkdtemp(path.join(tmpdir(), "web-template-outside-contracts-"));
+    fixtureRoots.push(outsideRoot);
+    const outsideContracts = path.join(outsideRoot, "agent-contracts");
+    await mkdir(outsideContracts, { recursive: true });
+    await Promise.all([
+      "change-evaluator.md",
+      "consultant.md",
+      "supabase-auditor.md",
+    ].map(async (filename) => {
+      await writeFile(
+        path.join(outsideContracts, filename),
+        await readFile(path.join(root, "docs", "agent-contracts", filename), "utf8"),
+        "utf8",
+      );
+    }));
+    const docsDirectory = path.join(fixtureRoot, "docs");
+    await rm(docsDirectory, { force: true, recursive: true });
+    try {
+      await symlink(outsideRoot, docsDirectory, "dir");
+    } catch (error) {
+      if (process.platform === "win32" && ["EACCES", "ENOSYS", "EPERM"].includes(error?.code)) {
+        context.skip("This Windows environment cannot create a directory symlink.");
+        return;
+      }
+      throw error;
+    }
+    await expect(buildGeneratedAssets(fixtureRoot)).rejects.toThrow("Agent contract directory must stay inside the repository root.");
+  });
 });
