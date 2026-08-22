@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "fetchedAt": "2026-08-21T01:00:00+09:00",
   "completedAt": "2026-08-21T01:10:00+09:00",
   "reviewedAt": "2026-08-21T01:15:00+09:00",
@@ -18,7 +18,30 @@
     "externalOperations": ["github.merge_pr"]
   },
   "slug": "workflow-fixture",
-  "primaryModel": "codex",
+  "executionSurface": "cursor-cloud",
+  "primaryModel": {
+    "configured": "composer-2.5",
+    "observed": "composer-2.5",
+    "family": "cursor",
+    "fallback": false,
+    "parameters": []
+  },
+  "reviewerModels": [
+    {
+      "configured": "claude-opus-5[effort=high]",
+      "observed": "claude-opus-5",
+      "family": "anthropic",
+      "fallback": false,
+      "parameters": []
+    },
+    {
+      "configured": "gpt-5.6-sol[effort=high]",
+      "observed": "gpt-5.6-sol",
+      "family": "openai",
+      "fallback": false,
+      "parameters": []
+    }
+  ],
   "changedPaths": ["src/app/page.tsx"],
   "commands": [
     {

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  digestValue,
   prepareReviewArtifacts,
   readExternalOperationRequest,
   resolveInside,
@@ -14,6 +15,13 @@ import {
 } from "../tools/workflow-core.mjs";
 
 const fixturePath = path.resolve("tests/fixtures/workflow/happy-path.json");
+const model = (configured, observed, family, fallback = false) => ({
+  configured,
+  observed,
+  family,
+  fallback,
+  parameters: [],
+});
 
 /** @param {string} filePath */
 async function readJson(filePath) {
@@ -35,7 +43,7 @@ describe("current-Head pre-merge gate", () => {
       contract: await readJson(path.join(root, result.paths.contract)),
       verification: await readJson(path.join(root, result.paths.verification)),
       packet: await readJson(path.join(root, result.paths.packet)),
-      review: await readJson(path.join(root, result.paths.review)),
+      reviews: await Promise.all(result.paths.reviews.map((reviewPath) => readJson(path.join(root, reviewPath)))),
       root,
     };
   });
@@ -45,14 +53,24 @@ describe("current-Head pre-merge gate", () => {
       ok: true,
       issue: 42,
       headSha: bundle.currentHeadSha,
-      reviewer: "claude",
+      risk: { level: "high" },
+      reviewers: [
+        { family: "anthropic", reviewedAt: "2026-08-21T01:15:00+09:00" },
+        { family: "openai", reviewedAt: "2026-08-21T01:15:00+09:00" },
+      ],
     });
+  });
+
+  it("requires both Anthropic and OpenAI review families for high-risk evidence", () => {
+    expect(() => runPremergeGate({ ...bundle, reviews: [bundle.reviews[0]] })).toThrow(/openai/u);
+    expect(() => runPremergeGate({ ...bundle, reviews: [bundle.reviews[0], bundle.reviews[0]] })).toThrow(/unique/u);
+    expect(runPremergeGate(bundle).ok).toBe(true);
   });
 
   it("fails closed when verification or review is stale", () => {
     expect(() => runPremergeGate({ ...bundle, currentHeadSha: "9".repeat(40) })).toThrow(/Verification evidence is stale/u);
-    const staleReview = { ...bundle.review, headSha: "9".repeat(40), verifySha: "9".repeat(40) };
-    expect(() => runPremergeGate({ ...bundle, review: staleReview })).toThrow(/does not match the packet/u);
+    const staleReviews = bundle.reviews.map((review) => ({ ...review, headSha: "9".repeat(40), verifySha: "9".repeat(40) }));
+    expect(() => runPremergeGate({ ...bundle, reviews: staleReviews })).toThrow(/does not match the packet/u);
   });
 
   it("requires each acceptance criterion exactly once and supported", () => {
@@ -65,11 +83,51 @@ describe("current-Head pre-merge gate", () => {
     };
     expect(() => runPremergeGate({ ...bundle, verification: duplicateVerification })).toThrow(/exactly once/u);
 
-    const unsupportedReview = {
-      ...bundle.review,
-      acceptanceAssessment: [{ ...bundle.review.acceptanceAssessment[0], status: "unsupported" }],
-    };
-    expect(() => runPremergeGate({ ...bundle, review: unsupportedReview })).toThrow(/marks AC-1 unsupported/u);
+    const unsupportedReviews = bundle.reviews.map((review, index) => index === 0 ? {
+      ...review,
+      acceptanceAssessment: [{ ...review.acceptanceAssessment[0], status: "unsupported" }],
+    } : review);
+    expect(() => runPremergeGate({ ...bundle, reviews: unsupportedReviews })).toThrow(/marks AC-1 unsupported/u);
+  });
+
+  it("preserves local Codex and Claude review-family decisions in version 2 evidence", () => {
+    for (const [executionSurface, primaryModel, reviewerModel] of [
+      ["codex-local", model("gpt-5.6-sol", "gpt-5.6-sol", "openai"), model("claude-opus-5", "claude-opus-5", "anthropic")],
+      ["claude-local", model("claude-opus-5", "claude-opus-5", "anthropic"), model("gpt-5.6-sol", "gpt-5.6-sol", "openai")],
+    ]) {
+      const contract = {
+        ...bundle.contract,
+        externalOperations: [],
+      };
+      contract.digest = digestValue(contract);
+      const risk = { level: "normal", reasons: [] };
+      const packet = {
+        ...bundle.packet,
+        executionSurface,
+        primaryModel,
+        risk,
+        requiredReviewerFamilies: [reviewerModel.family],
+        contractDigest: contract.digest,
+      };
+      const verification = {
+        ...bundle.verification,
+        executionSurface,
+        primaryModel,
+        risk,
+        requiredReviewerFamilies: [reviewerModel.family],
+        contractDigest: contract.digest,
+      };
+      const reviews = [{
+        ...bundle.reviews[0],
+        executionSurface,
+        primaryModel,
+        reviewerModel,
+        risk,
+        contractDigest: contract.digest,
+      }];
+      expect(runPremergeGate({ ...bundle, contract, packet, verification, reviews }).reviewers)
+        .toEqual([{ family: reviewerModel.family, reviewedAt: reviews[0].reviewedAt }]);
+    }
   });
 
   it("rejects evidence for a silently changed Issue contract", () => {
@@ -149,9 +207,10 @@ describe("current-Head pre-merge gate", () => {
     await mkdir(path.join(renameRoot, ".artifacts", "issues", "42"), { recursive: true });
     await writeFile(path.join(renameRoot, ".artifacts", "issues", "42", "issue-contract.json"), `${JSON.stringify(contract, null, 2)}\n`, "utf8");
     const prepared = await prepareReviewArtifacts(renameRoot, {
-      schemaVersion: 1,
+      schemaVersion: 2,
       issue: 42,
-      primaryModel: "codex",
+      executionSurface: "codex-local",
+      primaryModel: model("gpt-5.6-sol", "gpt-5.6-sol", "openai"),
       status: "passed",
       commands: [{ command: "npm test", status: "passed", summary: "Passed." }],
       acceptanceEvidence: [{ id: "AC-1", status: "supported", evidence: ["rename test"] }],

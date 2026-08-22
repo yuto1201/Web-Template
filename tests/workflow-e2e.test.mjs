@@ -22,7 +22,13 @@ describe("provider-free Issue workflow simulation", () => {
     expect(command.status, command.stderr).toBe(0);
     const result = JSON.parse(command.stdout);
     expect(result.state.current).toBe("approved-for-merge");
-    expect(result.gate).toMatchObject({ ok: true, issue: 42, reviewer: "claude" });
+    expect(result.branch).toBe("cursor/42-workflow-fixture");
+    expect(result.gate).toMatchObject({
+      ok: true,
+      issue: 42,
+      risk: { level: "high" },
+      reviewers: [{ family: "anthropic" }, { family: "openai" }],
+    });
     expect(result.request).toMatchObject({
       operation: "github.merge_pr",
       inputs: { issue: 42, method: "squash", headSha: result.headSha },
@@ -30,7 +36,12 @@ describe("provider-free Issue workflow simulation", () => {
     });
 
     expect(Object.keys(result.paths)).toHaveLength(7);
-    for (const artifact of Object.values(result.paths)) {
+    expect(result.paths.reviews).toEqual([
+      `.artifacts/issues/42/${result.headSha}/reviews/anthropic.json`,
+      `.artifacts/issues/42/${result.headSha}/reviews/openai.json`,
+    ]);
+    const artifactPaths = Object.entries(result.paths).flatMap(([key, value]) => key === "reviews" ? value : [value]);
+    for (const artifact of artifactPaths) {
       await expect(stat(path.join(root, artifact))).resolves.toBeDefined();
     }
 
@@ -51,6 +62,11 @@ describe("provider-free Issue workflow simulation", () => {
     const prBody = await readFile(path.join(root, result.paths.pullRequest), "utf8");
     expect(prBody).toContain("Closes #42");
     expect(prBody).toContain(`Reviewed SHA: \`${result.headSha}\``);
+    expect(prBody).toContain("Execution surface: cursor-cloud");
+    expect(prBody).toContain("Primary: cursor (composer-2.5)");
+    expect(prBody).toContain("Risk: high");
+    expect(prBody).toContain("Reviewer anthropic:");
+    expect(prBody).toContain("Reviewer openai:");
     expect(prBody).toContain("## External changes");
     expect(prBody).toContain("Closes \\#999");
     expect(prBody).not.toContain("@reviewers");

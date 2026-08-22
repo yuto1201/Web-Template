@@ -4,6 +4,7 @@ import {
   digestValue,
   readExternalOperationRequest,
   requiredReviewContracts,
+  schemas,
   snapshotIssueContract,
   stateForReview,
   transitionWorkflowState,
@@ -14,6 +15,13 @@ import {
 
 const headSha = "2".repeat(40);
 const contractDigest = `sha256:${"3".repeat(64)}`;
+const model = (configured, observed, family, fallback = false) => ({
+  configured,
+  observed,
+  family,
+  fallback,
+  parameters: [],
+});
 
 function contractInput() {
   return {
@@ -29,10 +37,12 @@ function contractInput() {
 
 function review(overrides = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     issue: 5,
-    primaryModel: "codex",
-    reviewerModel: "claude",
+    executionSurface: "cursor-cloud",
+    primaryModel: model("composer-2.5", "composer-2.5", "cursor"),
+    reviewerModel: model("claude-opus-5[effort=high]", "claude-opus-5", "anthropic"),
+    risk: { level: "high", reasons: ["path:.cursor/"] },
     headSha,
     verifySha: headSha,
     contractDigest,
@@ -46,6 +56,14 @@ function review(overrides = {}) {
 }
 
 describe("workflow contracts", () => {
+  it("exports the version 2 model and risk evidence schemas", () => {
+    expect(schemas.modelIdentitySchema.parse(model("composer-2.5", "composer-2.5", "cursor"))).toMatchObject({ family: "cursor" });
+    expect(schemas.riskSchema.parse({ level: "high", reasons: ["path:.cursor/"] })).toEqual({
+      level: "high",
+      reasons: ["path:.cursor/"],
+    });
+  });
+
   it("takes a deterministic Issue snapshot and rejects a changed digest", () => {
     const first = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00");
     const second = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00");
@@ -131,11 +149,16 @@ describe("workflow contracts", () => {
     expect(requiredReviewContracts(["SRC/LIB/AUTH/actions.ts"])).toContain("supabase-auditor");
   });
 
-  it("blocks unavailable review and forbids self-approval", () => {
+  it("blocks unavailable review and rejects unsafe approved model evidence", () => {
     expect(stateForReview(review({ verdict: "unavailable", unavailableReason: "timeout" }))).toBe("blocked:review");
-    expect(() => validateReviewResult(review({ reviewerModel: "codex" }))).toThrow(/Self-approval/u);
     expect(() => validateReviewResult(review({ verdict: "unavailable" }))).toThrow(/fixed reason/u);
     expect(() => validateReviewResult(review({ verifySha: "9".repeat(40) }))).toThrow(/must match/u);
+    expect(() => validateReviewResult(review({
+      reviewerModel: model("future-model", "future-model", "unknown"),
+    }))).toThrow(/unknown/u);
+    expect(() => validateReviewResult(review({
+      reviewerModel: model("claude-opus-5[effort=high]", "claude-sonnet-5", "anthropic", true),
+    }))).toThrow(/fallback/u);
     expect(() => validateReviewResult(review({
       findings: [{ severity: "critical", blocking: false, location: "tools/workflow-core.mjs", summary: "Bypass." }],
     }))).toThrow(/must be blocking/u);

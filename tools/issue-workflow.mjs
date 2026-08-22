@@ -58,6 +58,12 @@ function positiveInteger(options, name) {
   return value;
 }
 
+/** @param {Record<string, string>} options @param {string[]} allowed */
+function rejectUnknownOptions(options, allowed) {
+  const unknown = Object.keys(options).filter((name) => !allowed.includes(name));
+  if (unknown.length > 0) throw new Error(`Unknown option --${unknown[0]}.`);
+}
+
 /** @param {unknown} value */
 function printJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -88,6 +94,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   if (command === "record-review") {
+    rejectUnknownOptions(options, ["root", "issue", "file"]);
     printJson(await recordReviewResult(
       root,
       positiveInteger(options, "issue"),
