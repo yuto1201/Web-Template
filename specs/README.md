@@ -6,6 +6,7 @@
 | --- | --- |
 | `product.md` | Template goals, users, and non-goals |
 | `architecture.md` | Runtime components and trust boundaries |
+| `cursor-cloud.md` | Cursor Cloud execution, authority, model review, and activation design |
 | `acceptance.md` | Template-level completion criteria |
 | `decisions.md` | Accepted decisions and supersession history |
 
