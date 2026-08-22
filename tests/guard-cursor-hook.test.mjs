@@ -191,6 +191,28 @@ describe("Cursor Cloud hook guard", () => {
   });
 
   it.each([
+    ["acceptance policy", "specs/acceptance.md"],
+    ["product policy", "specs/product.md"],
+    ["architecture policy", "specs/architecture.md"],
+    ["review packet contract", "docs/agent-contracts/review-packet.md"],
+    ["change evaluator contract", "docs/agent-contracts/change-evaluator.md"],
+    ["README onboarding", "README.md"],
+    ["generated-agent policy generator", "tools/generate-agent-wrappers.mjs"],
+    ["generated-agent execution policy helper", "tools/execution-policy.mjs"],
+  ])("denies %s edits to %s before and after the file event", (_category, relativePath) => {
+    expect(decision({
+      hook_event_name: "preToolUse",
+      tool_name: "Write",
+      tool_input: { path: path.join(fixtureRoot, relativePath), contents: "rewrite" },
+    })).toBe("deny");
+    expect(decision({
+      hook_event_name: "afterFileEdit",
+      file_path: path.join(fixtureRoot, relativePath),
+      edits: [],
+    })).toBe("deny");
+  });
+
+  it.each([
     ["canonical config", "config/acceptance.json"],
     ["authority documentation", "docs/security.md"],
     ["accepted decisions", "specs/decisions.md"],

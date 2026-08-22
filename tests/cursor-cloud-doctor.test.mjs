@@ -92,6 +92,7 @@ const ready = {
   verifiedAt: "2026-08-22T12:00:00+09:00",
 };
 
+/** @param {Record<string, any>} [overrides] */
 function readySnapshot(overrides = {}) {
   return {
     repository: {
@@ -113,10 +114,12 @@ function readySnapshot(overrides = {}) {
   };
 }
 
+/** @param {unknown} value */
 function validateActivation(value) {
   return validateActivationEvidence(value, executionPolicy, { referenceTime });
 }
 
+/** @param {Record<string, any>} snapshot @param {Record<string, any>} [options] */
 function evaluate(snapshot, options = {}) {
   return evaluateCursorCloud(snapshot, { ...options, referenceTime });
 }
@@ -283,8 +286,12 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("blocks activation when any configured provider target is unavailable", () => {
-    const snapshot = readySnapshot();
-    snapshot.ownership.supabase.projectRef = null;
+    const snapshot = readySnapshot({
+      ownership: {
+        ...structuredClone(ownership),
+        supabase: { ...structuredClone(ownership.supabase), projectRef: null },
+      },
+    });
 
     const report = evaluate(snapshot, { build: true, activation: ready });
 
@@ -317,8 +324,9 @@ describe("Cursor Cloud doctor", () => {
     expect(report.status).toBe("blocked:conflict");
     expect(report.blockers).toContain("activation-head-mismatch");
 
-    const unavailable = readySnapshot();
-    unavailable.repository.headSha = null;
+    const unavailable = readySnapshot({
+      repository: { ...readySnapshot().repository, headSha: null },
+    });
     expect(evaluate(unavailable, { build: true, activation: ready })).toMatchObject({
       status: "blocked:conflict",
       blockers: expect.arrayContaining(["current-head-unavailable"]),

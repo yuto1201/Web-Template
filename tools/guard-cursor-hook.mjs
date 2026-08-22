@@ -21,6 +21,7 @@ const passiveTools = new Set([
 const protectedFiles = new Set([
   "agents.md",
   "claude.md",
+  "readme.md",
   ".cursor/hooks.json",
   "package-lock.json",
   "package.json",
@@ -41,6 +42,8 @@ const protectedFiles = new Set([
   "specs/decisions.md",
   "specs/cursor-cloud.md",
   "tools/cursor-cloud-doctor.mjs",
+  "tools/execution-policy.mjs",
+  "tools/generate-agent-wrappers.mjs",
   "tools/guard-claude-tool.mjs",
   "tools/guard-cursor-hook.mjs",
   "tools/github-review-gate.mjs",
@@ -58,6 +61,8 @@ const protectedPrefixes = [
   ".github/",
   ".artifacts/issues/",
   ".artifacts/ops-results/",
+  "docs/agent-contracts/",
+  "specs/",
 ];
 const safePackageScripts = new Set([
   "audit:completion",
