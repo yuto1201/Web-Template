@@ -1,5 +1,6 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "executionPolicy": "config/execution.json",
   "artifactRoot": ".artifacts",
   "baseRef": "main",
   "reviewerMap": { "codex": "claude", "claude": "codex" },

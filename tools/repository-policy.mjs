@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findCredentialEvidence } from "./template-core.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const defaultRoot = path.resolve(path.dirname(modulePath), "..");
@@ -9,12 +10,16 @@ const requiredFiles = [
   ".claude/settings.json",
   ".codex/agents/change-evaluator.toml",
   ".codex/agents/supabase-auditor.toml",
+  ".cursor/hooks.json",
+  ".cursor/environment.json",
+  ".cursor/Dockerfile",
   ".gitattributes",
   ".github/pull_request_template.md",
   ".github/workflows/review-gate.yml",
   "AGENTS.md",
   "CLAUDE.md",
   "config/agents.json",
+  "config/execution.json",
   "config/deployment.json",
   "config/domain.json",
   "config/github-ruleset.json",
@@ -27,10 +32,13 @@ const requiredFiles = [
   "docs/deployment.md",
   "docs/domain.md",
   "docs/activation.md",
+  "docs/onboarding-cursor-cloud.md",
   "docs/onboarding-macos.md",
   "docs/workflow.md",
   "tools/issue-workflow.mjs",
   "tools/github-review-gate.mjs",
+  "tools/guard-cursor-hook.mjs",
+  "tools/cursor-cloud-doctor.mjs",
   "tools/workstation-doctor.mjs",
   "tools/run-next-dev.mjs",
   "tools/run-next-start.mjs",
@@ -43,17 +51,6 @@ const requiredFiles = [
   "tests/domain-workflow.test.mjs",
   "tests/workstation-doctor.test.mjs",
 ];
-const secretPatterns = [
-  /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----/u,
-  /\bgh[pousr]_[A-Za-z0-9_]{30,}\b/u,
-  /\bsbp_[A-Za-z0-9]{20,}\b/u,
-  /\bsb_secret_[A-Za-z0-9_-]{20,}\b/u,
-  /\bsk_live_[A-Za-z0-9]{20,}\b/u,
-  /\bAKIA[0-9A-Z]{16}\b/u,
-  /(?:SERVICE_ROLE|SUPABASE_SERVICE_ROLE_KEY)\s*[:=]\s*["']?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/iu,
-  /\bv1\.0-[A-Za-z0-9_-]{40,}\b/u,
-];
-
 /** @param {unknown} value @returns {unknown} */
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -83,7 +80,234 @@ function collectTrackedFiles(root) {
 
 /** @param {string} content */
 export function containsPotentialSecret(content) {
-  return secretPatterns.some((pattern) => pattern.test(content));
+  return findCredentialEvidence(content).length > 0;
+}
+
+/** @param {{ authority: string, decisions: string }} input */
+export function validateCursorAuthorityDocumentation(input) {
+  const errors = [];
+  if (!/^\| `cursor-cloud` \| approved provider operator only after live owner-authenticated activation \|$/mu.test(input.authority)) {
+    errors.push("docs/authority.md must name cursor-cloud as an approved operator only after live owner-authenticated activation.");
+  }
+  if (!/^\| `claude-local` \| denied \|$/mu.test(input.authority)) {
+    errors.push("docs/authority.md must keep claude-local denied provider authority.");
+  }
+  const decision = /^## D-007:[^\n]*\n([\s\S]*?)(?=^## D-|(?![\s\S]))/mu.exec(input.decisions)?.[1] ?? "";
+  if (
+    !decision.includes("- Status: accepted") ||
+    !decision.includes("- Supersedes: D-003 only for an activated, owner-authenticated `cursor-cloud` execution surface.") ||
+    !decision.includes("`codex-local` authority and `claude-local` denial remain unchanged.")
+  ) {
+    errors.push("specs/decisions.md must accept a narrow D-003 supersession for activated owner-authenticated Cursor Cloud.");
+  }
+  return errors;
+}
+
+const requiredCursorHookEvents = [
+  "preToolUse",
+  "beforeShellExecution",
+  "subagentStart",
+  "subagentStop",
+  "afterFileEdit",
+];
+const canonicalCursorFamilies = ["anthropic", "openai"];
+const canonicalCursorRoles = ["change-evaluator", "consultant", "supabase-auditor"];
+const canonicalCursorEnvironment = {
+  build: { dockerfile: "Dockerfile", context: ".." },
+  install: "npm ci && npm exec -- playwright install --with-deps chromium && npm run cursor:doctor -- --build",
+  start: "sudo service docker start",
+};
+const canonicalCursorDockerfile = `FROM node:24.13.0-bookworm
+
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends \\
+      ca-certificates \\
+      curl \\
+      docker.io \\
+      git \\
+      ripgrep \\
+    && npm install --global npm@11.6.2 \\
+    && rm -rf /var/lib/apt/lists/*`;
+
+/** @param {unknown} value @returns {boolean} */
+function containsSecretShape(value) {
+  if (Array.isArray(value)) return value.some(containsSecretShape);
+  if (!value || typeof value !== "object") {
+    return typeof value === "string" && containsPotentialSecret(value);
+  }
+  return Object.entries(value).some(([key, child]) => (
+    /(?:token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|auth)/iu.test(key) ||
+    containsSecretShape(child)
+  ));
+}
+
+/**
+ * @param {{ environmentConfig: unknown, dockerfile: unknown, packageJson: unknown }} input
+ */
+export function validateCursorEnvironmentPolicy(input) {
+  const errors = [];
+  const environmentConfig = input.environmentConfig;
+  if (!equal(environmentConfig, canonicalCursorEnvironment)) {
+    errors.push(".cursor/environment.json must contain only the exact build, install, and start contract.");
+  }
+  if (containsSecretShape(environmentConfig)) {
+    errors.push(".cursor/environment.json must not contain secret-shaped fields or values.");
+  }
+
+  const dockerfile = typeof input.dockerfile === "string" ? input.dockerfile : "";
+  const logicalDockerfile = dockerfile.endsWith("\n") ? dockerfile.slice(0, -1) : dockerfile;
+  if (logicalDockerfile !== canonicalCursorDockerfile) {
+    errors.push(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
+  }
+
+  const packageJson = input.packageJson && typeof input.packageJson === "object"
+    ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
+    : {};
+  if (
+    packageJson.scripts?.["cursor:doctor"] !== "node tools/cursor-cloud-doctor.mjs" ||
+    Object.values(packageJson.scripts ?? {}).some(
+      (script) => typeof script === "string" && script.includes("--activation-input") && script !== packageJson.scripts?.["cursor:doctor"],
+    )
+  ) {
+    errors.push("package.json must expose the non-activating Cursor Cloud doctor.");
+  }
+  return errors;
+}
+
+/** @param {string} configured */
+function configuredBaseModel(configured) {
+  const match = /^(.*)\[[^\[\]]+\]$/u.exec(configured);
+  return match ? match[1] : configured;
+}
+
+/** @param {string} content */
+function cursorAgentFrontmatter(content) {
+  if (!content.startsWith("---\n")) return null;
+  const end = content.indexOf("\n---\n", 4);
+  if (end < 0 || content.slice(end + 5).trim().length === 0) return null;
+  /** @type {Record<string, string>} */
+  const fields = {};
+  for (const line of content.slice(4, end).split("\n")) {
+    const match = /^(name|model|readonly):\s*(\S.*)$/u.exec(line);
+    if (!match) continue;
+    if (Object.hasOwn(fields, match[1])) return null;
+    fields[match[1]] = match[2];
+  }
+  return fields;
+}
+
+/**
+ * @param {{
+ *   hooksConfig: unknown,
+ *   packageJson: unknown,
+ *   agentsConfig: unknown,
+ *   executionPolicy: unknown,
+ *   cursorAgentFiles: string[],
+ *   cursorAgentContents: Record<string, string>,
+ * }} input
+ */
+export function validateCursorHookPolicy(input) {
+  const errors = [];
+  const hooksConfig = input.hooksConfig && typeof input.hooksConfig === "object"
+    ? /** @type {Record<string, unknown>} */ (input.hooksConfig)
+    : {};
+  const hooks = hooksConfig.hooks && typeof hooksConfig.hooks === "object" && !Array.isArray(hooksConfig.hooks)
+    ? /** @type {Record<string, unknown>} */ (hooksConfig.hooks)
+    : {};
+  const hookNames = Object.keys(hooks);
+
+  if (hooksConfig.version !== 1 || !equal(hookNames.toSorted(), requiredCursorHookEvents.toSorted())) {
+    errors.push("Cursor Cloud project hooks must not claim unsupported hook coverage.");
+  }
+  if (hookNames.includes("beforeMCPExecution") || hookNames.includes("afterMCPExecution")) {
+    if (!errors.includes("Cursor Cloud project hooks must not claim unsupported hook coverage.")) {
+      errors.push("Cursor Cloud project hooks must not claim unsupported hook coverage.");
+    }
+  }
+
+  for (const event of requiredCursorHookEvents) {
+    const entries = hooks[event];
+    const entry = Array.isArray(entries) && entries.length === 1 && entries[0] && typeof entries[0] === "object"
+      ? /** @type {Record<string, unknown>} */ (entries[0])
+      : null;
+    const validKeys = entry && Object.keys(entry).every((key) => ["command", "failClosed", "timeout", "type"].includes(key));
+    if (
+      !entry ||
+      entry.type !== "command" ||
+      entry.command !== "node tools/guard-cursor-hook.mjs" ||
+      !Number.isInteger(entry.timeout) ||
+      Number(entry.timeout) <= 0 ||
+      Number(entry.timeout) > 60 ||
+      entry.failClosed !== true ||
+      !validKeys
+    ) {
+      errors.push(`Cursor hook ${event} must be a finite fail-closed project command.`);
+    }
+  }
+
+  if (containsPotentialSecret(JSON.stringify(hooksConfig))) {
+    errors.push("Cursor hook configuration must not contain credential values.");
+  }
+
+  const packageJson = input.packageJson && typeof input.packageJson === "object"
+    ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
+    : {};
+  if (packageJson.scripts?.["cursor:hook-check"] !== "node tools/guard-cursor-hook.mjs --check") {
+    errors.push("package.json must expose the deterministic Cursor hook check.");
+  }
+
+  const agentsConfig = input.agentsConfig && typeof input.agentsConfig === "object"
+    ? /** @type {{ cursor?: { families?: unknown, roles?: unknown } }} */ (input.agentsConfig)
+    : {};
+  const executionPolicy = input.executionPolicy && typeof input.executionPolicy === "object"
+    ? /** @type {{ cursorModels?: Record<string, unknown>, modelFamilies?: Record<string, unknown> }} */ (input.executionPolicy)
+    : {};
+  const families = Array.isArray(agentsConfig.cursor?.families)
+    ? agentsConfig.cursor.families.filter((family) => typeof family === "string")
+    : [];
+  const roles = Array.isArray(agentsConfig.cursor?.roles)
+    ? agentsConfig.cursor.roles
+      .map((role) => role && typeof role === "object" && "slug" in role ? role.slug : null)
+      .filter((slug) => typeof slug === "string")
+    : [];
+  if (
+    !equal(families.toSorted(), canonicalCursorFamilies) ||
+    families.length !== canonicalCursorFamilies.length ||
+    !equal(roles.toSorted(), canonicalCursorRoles) ||
+    roles.length !== canonicalCursorRoles.length
+  ) {
+    errors.push("Cursor agent roles and families must match the canonical nonempty sets.");
+  }
+  const modelsValid = canonicalCursorFamilies.every((family) => {
+    const configured = executionPolicy.cursorModels?.[family];
+    const patterns = executionPolicy.modelFamilies?.[family];
+    return typeof configured === "string" && Array.isArray(patterns) && patterns.length > 0 && patterns.every(
+      (source) => typeof source === "string",
+    ) && patterns.some((source) => new RegExp(source, "u").test(configuredBaseModel(configured)));
+  });
+  if (!modelsValid) errors.push("Cursor configured models must match their canonical families.");
+  const expectedAgents = canonicalCursorRoles.flatMap(
+    (role) => canonicalCursorFamilies.map((family) => `${role}-${family}.md`),
+  ).toSorted();
+  if (!modelsValid || !equal(input.cursorAgentFiles.toSorted(), expectedAgents)) {
+    errors.push(".cursor/agents must contain exactly the generated Cursor agent set.");
+  }
+  const contents = input.cursorAgentContents && typeof input.cursorAgentContents === "object"
+    ? input.cursorAgentContents
+    : {};
+  const contentValid = modelsValid && expectedAgents.length === 6 && expectedAgents.every((filename) => {
+    const content = contents[filename];
+    if (typeof content !== "string") return false;
+    const fields = cursorAgentFrontmatter(content);
+    const name = filename.replace(/\.md$/u, "");
+    const family = canonicalCursorFamilies.find((candidate) => name.endsWith(`-${candidate}`));
+    return fields?.name === name && fields.readonly === "true" && typeof family === "string" &&
+      fields.model === executionPolicy.cursorModels?.[family];
+  });
+  if (!contentValid) {
+    errors.push(".cursor/agents content must preserve canonical name, model, and readonly frontmatter.");
+  }
+  return errors;
 }
 
 /** @param {string} [root] */
@@ -102,6 +326,9 @@ export async function validateRepository(root = defaultRoot) {
   }
 
   const ownership = JSON.parse(await readFile(path.join(root, "config", "ownership.json"), "utf8"));
+  const authority = await readFile(path.join(root, "docs", "authority.md"), "utf8");
+  const decisions = await readFile(path.join(root, "specs", "decisions.md"), "utf8");
+  errors.push(...validateCursorAuthorityDocumentation({ authority, decisions }));
   const template = JSON.parse(await readFile(path.join(root, "config", "template.json"), "utf8"));
   const project = template.project ?? {};
   if (!equal(ownership.github, project.github)) {
@@ -130,7 +357,7 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("config/ownership.json Cloudflare ownership does not match config/template.json.");
   }
 
-  const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }> }} */ (
+  const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }>, cursor?: { families?: string[], roles?: Array<{ slug?: string }> } }} */ (
     JSON.parse(await readFile(path.join(root, "config", "agents.json"), "utf8"))
   );
   const slugs = agents.agents?.map((agent) => agent.slug) ?? [];
@@ -211,6 +438,11 @@ export async function validateRepository(root = defaultRoot) {
   const expectedCodexAgents = slugs.map((slug) => `${slug}.toml`).sort();
   const actualClaudeAgents = (await readdir(path.join(root, ".claude", "agents"))).sort();
   const actualCodexAgents = (await readdir(path.join(root, ".codex", "agents"))).sort();
+  const actualCursorAgents = (await readdir(path.join(root, ".cursor", "agents"))).sort();
+  const actualCursorAgentContents = Object.fromEntries(await Promise.all(actualCursorAgents.map(async (filename) => [
+    filename,
+    await readFile(path.join(root, ".cursor", "agents", filename), "utf8"),
+  ])));
   if (actualClaudeAgents.join(",") !== expectedClaudeAgents.join(",")) {
     errors.push(".claude/agents must contain exactly the generated evaluator set.");
   }
@@ -221,6 +453,23 @@ export async function validateRepository(root = defaultRoot) {
   const nodeVersion = (await readFile(path.join(root, ".node-version"), "utf8")).trim();
   const nvmVersion = (await readFile(path.join(root, ".nvmrc"), "utf8")).trim();
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  const cursorHooks = JSON.parse(await readFile(path.join(root, ".cursor", "hooks.json"), "utf8"));
+  const cursorEnvironment = JSON.parse(await readFile(path.join(root, ".cursor", "environment.json"), "utf8"));
+  const cursorDockerfile = await readFile(path.join(root, ".cursor", "Dockerfile"), "utf8");
+  const executionPolicy = JSON.parse(await readFile(path.join(root, "config", "execution.json"), "utf8"));
+  errors.push(...validateCursorHookPolicy({
+    hooksConfig: cursorHooks,
+    packageJson,
+    agentsConfig: agents,
+    executionPolicy,
+    cursorAgentFiles: actualCursorAgents,
+    cursorAgentContents: actualCursorAgentContents,
+  }));
+  errors.push(...validateCursorEnvironmentPolicy({
+    environmentConfig: cursorEnvironment,
+    dockerfile: cursorDockerfile,
+    packageJson,
+  }));
   if (nodeVersion !== nvmVersion || packageJson.engines?.node !== nodeVersion) {
     errors.push(".node-version, .nvmrc, and package.json engines.node must agree exactly.");
   }
@@ -242,12 +491,22 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("CI must verify the workstation contract on a real macOS runner.");
   }
   const reviewWorkflow = await readFile(path.join(root, ".github", "workflows", "review-gate.yml"), "utf8");
+  const trustedInstallIndex = reviewWorkflow.indexOf("npm ci --ignore-scripts");
+  const verificationIndex = reviewWorkflow.indexOf("Verify exact-Head review evidence");
   if (
     !reviewWorkflow.includes("name: Exact Head review policy") ||
     !reviewWorkflow.includes("types: [opened, synchronize, reopened, edited, ready_for_review]") ||
     !reviewWorkflow.includes("ref: ${{ github.event.pull_request.base.sha }}") ||
-    !reviewWorkflow.includes('BASE_SHA" != "62da0e1699ddfcf39f35914b54ad963fe5aa0740"') ||
-    !reviewWorkflow.includes('HEAD_REF" != "codex/22-exact-head-review"') ||
+    !reviewWorkflow.includes('gate_path="trusted/tools/github-review-gate.mjs"') ||
+    !reviewWorkflow.includes('workflow_path="trusted/config/workflow.json"') ||
+    !reviewWorkflow.includes('execution_policy_path="trusted/config/execution.json"') ||
+    !reviewWorkflow.includes("cache-dependency-path: trusted/package-lock.json") ||
+    !reviewWorkflow.includes("working-directory: trusted") ||
+    trustedInstallIndex === -1 ||
+    verificationIndex === -1 ||
+    trustedInstallIndex > verificationIndex ||
+    /working-directory:\s*candidate[\s\S]{0,160}npm (?:ci|install)/u.test(reviewWorkflow) ||
+    /npm (?:--prefix\s+candidate|ci[^\n]*candidate|install[^\n]*candidate)/u.test(reviewWorkflow) ||
     !reviewWorkflow.includes('HEAD_REPOSITORY" != "$BASE_REPOSITORY"') ||
     !reviewWorkflow.includes("github.event.pull_request.head.repo.full_name") ||
     !reviewWorkflow.includes("github.event.pull_request.base.repo.full_name") ||

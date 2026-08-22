@@ -2,8 +2,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   digestValue,
+  connectorIdentityFor,
   readExternalOperationRequest,
   requiredReviewContracts,
+  schemas,
   snapshotIssueContract,
   stateForReview,
   transitionWorkflowState,
@@ -14,6 +16,34 @@ import {
 
 const headSha = "2".repeat(40);
 const contractDigest = `sha256:${"3".repeat(64)}`;
+const verifyDigest = `sha256:${"4".repeat(64)}`;
+const diffDigest = `sha256:${"5".repeat(64)}`;
+
+/** @param {ReturnType<typeof snapshotIssueContract>} contract @param {"github" | "supabase" | "vercel" | "cloudflare"} [provider] */
+const authority = (contract, provider = "github") => ({
+  executionSurface: "codex-local",
+  runId: "local-issue-5-test",
+  contractDigest: contract.digest,
+  activationEvidenceRef: null,
+  connectorIdentity: connectorIdentityFor(provider, provider === "github" ? "yuto1201" : provider === "supabase" ? "yuto1201's Org" : provider === "vercel" ? "team_ANEUn6gVL8dccPaY08wkvxFt" : "7ea8e713d76506f9e303f58624829aa5"),
+});
+
+/** @typedef {import("zod").infer<typeof schemas.modelIdentitySchema>} ModelIdentity */
+
+/**
+ * @param {string} configured
+ * @param {string} observed
+ * @param {ModelIdentity["family"]} family
+ * @param {boolean} [fallback]
+ * @returns {ModelIdentity}
+ */
+const model = (configured, observed, family, fallback = false) => ({
+  configured,
+  observed,
+  family,
+  fallback,
+  parameters: [],
+});
 
 function contractInput() {
   return {
@@ -29,12 +59,16 @@ function contractInput() {
 
 function review(overrides = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     issue: 5,
-    primaryModel: "codex",
-    reviewerModel: "claude",
+    executionSurface: "cursor-cloud",
+    primaryModel: model("composer-2.5", "composer-2.5", "cursor"),
+    reviewerModel: model("claude-opus-5[effort=high]", "claude-opus-5", "anthropic"),
+    risk: { level: "high", reasons: ["path:.cursor/"] },
     headSha,
     verifySha: headSha,
+    verifyDigest,
+    diffDigest,
     contractDigest,
     verdict: "approved",
     contracts: ["change-evaluator"],
@@ -46,6 +80,14 @@ function review(overrides = {}) {
 }
 
 describe("workflow contracts", () => {
+  it("exports the version 2 model and risk evidence schemas", () => {
+    expect(schemas.modelIdentitySchema.parse(model("composer-2.5", "composer-2.5", "cursor"))).toMatchObject({ family: "cursor" });
+    expect(schemas.riskSchema.parse({ level: "high", reasons: ["path:.cursor/"] })).toEqual({
+      level: "high",
+      reasons: ["path:.cursor/"],
+    });
+  });
+
   it("takes a deterministic Issue snapshot and rejects a changed digest", () => {
     const first = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00");
     const second = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00");
@@ -65,11 +107,11 @@ describe("workflow contracts", () => {
     /** @param {unknown} value */
     const validate = (value) => validateExternalOperationRequest(value, path.resolve("."), frozenContract);
     const request = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "issue-5-github-merge-pr-1",
       issue: 5,
       operation: "github.merge_pr",
-      target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+      authority: authority(frozenContract),
       environment: "production",
       reasonCode: "reviewed-release",
       inputs: { issue: 5, prNumber: 15, headSha, method: "squash" },
@@ -80,10 +122,58 @@ describe("workflow contracts", () => {
     expect(() => validate({ ...request, inputs: { ...request.inputs, force: true } })).toThrow();
     expect(() => validate({ ...request, requestId: "issue-99-github-merge-pr-1" })).toThrow(/does not match/u);
     expect(() => validate({ ...request, environment: "preview" })).toThrow(/environment/u);
-    expect(() => validate({ ...request, target: { ...request.target, identifier: "free form target" } })).toThrow(/identifier/u);
+    expect(() => validate({ ...request, target: { kind: "github.repository", identifier: "free form target" } })).toThrow();
 
     const outOfScopeContract = snapshotIssueContract({ ...contractInput(), externalOperations: [] }, "2026-08-21T01:00:00+09:00");
     expect(() => validateExternalOperationRequest(request, path.resolve("."), outOfScopeContract)).toThrow(/outside the frozen/u);
+  });
+
+  it("rejects cross-Issue branch targets for every branch delivery operation", () => {
+    const operations = [
+      {
+        operation: "github.push_branch",
+        validBranch: "codex/5-right-issue",
+        environment: "none",
+        reasonCode: "acceptance-evidence",
+        inputs: { branch: "codex/6-wrong-issue", headSha },
+      },
+      {
+        operation: "github.create_pr",
+        validBranch: "cursor/5-right-issue",
+        environment: "none",
+        reasonCode: "reviewed-release",
+        inputs: { issue: 5, branch: "cursor/6-wrong-issue", baseBranch: "main", headSha },
+      },
+      {
+        operation: "github.delete_branch",
+        validBranch: "claude/5-right-issue",
+        environment: "production",
+        reasonCode: "verified-cleanup",
+        inputs: { branch: "claude/6-wrong-issue", mergedPrNumber: 15, headSha },
+      },
+    ];
+    const frozenContract = snapshotIssueContract({
+      ...contractInput(),
+      externalOperations: operations.map(({ operation }) => operation),
+    }, "2026-08-21T01:00:00+09:00");
+
+    for (const [index, candidate] of operations.entries()) {
+      const request = {
+        schemaVersion: 2,
+        requestId: `issue-5-${candidate.operation.replace(/[._]/gu, "-")}-${index + 1}`,
+        issue: 5,
+        operation: candidate.operation,
+        authority: authority(frozenContract),
+        environment: candidate.environment,
+        reasonCode: candidate.reasonCode,
+        inputs: candidate.inputs,
+      };
+      expect(() => validateExternalOperationRequest({
+        ...request,
+        inputs: { ...candidate.inputs, branch: candidate.validBranch },
+      }, path.resolve("."), frozenContract)).not.toThrow();
+      expect(() => validateExternalOperationRequest(request, path.resolve("."), frozenContract)).toThrow(/branch.*issue 5/u);
+    }
   });
 
   it("allows only the fixed active exact-Head ruleset update", () => {
@@ -92,11 +182,11 @@ describe("workflow contracts", () => {
       externalOperations: ["github.update_ruleset"],
     }, "2026-08-21T01:00:00+09:00");
     const request = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "issue-5-github-update-ruleset-1",
       issue: 5,
       operation: "github.update_ruleset",
-      target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+      authority: authority(frozenContract),
       environment: "production",
       reasonCode: "reviewed-release",
       inputs: {
@@ -131,11 +221,17 @@ describe("workflow contracts", () => {
     expect(requiredReviewContracts(["SRC/LIB/AUTH/actions.ts"])).toContain("supabase-auditor");
   });
 
-  it("blocks unavailable review and forbids self-approval", () => {
+  it("blocks unavailable review and rejects unsafe approved model evidence", () => {
+    expect(validateReviewResult(review())).toMatchObject({ verifyDigest, diffDigest });
     expect(stateForReview(review({ verdict: "unavailable", unavailableReason: "timeout" }))).toBe("blocked:review");
-    expect(() => validateReviewResult(review({ reviewerModel: "codex" }))).toThrow(/Self-approval/u);
     expect(() => validateReviewResult(review({ verdict: "unavailable" }))).toThrow(/fixed reason/u);
     expect(() => validateReviewResult(review({ verifySha: "9".repeat(40) }))).toThrow(/must match/u);
+    expect(() => validateReviewResult(review({
+      reviewerModel: model("future-model", "future-model", "unknown"),
+    }))).toThrow(/unknown/u);
+    expect(() => validateReviewResult(review({
+      reviewerModel: model("claude-opus-5[effort=high]", "claude-sonnet-5", "anthropic", true),
+    }))).toThrow(/fallback/u);
     expect(() => validateReviewResult(review({
       findings: [{ severity: "critical", blocking: false, location: "tools/workflow-core.mjs", summary: "Bypass." }],
     }))).toThrow(/must be blocking/u);

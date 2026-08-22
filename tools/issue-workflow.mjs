@@ -6,6 +6,7 @@ import {
   createMergeOperationRequest,
   prepareReviewArtifacts,
   readExternalOperationRequest,
+  readExternalOperationResult,
   recordReviewResult,
   renderAuthoritativePullRequestBody,
   resolveInside,
@@ -58,6 +59,19 @@ function positiveInteger(options, name) {
   return value;
 }
 
+/** @param {Record<string, string>} options @param {string[]} allowed */
+function rejectUnknownOptions(options, allowed) {
+  const unknown = Object.keys(options).filter((name) => !allowed.includes(name));
+  if (unknown.length > 0) throw new Error(`Unknown option --${unknown[0]}.`);
+}
+
+/** @param {Record<string, string>} options */
+function executionSurfaceOption(options) {
+  const value = options["execution-surface"];
+  if (value === undefined || value === "codex-local" || value === "claude-local" || value === "cursor-cloud") return value;
+  throw new Error("--execution-surface must be codex-local, claude-local, or cursor-cloud.");
+}
+
 /** @param {unknown} value */
 function printJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -78,7 +92,14 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   if (command === "validate-request") {
+    rejectUnknownOptions(options, ["root", "file"]);
     printJson(await readExternalOperationRequest(root, required(options, "file")));
+    return;
+  }
+
+  if (command === "validate-result") {
+    rejectUnknownOptions(options, ["root", "file"]);
+    printJson(await readExternalOperationResult(root, required(options, "file")));
     return;
   }
 
@@ -88,6 +109,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   if (command === "record-review") {
+    rejectUnknownOptions(options, ["root", "issue", "file"]);
     printJson(await recordReviewResult(
       root,
       positiveInteger(options, "issue"),
@@ -118,10 +140,16 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   if (command === "request-merge") {
+    rejectUnknownOptions(options, ["root", "issue", "pr-number", "execution-surface", "run-id", "activation-evidence"]);
     printJson(await createMergeOperationRequest(
       root,
       positiveInteger(options, "issue"),
       positiveInteger(options, "pr-number"),
+      {
+        executionSurface: executionSurfaceOption(options),
+        runId: options["run-id"],
+        activationEvidenceRef: options["activation-evidence"] ?? null,
+      },
     ));
     return;
   }
@@ -141,7 +169,7 @@ export async function runCli(argv = process.argv.slice(2)) {
     return;
   }
 
-  throw new Error("Usage: issue-workflow <snapshot|prepare-review|record-review|validate-request|gate|render-pr|request-merge|cleanup-check|simulate|transition> [options]");
+  throw new Error("Usage: issue-workflow <snapshot|prepare-review|record-review|validate-request|validate-result|gate|render-pr|request-merge|cleanup-check|simulate|transition> [options]");
 }
 
 runCli().catch((error) => {

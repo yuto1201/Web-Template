@@ -3,12 +3,27 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import * as templateCore from "../tools/template-core.mjs";
 import {
   discoverOccurrences,
   initializeTemplate,
   projectTokens,
   readTemplateState,
 } from "../tools/template-core.mjs";
+
+const cursorGuardrailPaths = [
+  ".cursor/Dockerfile",
+  ".cursor/environment.json",
+  ".cursor/hooks.json",
+  ".cursor/agents/change-evaluator-anthropic.md",
+  ".cursor/agents/change-evaluator-openai.md",
+  ".cursor/agents/consultant-anthropic.md",
+  ".cursor/agents/consultant-openai.md",
+  ".cursor/agents/supabase-auditor-anthropic.md",
+  ".cursor/agents/supabase-auditor-openai.md",
+  "config/execution.json",
+  "docs/onboarding-cursor-cloud.md",
+];
 
 /** @type {string[]} */
 const temporaryRoots = [];
@@ -55,9 +70,28 @@ async function sourceFixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "template-init-"));
   temporaryRoots.push(root);
   await mkdir(path.join(root, "config"));
+  await mkdir(path.join(root, ".cursor", "agents"), { recursive: true });
+  await mkdir(path.join(root, "docs"));
   const project = sourceProject();
   await writeFile(path.join(root, "package.json"), `${JSON.stringify({ name: project.slug }, null, 2)}\n`, "utf8");
-  await writeFile(path.join(root, "README.md"), `# ${project.appName}\n`, "utf8");
+  await writeFile(
+    path.join(root, "README.md"),
+    `# ${project.appName}\n\n[Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md)\n`,
+    "utf8",
+  );
+  await writeFile(path.join(root, ".cursor", "environment.json"), "{\"build\":{}}\n", "utf8");
+  await writeFile(path.join(root, ".cursor", "Dockerfile"), "FROM node:24.13.0-bookworm\n", "utf8");
+  await writeFile(path.join(root, ".cursor", "hooks.json"), "{\"version\":1}\n", "utf8");
+  for (const relative of cursorGuardrailPaths.filter((candidate) => candidate.startsWith(".cursor/agents/"))) {
+    const name = path.basename(relative, ".md");
+    await writeFile(path.join(root, relative), `---\nname: ${name}\nreadonly: true\n---\n`, "utf8");
+  }
+  await writeFile(path.join(root, "config", "execution.json"), "{\"schemaVersion\":1}\n", "utf8");
+  await writeFile(
+    path.join(root, "docs", "onboarding-cursor-cloud.md"),
+    "# Cursor Cloud onboarding\n\nProvider activation: needs-cursor-or-codex.\n",
+    "utf8",
+  );
   await writeFile(path.join(root, "config", "ownership.json"), `${JSON.stringify({
     schemaVersion: 1,
     github: project.github,
@@ -124,6 +158,83 @@ describe("template initialization", () => {
 
     expect(occurrences.githubRepository).not.toHaveProperty(".git");
     expect(occurrences.githubRepository).toHaveProperty("ordinary.txt", 1);
+  });
+
+  it("excludes only ignored .superpowers/sdd controller scratch from source scans", async () => {
+    const root = await sourceFixture();
+    const project = sourceProject();
+    await mkdir(path.join(root, ".superpowers", "sdd"), { recursive: true });
+    await writeFile(path.join(root, ".superpowers", "sdd", ".gitignore"), "*\n", "utf8");
+    await writeFile(
+      path.join(root, ".superpowers", "sdd", "task-brief.md"),
+      `${project.github.repository}\n`,
+      "utf8",
+    );
+    await writeFile(path.join(root, ".superpowers", "source-note.md"), `${project.github.repository}\n`, "utf8");
+
+    const occurrences = await discoverOccurrences(root, projectTokens(project));
+
+    expect(occurrences.githubRepository).not.toHaveProperty(".superpowers/sdd/task-brief.md");
+    expect(occurrences.githubRepository).toHaveProperty(".superpowers/source-note.md", 1);
+
+    await rm(path.join(root, ".superpowers", "sdd", ".gitignore"));
+    const unignored = await discoverOccurrences(root, projectTokens(project));
+    expect(unignored.githubRepository).toHaveProperty(".superpowers/sdd/task-brief.md", 1);
+  });
+
+  it("retains the Cursor environment, hooks, six agents, execution policy, and onboarding link", async () => {
+    const root = await sourceFixture();
+    const before = Object.fromEntries(await Promise.all(cursorGuardrailPaths.map(async (relative) => [
+      relative,
+      await readFile(path.join(root, relative), "utf8"),
+    ])));
+
+    const inspection = await templateCore.verifyCursorTemplateRetention(root);
+    await initializeTemplate(root, configuration());
+    const after = Object.fromEntries(await Promise.all(cursorGuardrailPaths.map(async (relative) => [
+      relative,
+      await readFile(path.join(root, relative), "utf8"),
+    ])));
+
+    expect(inspection).toEqual({
+      files: cursorGuardrailPaths,
+      cursorAgents: 6,
+      onboarding: "docs/onboarding-cursor-cloud.md",
+      sourceAccountCredentials: 0,
+    });
+    expect(after).toEqual(before);
+    expect(await readFile(path.join(root, "README.md"), "utf8")).toContain(
+      "[Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md)",
+    );
+  });
+
+  it("rejects a provider credential in retained Cursor template files", async () => {
+    const root = await sourceFixture();
+    const credential = ["ghp", "_123456789012345678901234567890"].join("");
+    await writeFile(
+      path.join(root, ".cursor", "hooks.json"),
+      `${JSON.stringify({ version: 1, credential })}\n`,
+      "utf8",
+    );
+
+    await expect(templateCore.verifyCursorTemplateRetention(root)).rejects.toThrow(/credential/u);
+  });
+
+  it("uses one detector across retained paths and derives credential counts", async () => {
+    const values = [
+      ["github", "_pat_", "22_BBB", "B".repeat(40)].join(""),
+      ["VERCEL_TOKEN", "=", "v".repeat(32)].join(""),
+      ["CF_API_KEY", "=", "c".repeat(40)].join(""),
+    ];
+    expect(templateCore.findCredentialEvidence(values.join("\n"))).toHaveLength(values.length);
+
+    const root = await sourceFixture();
+    await writeFile(path.join(root, ".cursor", "Dockerfile"), `FROM node:24.13.0-bookworm\n# ${values[1]}\n`, "utf8");
+    await expect(templateCore.verifyCursorTemplateRetention(root)).rejects.toThrow(/credential/u);
+
+    const verifier = await readFile(path.resolve("tools/verify-template-instantiation.mjs"), "utf8");
+    expect(verifier).toContain("sourceAccountCredentials: cursorGuardrails.sourceAccountCredentials");
+    expect(verifier).not.toContain("sourceAccountCredentials: 0");
   });
 
   it("reports clean-room verification as not applicable for an initialized repository", async () => {

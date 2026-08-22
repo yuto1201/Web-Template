@@ -45,6 +45,18 @@ describe("exact-target cleanup guard", () => {
     });
   });
 
+  it("accepts the same exact cleanup target for a Cursor-owned branch", () => {
+    const cursorPlan = plan({
+      pr: { ...plan().pr, headRefName: "cursor/5-cross-model-workflow" },
+      branch: "cursor/5-cross-model-workflow",
+      candidateBranches: ["cursor/5-cross-model-workflow"],
+    });
+    expect(validateCleanupPlan(cursorPlan, root).localActions[1]).toEqual({
+      operation: "git.branch.delete",
+      target: "cursor/5-cross-model-workflow",
+    });
+  });
+
   it.each([
     ["an unmerged PR", { pr: { ...plan().pr, state: "OPEN", mergeCommit: null } }],
     ["a dirty worktree", { worktreeClean: false }],

@@ -54,6 +54,12 @@
       "title": "macOS workstation onboarding and migration readiness",
       "evidence": ["docs/onboarding-macos.md", "tools/workstation-doctor.mjs", "tests/workstation-doctor.test.mjs", ".github/workflows/ci.yml"],
       "commands": ["workstation:doctor", "check", "test:e2e"]
+    },
+    {
+      "issue": 29,
+      "title": "Cursor Cloud development mode and activation boundary",
+      "evidence": ["specs/cursor-cloud.md", "config/execution.json", ".cursor/environment.json", ".cursor/hooks.json", "docs/onboarding-cursor-cloud.md", "tools/cursor-cloud-doctor.mjs"],
+      "commands": ["cursor:doctor", "check:generated", "policy", "test", "check"]
     }
   ]
 }

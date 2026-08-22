@@ -50,6 +50,7 @@
       "config/ownership.json": 1,
       "config/template.json": 1,
       "docs/domain.md": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 2,
       "tests/domain-workflow.test.mjs": 10
     },
     "localhostOrigin": {
@@ -67,7 +68,10 @@
     "supabaseOrganizationName": {
       "config/ownership.json": 1,
       "config/template.json": 1,
-      "docs/authority.md": 1
+      "docs/authority.md": 1,
+      "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 2,
+      "tests/workflow-contract.test.mjs": 1
     },
     "vercelProjectId": {
       "config/ownership.json": 1,
@@ -77,18 +81,22 @@
     "vercelScope": {
       "config/ownership.json": 1,
       "config/template.json": 1,
-      "tests/domain-workflow.test.mjs": 1
+      "tests/domain-workflow.test.mjs": 1,
+      "tests/workflow-contract.test.mjs": 1
     },
     "cloudflareAccountId": {
       "config/ownership.json": 1,
       "config/template.json": 1,
-      "tests/domain-workflow.test.mjs": 1
+      "tests/domain-workflow.test.mjs": 1,
+      "tests/workflow-contract.test.mjs": 1
     },
     "cloudflareAccountName": {
       "config/ownership.json": 1,
       "config/template.json": 1,
       "docs/authority.md": 1,
       "docs/domain.md": 1,
+      "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 2,
       "tests/domain-workflow.test.mjs": 1
     },
     "cloudflareZoneId": {
@@ -101,6 +109,7 @@
       "config/ownership.json": 1,
       "config/template.json": 2,
       "docs/domain.md": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 2,
       "tests/domain-workflow.test.mjs": 15
     },
     "githubRepository": {
@@ -108,24 +117,32 @@
       "config/ownership.json": 1,
       "config/template.json": 1,
       "docs/authority.md": 1,
+      "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md": 3,
+      "specs/cursor-cloud.md": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 5,
       "tests/fixtures/workflow/happy-path.json": 1,
-      "tests/github-review-gate.test.mjs": 5,
+      "tests/github-review-gate.test.mjs": 6,
       "tests/workflow-cleanup.test.mjs": 2,
       "tests/workflow-contract.test.mjs": 1,
-      "tests/workflow-e2e.test.mjs": 1,
-      "tests/workflow-gate.test.mjs": 2
+      "tests/workflow-e2e.test.mjs": 3,
+      "tests/workflow-gate.test.mjs": 2,
+      "tests/workflow-operation-evidence.test.mjs": 5
     },
     "githubOwner": {
       "README.md": 1,
       "config/ownership.json": 2,
       "config/template.json": 2,
-      "docs/authority.md": 2,
+      "docs/authority.md": 3,
+      "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md": 6,
+      "specs/cursor-cloud.md": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 7,
       "tests/fixtures/workflow/happy-path.json": 1,
       "tests/github-review-gate.test.mjs": 5,
       "tests/workflow-cleanup.test.mjs": 2,
-      "tests/workflow-contract.test.mjs": 1,
-      "tests/workflow-e2e.test.mjs": 1,
-      "tests/workflow-gate.test.mjs": 2
+      "tests/workflow-contract.test.mjs": 3,
+      "tests/workflow-e2e.test.mjs": 4,
+      "tests/workflow-gate.test.mjs": 4,
+      "tests/workflow-operation-evidence.test.mjs": 7
     },
     "appName": {
       "README.md": 1,
@@ -140,11 +157,14 @@
       "package.json": 1,
       "supabase/config.toml": 1,
       "tests/client-bundle-scan.test.ts": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 2,
       "tests/deployment-preflight.test.mjs": 1,
       "tests/deployment-release.test.mjs": 2,
       "tests/deployment-workflow-lint.test.mjs": 1,
       "tests/domain-workflow.test.mjs": 10,
+      "tests/generated-assets.test.mjs": 2,
       "tests/guard-claude-tool.test.mjs": 1,
+      "tests/guard-cursor-hook.test.mjs": 1,
       "tests/workflow-cleanup.test.mjs": 2,
       "tests/workflow-contract.test.mjs": 1,
       "tests/workflow-e2e.test.mjs": 1,

@@ -1,15 +1,26 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import {
+  classifyRisk,
+  executionOperationNames,
+  loadExecutionPolicy,
+  normalizeModelIdentity,
+  requiredReviewerFamilies,
+  validateBranchForSurface,
+  validateReviewerFamilies,
+} from "./execution-policy.mjs";
+import { activationRepositoryBindingChecks, validateActivationEvidence } from "./cursor-cloud-doctor.mjs";
+import { containsPotentialSecret } from "./repository-policy.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(moduleDirectory, "..");
+const executionPolicy = await loadExecutionPolicy(defaultRoot);
 const workflowConfiguration = /** @type {{
-  reviewerMap: Record<"codex" | "claude", "codex" | "claude">,
   baseRef: string,
   states: string[],
   transitions: Record<string, string[]>,
@@ -19,7 +30,36 @@ const workflowConfiguration = /** @type {{
 const shaSchema = z.string().regex(/^[0-9a-f]{40}$/u);
 const digestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 const timestampSchema = z.iso.datetime({ offset: true });
-const modelSchema = z.enum(["codex", "claude"]);
+const surfaceNames = /** @type {["codex-local" | "claude-local" | "cursor-cloud", ...Array<"codex-local" | "claude-local" | "cursor-cloud">]} */ (Object.keys(executionPolicy.surfaces));
+const familyNames = /** @type {["openai" | "anthropic" | "cursor" | "xai", ...Array<"openai" | "anthropic" | "cursor" | "xai">]} */ (Object.keys(executionPolicy.modelFamilies));
+const surfaceSchema = z.enum(surfaceNames);
+const familySchema = z.enum([...familyNames, "unknown"]);
+const knownFamilySchema = z.enum(familyNames);
+export const modelIdentitySchema = z.object({
+  configured: z.string().min(1),
+  observed: z.string().min(1),
+  family: familySchema,
+  fallback: z.boolean(),
+  parameters: z.array(z.object({
+    id: z.string().min(1),
+    value: z.string().min(1),
+  }).strict()),
+}).strict().superRefine((value, context) => {
+  const normalized = normalizeModelIdentity(value.configured, value.observed, value.parameters, executionPolicy);
+  if (value.family !== normalized.family) {
+    context.addIssue({ code: "custom", path: ["family"], message: "Model family must be derived from the observed model ID." });
+  }
+  if (value.fallback !== normalized.fallback) {
+    context.addIssue({ code: "custom", path: ["fallback"], message: "Model fallback must be derived from configured and observed model IDs." });
+  }
+  if (JSON.stringify(value.parameters) !== JSON.stringify(normalized.parameters)) {
+    context.addIssue({ code: "custom", path: ["parameters"], message: "Model parameters must use canonical order." });
+  }
+});
+export const riskSchema = z.object({
+  level: z.enum(["normal", "high"]),
+  reasons: z.array(z.string().min(1)),
+}).strict();
 const contractNameSchema = z.enum(["change-evaluator", "supabase-auditor"]);
 const acceptanceIdSchema = z.string().regex(/^AC-[1-9][0-9]*$/u);
 const relativeFileSchema = z.string().min(1).superRefine((value, context) => {
@@ -35,26 +75,23 @@ const relativeFileSchema = z.string().min(1).superRefine((value, context) => {
   }
 });
 
-export const operationNames = [
-  "github.read_issue",
-  "github.push_branch",
-  "github.create_pr",
-  "github.merge_pr",
-  "github.delete_branch",
-  "github.update_ruleset",
-  "supabase.inspect_project",
-  "supabase.apply_migrations",
-  "vercel.inspect_project",
-  "vercel.deploy_preview",
-  "vercel.deploy_production",
-  "cloudflare.inspect_zone",
-  "cloudflare.upsert_dns",
-];
+export const operationNames = executionOperationNames;
 
 const operationSchema = z.enum(operationNames);
-const branchSchema = z.string().regex(/^(?:codex|claude)\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+const branchPrefixPattern = Object.values(executionPolicy.surfaces)
+  .map(({ branchPrefix }) => branchPrefix.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+  .join("|");
+const branchSchema = z.string().regex(new RegExp(`^(?:${branchPrefixPattern})\\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$`, "u"));
 const worktreeSchema = z.string().regex(/^\.worktrees\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const repositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
+const runIdSchema = z.string().regex(/^(?:local-[a-z0-9]+(?:-[a-z0-9]+)*|bc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/u);
+const connectorProviderSchema = z.enum(["github", "supabase", "vercel", "cloudflare"]);
+const connectorOwnerSchema = z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9_' .:@/-]+$/u);
+const connectorIdentitySchema = z.object({
+  provider: connectorProviderSchema,
+  owner: connectorOwnerSchema,
+  fingerprint: digestSchema,
+}).strict();
 
 const targetSources = {
   github: "config/ownership.json#github",
@@ -69,7 +106,8 @@ const operationDefinitions = /** @type {Record<string, {
   environments: string[],
   reasonCodes: string[],
   inputs: import("zod").ZodType,
-  evidence: string[]
+  evidence: string[],
+  reversibility: "read-only" | "reversible" | "conditional" | "irreversible"
 }>} */ ({
   "github.read_issue": {
     targetKind: "github.repository",
@@ -78,6 +116,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["issue-contract"],
     inputs: z.object({ issue: z.number().int().positive() }).strict(),
     evidence: ["authenticated GitHub login", "repository", "sanitized Issue snapshot"],
+    reversibility: "read-only",
   },
   "github.push_branch": {
     targetKind: "github.repository",
@@ -86,6 +125,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["acceptance-evidence"],
     inputs: z.object({ branch: branchSchema, headSha: shaSchema }).strict(),
     evidence: ["authenticated GitHub login", "repository", "pushed branch Head SHA"],
+    reversibility: "reversible",
   },
   "github.create_pr": {
     targetKind: "github.repository",
@@ -99,6 +139,7 @@ const operationDefinitions = /** @type {Record<string, {
       headSha: shaSchema,
     }).strict(),
     evidence: ["authenticated GitHub login", "draft PR URL", "PR Head SHA"],
+    reversibility: "reversible",
   },
   "github.merge_pr": {
     targetKind: "github.repository",
@@ -107,6 +148,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["reviewed-release"],
     inputs: z.object({ issue: z.number().int().positive(), prNumber: z.number().int().positive(), headSha: shaSchema, method: z.literal("squash") }).strict(),
     evidence: ["authenticated GitHub login", "matched PR Head SHA", "squash merge commit", "closed Issue"],
+    reversibility: "conditional",
   },
   "github.delete_branch": {
     targetKind: "github.repository",
@@ -115,6 +157,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["verified-cleanup"],
     inputs: z.object({ branch: branchSchema, mergedPrNumber: z.number().int().positive(), headSha: shaSchema }).strict(),
     evidence: ["merged PR identity", "deleted exact remote branch"],
+    reversibility: "reversible",
   },
   "github.update_ruleset": {
     targetKind: "github.repository",
@@ -129,6 +172,7 @@ const operationDefinitions = /** @type {Record<string, {
       enforcement: z.literal("active"),
     }).strict(),
     evidence: ["authenticated GitHub owner", "ruleset ID", "active enforcement", "required exact-Head check"],
+    reversibility: "reversible",
   },
   "supabase.inspect_project": {
     targetKind: "supabase.project",
@@ -137,6 +181,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["issue-contract"],
     inputs: z.object({ projectRefSource: z.literal("config/ownership.json") }).strict(),
     evidence: ["authenticated Supabase organization", "project ref fingerprint", "read-only inspection"],
+    reversibility: "read-only",
   },
   "supabase.apply_migrations": {
     targetKind: "supabase.project",
@@ -148,6 +193,7 @@ const operationDefinitions = /** @type {Record<string, {
       migrations: z.array(relativeFileSchema.regex(/^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/u)).min(1),
     }).strict(),
     evidence: ["authenticated Supabase organization", "project ref fingerprint", "applied migration names"],
+    reversibility: "conditional",
   },
   "vercel.inspect_project": {
     targetKind: "vercel.project",
@@ -156,6 +202,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["issue-contract"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
     evidence: ["authenticated Vercel scope", "project identity", "read-only inspection"],
+    reversibility: "read-only",
   },
   "vercel.deploy_preview": {
     targetKind: "vercel.project",
@@ -164,6 +211,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["acceptance-evidence"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
     evidence: ["authenticated Vercel scope", "preview deployment URL", "deployed Head SHA"],
+    reversibility: "reversible",
   },
   "vercel.deploy_production": {
     targetKind: "vercel.project",
@@ -172,6 +220,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["reviewed-release"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
     evidence: ["authenticated Vercel scope", "production deployment URL", "deployed Head SHA"],
+    reversibility: "conditional",
   },
   "cloudflare.inspect_zone": {
     targetKind: "cloudflare.zone",
@@ -180,6 +229,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["issue-contract"],
     inputs: z.object({ zoneSource: z.literal("config/ownership.json") }).strict(),
     evidence: ["authenticated Cloudflare account", "zone identity", "read-only DNS snapshot"],
+    reversibility: "read-only",
   },
   "cloudflare.upsert_dns": {
     targetKind: "cloudflare.zone",
@@ -194,18 +244,55 @@ const operationDefinitions = /** @type {Record<string, {
       proxied: z.literal(false),
     }).strict(),
     evidence: ["authenticated Cloudflare account", "zone identity", "exact DNS record after write"],
+    reversibility: "reversible",
   },
 });
 
 const externalRequestBaseSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   requestId: z.string().regex(/^issue-[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*-[1-9][0-9]*$/u),
   issue: z.number().int().positive(),
   operation: operationSchema,
-  target: z.object({ kind: z.string().min(1), identifier: z.string().min(1).max(200) }).strict(),
+  authority: z.object({
+    executionSurface: surfaceSchema,
+    runId: runIdSchema,
+    contractDigest: digestSchema,
+    activationEvidenceRef: relativeFileSchema.nullable(),
+    connectorIdentity: connectorIdentitySchema,
+  }).strict(),
   environment: z.enum(["none", "preview", "production"]),
   reasonCode: z.enum(["issue-contract", "acceptance-evidence", "reviewed-release", "verified-cleanup"]),
   inputs: z.record(z.string(), z.unknown()),
+}).strict();
+
+const operationResultSchema = z.object({
+  schemaVersion: z.literal(1),
+  requestId: externalRequestBaseSchema.shape.requestId,
+  requestDigest: digestSchema,
+  issue: z.number().int().positive(),
+  operation: operationSchema,
+  executionSurface: surfaceSchema,
+  runId: runIdSchema,
+  contractDigest: digestSchema,
+  connectorIdentity: connectorIdentitySchema,
+  resolvedTarget: z.object({ kind: z.string().min(1).max(80), value: z.string().min(1).max(253) }).strict(),
+  inputDigest: digestSchema,
+  mutationDigest: digestSchema,
+  reversibility: z.enum(["read-only", "reversible", "conditional", "irreversible"]),
+  status: z.enum(["succeeded", "failed"]),
+  outcome: z.object({
+    code: z.enum(["completed", "rejected", "provider-error"]),
+    summary: z.string().trim().min(1).max(240).regex(/^[^\r\n]+$/u),
+    evidenceDigest: digestSchema,
+  }).strict(),
+  postState: z.object({
+    status: z.literal("verified"),
+    collectorRunId: runIdSchema,
+    targetDigest: digestSchema,
+    evidenceDigest: digestSchema,
+    observedAt: timestampSchema,
+  }).strict().nullable(),
+  completedAt: timestampSchema,
 }).strict();
 
 const singleLineSchema = z.string().trim().min(1).regex(/^[^\r\n]+$/u);
@@ -230,8 +317,12 @@ const acceptanceEvidenceSchema = z.object({
   evidence: z.array(singleLineSchema).min(1),
 }).strict();
 const verificationSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   issue: z.number().int().positive(),
+  executionSurface: surfaceSchema,
+  primaryModel: modelIdentitySchema,
+  risk: riskSchema,
+  requiredReviewerFamilies: z.array(knownFamilySchema).min(1),
   baseSha: shaSchema,
   headSha: shaSchema,
   contractDigest: digestSchema,
@@ -250,8 +341,8 @@ const verificationInputSchema = verificationSchema.omit({
   baseSha: true,
   headSha: true,
   contractDigest: true,
-}).extend({
-  primaryModel: modelSchema,
+  risk: true,
+  requiredReviewerFamilies: true,
 }).strict();
 
 const findingSchema = z.object({
@@ -270,12 +361,16 @@ const reviewAssessmentSchema = z.object({
   evidenceRef: singleLineSchema,
 }).strict();
 const reviewResultObjectSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   issue: z.number().int().positive(),
-  primaryModel: modelSchema,
-  reviewerModel: modelSchema,
+  executionSurface: surfaceSchema,
+  primaryModel: modelIdentitySchema,
+  reviewerModel: modelIdentitySchema,
+  risk: riskSchema,
   headSha: shaSchema,
   verifySha: shaSchema,
+  verifyDigest: digestSchema,
+  diffDigest: digestSchema,
   contractDigest: digestSchema,
   verdict: z.enum(["approved", "changes-requested", "unavailable"]),
   contracts: z.array(contractNameSchema).min(1),
@@ -287,14 +382,24 @@ const reviewResultObjectSchema = z.object({
 export const reviewResultKeys = Object.keys(reviewResultObjectSchema.shape)
   .filter((key) => key !== "unavailableReason");
 const reviewResultSchema = reviewResultObjectSchema.superRefine((value, context) => {
-  if (value.primaryModel === value.reviewerModel) {
-    context.addIssue({ code: "custom", path: ["reviewerModel"], message: "Self-approval is forbidden." });
-  }
   if (value.headSha !== value.verifySha) {
     context.addIssue({ code: "custom", path: ["verifySha"], message: "Review Head and verification SHA must match." });
   }
   if (value.verdict === "approved" && value.findings.some(({ blocking }) => blocking)) {
     context.addIssue({ code: "custom", path: ["verdict"], message: "An approved review cannot contain blocking findings." });
+  }
+  if (value.verdict === "approved" && value.findings.some(({ severity }) => ["critical", "high"].includes(severity))) {
+    context.addIssue({ code: "custom", path: ["verdict"], message: "An approved review cannot contain critical or high findings." });
+  }
+  if (value.verdict === "approved") {
+    for (const key of /** @type {Array<"primaryModel" | "reviewerModel">} */ (["primaryModel", "reviewerModel"])) {
+      if (value[key].family === "unknown") {
+        context.addIssue({ code: "custom", path: [key, "family"], message: "An approved review cannot use an unknown model family." });
+      }
+      if (value[key].fallback) {
+        context.addIssue({ code: "custom", path: [key, "fallback"], message: "An approved review cannot use model fallback evidence." });
+      }
+    }
   }
   if (value.verdict === "unavailable" && !value.unavailableReason) {
     context.addIssue({ code: "custom", path: ["unavailableReason"], message: "Unavailable review needs a fixed reason." });
@@ -305,11 +410,13 @@ const reviewResultSchema = reviewResultObjectSchema.superRefine((value, context)
 });
 
 const reviewPacketSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   issue: z.number().int().positive(),
   repository: repositorySchema,
-  primaryModel: modelSchema,
-  reviewerModel: modelSchema,
+  executionSurface: surfaceSchema,
+  primaryModel: modelIdentitySchema,
+  risk: riskSchema,
+  requiredReviewerFamilies: z.array(knownFamilySchema).min(1),
   baseSha: shaSchema,
   headSha: shaSchema,
   verifySha: shaSchema,
@@ -374,7 +481,17 @@ export function digestValue(value) {
   if (copy && typeof copy === "object" && !Array.isArray(copy)) {
     delete /** @type {Record<string, unknown>} */ (copy).digest;
   }
-  return `sha256:${createHash("sha256").update(canonicalJson(copy), "utf8").digest("hex")}`;
+  return digestUtf8(canonicalJson(copy));
+}
+
+/** @param {string} value */
+function digestUtf8(value) {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+/** @param {unknown} value */
+function serializeJson(value) {
+  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 /** @param {string[]} values @param {string} label */
@@ -415,6 +532,70 @@ function resolveOwnershipTarget(root, source) {
   throw new Error(`Ownership target ${source} is not configured.`);
 }
 
+/** @param {string} operation */
+function operationProvider(operation) {
+  return connectorProviderSchema.parse(operation.split(".")[0]);
+}
+
+/** @param {string} root @param {"github" | "supabase" | "vercel" | "cloudflare"} provider */
+function expectedConnectorOwner(root, provider) {
+  const ownership = JSON.parse(readFileSync(path.join(root, "config", "ownership.json"), "utf8"));
+  const owner = provider === "github"
+    ? ownership.github?.owner
+    : provider === "supabase"
+      ? ownership.supabase?.organizationName
+      : provider === "vercel"
+        ? ownership.vercel?.scope
+        : ownership.cloudflare?.accountId;
+  return connectorOwnerSchema.parse(owner);
+}
+
+/** @param {"github" | "supabase" | "vercel" | "cloudflare"} provider @param {string} owner */
+export function connectorIdentityFor(provider, owner) {
+  const identity = { provider, owner, fingerprint: digestValue({ provider, owner }) };
+  return connectorIdentitySchema.parse(identity);
+}
+
+/** @param {string} candidate @param {string} label */
+function requireRegularFileWithoutSymlink(candidate, label) {
+  const metadata = lstatSync(candidate);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`${label} must be a regular non-symlink file.`);
+}
+
+/** @param {string} root @param {string} reference @param {string} runId @param {number} issue */
+function readCursorActivation(root, reference, runId, issue) {
+  const expected = `.artifacts/cursor/${runId}.json`;
+  if (reference !== expected) throw new Error("Cursor activation evidence must use its canonical run-bound artifact path.");
+  const resolved = resolveInside(root, reference, ".artifacts/cursor");
+  requireRegularFileWithoutSymlink(resolved, "Cursor activation evidence");
+  const actual = realpathSync.native(resolved);
+  if (actual !== resolved) throw new Error("Cursor activation evidence must not use a filesystem alias or symlink.");
+  const activation = validateActivationEvidence(JSON.parse(readFileSync(actual, "utf8")), executionPolicy);
+  if (activation.run.id !== runId) throw new Error("Cursor activation evidence run does not match the operation request.");
+  const ownership = JSON.parse(readFileSync(path.join(root, "config", "ownership.json"), "utf8"));
+  const repository = {
+    branch: runGit(root, ["branch", "--show-current"]).trim(),
+    headSha: runGit(root, ["rev-parse", "HEAD"]).trim(),
+  };
+  const failedBindings = activationRepositoryBindingChecks(activation, repository, ownership)
+    .filter(([, , passed]) => !passed)
+    .map(([, blocker]) => blocker);
+  if (failedBindings.length > 0) throw new Error(`Cursor activation repository binding failed: ${failedBindings.join(", ")}.`);
+  const branchIssue = Number(/^cursor\/([1-9][0-9]*)-/u.exec(activation.repository.branch)?.[1]);
+  if (branchIssue !== issue) throw new Error(`Cursor activation branch does not belong to issue ${issue}.`);
+  return activation;
+}
+
+/** @param {unknown} value @returns {boolean} */
+function containsSecretShapedEvidence(value) {
+  if (Array.isArray(value)) return value.some(containsSecretShapedEvidence);
+  if (!value || typeof value !== "object") return typeof value === "string" && containsPotentialSecret(value);
+  return Object.entries(value).some(([key, child]) => (
+    /(?:auth|token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|authorization)/iu.test(key) ||
+    containsSecretShapedEvidence(child)
+  ));
+}
+
 /** @param {unknown} value @param {string} [root] @param {unknown} [contractValue] */
 export function validateExternalOperationRequest(value, root = defaultRoot, contractValue) {
   const request = externalRequestBaseSchema.parse(value);
@@ -427,11 +608,29 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
     throw new Error(`Operation ${request.operation} is outside the frozen Issue contract.`);
   }
   const definition = operationDefinitions[request.operation];
-  if (request.target.kind !== definition.targetKind) {
-    throw new Error(`Operation ${request.operation} requires target kind ${definition.targetKind}.`);
+  if (request.authority.contractDigest !== contract.digest) throw new Error("Operation request contract digest does not match the frozen Issue contract.");
+  const surface = executionPolicy.surfaces[request.authority.executionSurface];
+  if (!surface.providerOperator) throw new Error(`${request.authority.executionSurface} is not an authorized provider operator.`);
+  const provider = operationProvider(request.operation);
+  const expectedIdentity = connectorIdentityFor(provider, expectedConnectorOwner(root, provider));
+  if (canonicalJson(request.authority.connectorIdentity) !== canonicalJson(expectedIdentity)) {
+    throw new Error("Operation request connector identity does not match configured ownership.");
   }
-  if (request.target.identifier !== definition.targetIdentifier) {
-    throw new Error(`Operation ${request.operation} requires target identifier ${definition.targetIdentifier}.`);
+  if (request.authority.executionSurface === "cursor-cloud") {
+    if (!request.authority.activationEvidenceRef) throw new Error("Cursor Cloud operation requires activation evidence.");
+    const activation = readCursorActivation(root, request.authority.activationEvidenceRef, request.authority.runId, request.issue);
+    const activationOwner = provider === "github"
+      ? activation.providers.github.owner
+      : provider === "supabase"
+        ? activation.providers.supabase.organizationName
+        : provider === "vercel"
+          ? activation.providers.vercel.scope
+          : activation.providers.cloudflare.accountId;
+    if (activationOwner !== expectedIdentity.owner) throw new Error("Cursor activation connector identity does not match configured ownership.");
+    const expectedRepository = resolveOwnershipTarget(root, targetSources.github);
+    if (activation.repository.fullName !== expectedRepository) throw new Error("Cursor activation repository does not match configured ownership.");
+  } else if (request.authority.activationEvidenceRef !== null) {
+    throw new Error("Local operation requests must not reference Cursor activation evidence.");
   }
   if (!definition.environments.includes(request.environment)) throw new Error(`Invalid environment for ${request.operation}.`);
   if (!definition.reasonCodes.includes(request.reasonCode)) throw new Error(`Invalid reason code for ${request.operation}.`);
@@ -441,12 +640,34 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
   if ("issue" in inputs && inputs.issue !== request.issue) {
     throw new Error("Operation request Issue does not match operation inputs.");
   }
+  validateOperationBranchIssue(request.operation, inputs, request.issue);
+  const resolvedTarget = resolveOwnershipTarget(root, definition.targetIdentifier);
   return {
     ...request,
     inputs,
-    resolvedTarget: resolveOwnershipTarget(root, definition.targetIdentifier),
+    resolvedTarget,
+    resolvedTargetKind: definition.targetKind,
     expectedEvidence: definition.evidence,
+    reversibility: definition.reversibility,
+    inputDigest: digestValue(inputs),
+    mutationDigest: digestValue({
+      operation: request.operation,
+      environment: request.environment,
+      resolvedTarget: { kind: definition.targetKind, value: resolvedTarget },
+      inputs,
+    }),
+    requestDigest: digestValue(request),
   };
+}
+
+const branchDeliveryOperations = new Set(["github.push_branch", "github.create_pr", "github.delete_branch"]);
+
+/** @param {string} operation @param {unknown} inputs @param {number} issue */
+function validateOperationBranchIssue(operation, inputs, issue) {
+  if (!branchDeliveryOperations.has(operation)) return;
+  const { branch } = z.object({ branch: branchSchema }).passthrough().parse(inputs);
+  const branchIssue = Number(/^[a-z]+\/([1-9][0-9]*)-/u.exec(branch)?.[1]);
+  if (branchIssue !== issue) throw new Error(`Operation branch does not belong to issue ${issue}.`);
 }
 
 /** @param {string} candidate */
@@ -476,11 +697,14 @@ export function resolveInside(root, candidate, subtree) {
 export async function readExternalOperationRequest(root, requestPath) {
   const resolved = resolveInside(root, requestPath, path.join(".artifacts", "ops-requests"));
   if (path.extname(resolved).toLowerCase() !== ".json") throw new Error("Operation request must be JSON.");
+  requireRegularFileWithoutSymlink(resolved, "Operation request");
   const actual = await realpath(resolved);
   resolveInside(root, actual, path.join(".artifacts", "ops-requests"));
   const request = validateExternalOperationRequest(JSON.parse(await readFile(actual, "utf8")), root);
+  const expectedPath = path.join(canonicalPath(root), ".artifacts", "ops-requests", `${request.requestId}.json`);
+  if (actual !== expectedPath) throw new Error("Operation request must use its canonical requestId-bound artifact path.");
   let gate = null;
-  if (["github.merge_pr", "vercel.deploy_production", "cloudflare.upsert_dns"].includes(request.operation)) {
+  if (executionPolicy.highRiskOperations.includes(request.operation)) {
     gate = await runAuthoritativePremergeGate(root, request.issue);
     if ("headSha" in request.inputs && request.inputs.headSha !== gate.headSha) {
       throw new Error("External operation Head SHA does not match the authoritative review gate.");
@@ -491,6 +715,63 @@ export async function readExternalOperationRequest(root, requestPath) {
     gate,
     resultPath: path.join(".artifacts", "ops-results", `${request.requestId}.result.json`).replaceAll("\\", "/"),
   };
+}
+
+/** @param {unknown} value @param {ReturnType<typeof validateExternalOperationRequest>} request */
+export function validateExternalOperationResult(value, request) {
+  if (containsSecretShapedEvidence(value)) throw new Error("Operation result contains secret-shaped evidence.");
+  const result = operationResultSchema.parse(value);
+  const exact = [
+    [result.requestId, request.requestId, "requestId"],
+    [result.requestDigest, request.requestDigest, "request digest"],
+    [result.issue, request.issue, "Issue"],
+    [result.operation, request.operation, "operation"],
+    [result.executionSurface, request.authority.executionSurface, "execution surface"],
+    [result.runId, request.authority.runId, "run"],
+    [result.contractDigest, request.authority.contractDigest, "contract digest"],
+    [result.inputDigest, request.inputDigest, "input digest"],
+    [result.mutationDigest, request.mutationDigest, "mutation digest"],
+    [result.reversibility, request.reversibility, "reversibility"],
+    [result.resolvedTarget.kind, request.resolvedTargetKind, "target kind"],
+    [result.resolvedTarget.value, request.resolvedTarget, "target"],
+  ];
+  for (const [actual, expected, label] of exact) {
+    if (actual !== expected) throw new Error(`Operation result ${label} does not match the validated request.`);
+  }
+  if (canonicalJson(result.connectorIdentity) !== canonicalJson(request.authority.connectorIdentity)) {
+    throw new Error("Operation result connector identity does not match the validated request.");
+  }
+  if (result.status === "succeeded") {
+    if (result.outcome.code !== "completed") throw new Error("Successful operation result must have completed outcome evidence.");
+    if (!result.postState) throw new Error("Successful operation result requires independently collected post-state evidence.");
+  } else if (result.outcome.code === "completed") {
+    throw new Error("Failed operation result cannot claim a completed outcome.");
+  }
+  if (result.postState) {
+    if (result.postState.collectorRunId === result.runId) throw new Error("Post-state evidence must be collected by an independent run.");
+    const expectedTargetDigest = digestValue(result.resolvedTarget);
+    if (result.postState.targetDigest !== expectedTargetDigest) throw new Error("Post-state evidence target digest does not match the resolved target.");
+    if (Date.parse(result.postState.observedAt) <= Date.parse(result.completedAt)) {
+      throw new Error("Post-state evidence must be observed after operation completion.");
+    }
+  }
+  return result;
+}
+
+/** @param {string} root @param {string} resultPath */
+export async function readExternalOperationResult(root, resultPath) {
+  const resolved = resolveInside(root, resultPath, path.join(".artifacts", "ops-results"));
+  if (path.extname(resolved).toLowerCase() !== ".json") throw new Error("Operation result must be JSON.");
+  requireRegularFileWithoutSymlink(resolved, "Operation result");
+  const actual = await realpath(resolved);
+  resolveInside(root, actual, path.join(".artifacts", "ops-results"));
+  const raw = JSON.parse(await readFile(actual, "utf8"));
+  const requestId = operationResultSchema.shape.requestId.parse(raw?.requestId);
+  const expectedResultPath = path.join(canonicalPath(root), ".artifacts", "ops-results", `${requestId}.result.json`);
+  if (actual !== expectedResultPath) throw new Error("Operation result must use its canonical requestId-bound artifact path.");
+  const requestPath = `.artifacts/ops-requests/${requestId}.json`;
+  const { request } = await readExternalOperationRequest(root, requestPath);
+  return validateExternalOperationResult(raw, request);
 }
 
 /** @param {string[]} changedPaths */
@@ -511,24 +792,28 @@ export function requiredReviewContracts(changedPaths) {
 
 /** @param {unknown} value */
 export function validateVerification(value) {
-  return verificationSchema.parse(value);
+  const verification = verificationSchema.parse(value);
+  unique(verification.risk.reasons, "Verification risk reasons");
+  unique(verification.requiredReviewerFamilies, "Verification reviewer families");
+  return verification;
 }
 
 /** @param {unknown} value */
 export function validateReviewResult(value) {
   const review = reviewResultSchema.parse(value);
+  unique(review.risk.reasons, "Review risk reasons");
   unique(review.contracts, "Review contracts");
   unique(review.acceptanceAssessment.map(({ id }) => id), "Review acceptance assessment");
   return review;
 }
 
-/** @param {unknown} value @param {string} root */
-export function validateReviewPacket(value, root) {
+/** @param {unknown} value @param {string} root @param {unknown} [contractValue] */
+export function validateReviewPacket(value, root, contractValue) {
   const packet = reviewPacketSchema.parse(value);
-  if (packet.primaryModel === packet.reviewerModel) throw new Error("Review packet cannot request self-review.");
-  if (workflowConfiguration.reviewerMap[packet.primaryModel] !== packet.reviewerModel) {
-    throw new Error("Review packet does not use the opposite model.");
-  }
+  unique(packet.risk.reasons, "Review packet risk reasons");
+  unique(packet.requiredReviewerFamilies, "Review packet reviewer families");
+  if (packet.primaryModel.family === "unknown") throw new Error("unknown primary model family cannot satisfy review policy.");
+  if (packet.primaryModel.fallback) throw new Error("Primary model fallback cannot satisfy review policy.");
   if (packet.headSha !== packet.verifySha) throw new Error("Review packet verification SHA is stale.");
   const issueRoot = path.join(".artifacts", "issues", String(packet.issue));
   const headRoot = path.join(issueRoot, packet.headSha);
@@ -545,18 +830,44 @@ export function validateReviewPacket(value, root) {
   if (canonicalJson(packet.requiredContracts.toSorted()) !== canonicalJson(expectedContracts)) {
     throw new Error("Review packet privileged-path contracts are incomplete.");
   }
+  const expectedFamilies = requiredReviewerFamilies({
+    risk: packet.risk.level,
+    primaryFamily: packet.primaryModel.family,
+  });
+  if (canonicalJson(packet.requiredReviewerFamilies.toSorted()) !== canonicalJson(expectedFamilies)) {
+    throw new Error("Review packet reviewer-family requirements do not match execution policy.");
+  }
+  if (contractValue !== undefined) {
+    const contract = validateIssueContract(contractValue);
+    const expectedRisk = classifyRisk({
+      changedPaths: packet.changedPaths,
+      externalOperations: contract.externalOperations,
+    }, executionPolicy);
+    if (canonicalJson(packet.risk) !== canonicalJson(expectedRisk)) {
+      throw new Error("Review packet risk does not match execution policy.");
+    }
+  }
   return packet;
 }
 
-/** @param {unknown} reviewValue @param {unknown} packetValue @param {string} root */
-export function validateReviewAgainstPacket(reviewValue, packetValue, root) {
-  const packet = validateReviewPacket(packetValue, root);
+/** @param {unknown} reviewValue @param {unknown} packetValue @param {string} root @param {unknown} [contractValue] */
+export function validateReviewAgainstPacket(reviewValue, packetValue, root, contractValue) {
+  const packet = validateReviewPacket(packetValue, root, contractValue);
   const review = validateReviewResult(reviewValue);
   if (review.issue !== packet.issue) throw new Error("Review issue does not match the packet.");
-  if (review.primaryModel !== packet.primaryModel) throw new Error("Review primaryModel does not match the packet.");
-  if (review.reviewerModel !== packet.reviewerModel) throw new Error("Review reviewerModel does not match the packet.");
+  if (review.executionSurface !== packet.executionSurface) throw new Error("Review executionSurface does not match the packet.");
+  if (canonicalJson(review.primaryModel) !== canonicalJson(packet.primaryModel)) throw new Error("Review primaryModel does not match the packet.");
+  if (canonicalJson(review.risk) !== canonicalJson(packet.risk)) throw new Error("Review risk does not match the packet.");
+  if (
+    review.reviewerModel.family === "unknown" ||
+    !packet.requiredReviewerFamilies.includes(review.reviewerModel.family)
+  ) {
+    throw new Error(`Review family ${review.reviewerModel.family} is not required by the packet.`);
+  }
   if (review.headSha !== packet.headSha) throw new Error("Review headSha does not match the packet.");
   if (review.verifySha !== packet.verifySha) throw new Error("Review verifySha does not match the packet.");
+  if (review.verifyDigest !== packet.verifyDigest) throw new Error("Review verification digest does not match the packet.");
+  if (review.diffDigest !== packet.diffDigest) throw new Error("Review diff digest does not match the packet.");
   if (review.contractDigest !== packet.contractDigest) throw new Error("Review contractDigest does not match the packet.");
   if (canonicalJson(review.contracts.toSorted()) !== canonicalJson(packet.requiredContracts.toSorted())) {
     throw new Error("Review did not cover every required privileged-path contract.");
@@ -619,47 +930,61 @@ function checkExactAcceptanceMappings(ids, mappings, label) {
 }
 
 /**
- * @param {{currentHeadSha:string, contract:unknown, verification:unknown, packet:unknown, review:unknown, root:string}} input
+ * @param {{currentHeadSha:string, contract:unknown, verification:unknown, packet:unknown, reviews:unknown[], root:string}} input
  */
 export function runPremergeGate(input) {
   const contract = validateIssueContract(input.contract);
   const verification = validateVerification(input.verification);
-  const packet = validateReviewPacket(input.packet, input.root);
-  const review = validateReviewAgainstPacket(input.review, packet, input.root);
+  const packet = validateReviewPacket(input.packet, input.root, contract);
+  const reviewValues = z.array(z.unknown()).min(1).parse(input.reviews);
+  const reviews = reviewValues.map((review) => validateReviewAgainstPacket(review, packet, input.root, contract));
+  const reviewerFamilies = reviews.map(({ reviewerModel }) => reviewerModel.family);
+  validateReviewerFamilies({
+    risk: packet.risk.level,
+    primaryFamily: packet.primaryModel.family,
+    reviewerFamilies,
+  });
+  if (canonicalJson(reviewerFamilies.toSorted()) !== canonicalJson(packet.requiredReviewerFamilies.toSorted())) {
+    throw new Error("Review evidence must contain exactly the required reviewer families.");
+  }
   if (input.currentHeadSha !== verification.headSha) throw new Error("Verification evidence is stale for the current Head SHA.");
-  if (input.currentHeadSha !== review.headSha || input.currentHeadSha !== review.verifySha) {
+  if (reviews.some((review) => input.currentHeadSha !== review.headSha || input.currentHeadSha !== review.verifySha)) {
     throw new Error("Review evidence is stale for the current Head SHA.");
   }
   if (packet.headSha !== input.currentHeadSha || packet.verifySha !== input.currentHeadSha) {
     throw new Error("Review packet is stale for the current Head SHA.");
   }
-  if (verification.issue !== contract.issue || review.issue !== contract.issue) throw new Error("Evidence Issue mismatch.");
+  if (verification.issue !== contract.issue || reviews.some(({ issue }) => issue !== contract.issue)) throw new Error("Evidence Issue mismatch.");
   if (packet.repository !== contract.repository) throw new Error("Review packet repository mismatch.");
   if (packet.baseSha !== verification.baseSha) throw new Error("Review packet base SHA mismatch.");
-  if (verification.contractDigest !== contract.digest || review.contractDigest !== contract.digest) {
+  if (verification.executionSurface !== packet.executionSurface) throw new Error("Verification executionSurface does not match the packet.");
+  if (canonicalJson(verification.primaryModel) !== canonicalJson(packet.primaryModel)) throw new Error("Verification primaryModel does not match the packet.");
+  if (canonicalJson(verification.risk) !== canonicalJson(packet.risk)) throw new Error("Verification risk does not match the packet.");
+  if (canonicalJson(verification.requiredReviewerFamilies.toSorted()) !== canonicalJson(packet.requiredReviewerFamilies.toSorted())) {
+    throw new Error("Verification reviewer-family requirements do not match the packet.");
+  }
+  if (verification.contractDigest !== contract.digest || reviews.some(({ contractDigest }) => contractDigest !== contract.digest)) {
     throw new Error("Evidence contract digest mismatch.");
   }
   if (verification.status !== "passed" || verification.commands.some(({ status }) => status !== "passed")) {
     throw new Error("Mechanical verification has not passed.");
   }
-  if (
-    review.verdict !== "approved" ||
-    review.findings.some(({ blocking, severity }) => blocking || ["critical", "high"].includes(severity))
-  ) {
+  if (reviews.some((review) => review.verdict !== "approved" ||
+    review.findings.some(({ blocking, severity }) => blocking || ["critical", "high"].includes(severity)))) {
     throw new Error("Independent review has not approved the current Head.");
   }
   if (Date.parse(contract.fetchedAt) > Date.parse(verification.completedAt)) throw new Error("Verification predates the Issue contract.");
-  if (Date.parse(verification.completedAt) > Date.parse(review.reviewedAt)) throw new Error("Review predates verification.");
+  if (reviews.some(({ reviewedAt }) => Date.parse(verification.completedAt) > Date.parse(reviewedAt))) throw new Error("Review predates verification.");
   const ids = contract.acceptanceCriteria.map(({ id }) => id);
   checkExactAcceptanceMappings(ids, verification.acceptanceEvidence, "Verification evidence");
-  checkExactAcceptanceMappings(ids, review.acceptanceAssessment, "Review assessment");
+  for (const review of reviews) checkExactAcceptanceMappings(ids, review.acceptanceAssessment, `Review assessment (${review.reviewerModel.family})`);
   return {
     ok: true,
     issue: contract.issue,
     headSha: input.currentHeadSha,
     contractDigest: contract.digest,
-    reviewer: review.reviewerModel,
-    reviewedAt: review.reviewedAt,
+    risk: packet.risk,
+    reviewers: reviews.map(({ reviewerModel, reviewedAt }) => ({ family: reviewerModel.family, reviewedAt })),
   };
 }
 
@@ -688,6 +1013,8 @@ async function readArtifactJson(root, relativePath) {
  */
 export async function prepareReviewArtifacts(root, value) {
   const evidence = verificationInputSchema.parse(value);
+  const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
+  validateBranchForSurface(currentBranch, evidence.issue, evidence.executionSurface, executionPolicy);
   const currentHeadSha = runGit(root, ["rev-parse", "HEAD"]).trim();
   const baseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
   shaSchema.parse(currentHeadSha);
@@ -703,9 +1030,21 @@ export async function prepareReviewArtifacts(root, value) {
   const packetPath = `${headRoot}/review-packet.json`;
   const contract = validateIssueContract(await readArtifactJson(root, contractPath));
   if (contract.issue !== evidence.issue) throw new Error("Verification input Issue does not match the frozen contract.");
+  const repositoryDiff = runGit(root, ["diff", "--no-ext-diff", "--no-renames", "--binary", baseSha, currentHeadSha, "--"]);
+  const changedPaths = runGit(root, ["-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", "-z", baseSha, currentHeadSha, "--"])
+    .split("\0")
+    .filter(Boolean)
+    .map((candidate) => relativeFileSchema.parse(candidate));
+  if (changedPaths.length === 0) throw new Error("Review preparation requires at least one committed changed path.");
+  const risk = riskSchema.parse(classifyRisk({ changedPaths, externalOperations: contract.externalOperations }, executionPolicy));
+  const reviewerFamilies = requiredReviewerFamilies({ risk: risk.level, primaryFamily: evidence.primaryModel.family });
   const verification = validateVerification({
     schemaVersion: evidence.schemaVersion,
     issue: evidence.issue,
+    executionSurface: evidence.executionSurface,
+    primaryModel: evidence.primaryModel,
+    risk,
+    requiredReviewerFamilies: reviewerFamilies,
     baseSha,
     headSha: currentHeadSha,
     contractDigest: contract.digest,
@@ -716,31 +1055,27 @@ export async function prepareReviewArtifacts(root, value) {
     remainingWork: evidence.remainingWork,
     completedAt: evidence.completedAt,
   });
-  const repositoryDiff = runGit(root, ["diff", "--no-ext-diff", "--no-renames", "--binary", baseSha, currentHeadSha, "--"]);
-  const changedPaths = runGit(root, ["-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", "-z", baseSha, currentHeadSha, "--"])
-    .split("\0")
-    .filter(Boolean)
-    .map((candidate) => relativeFileSchema.parse(candidate));
-  if (changedPaths.length === 0) throw new Error("Review preparation requires at least one committed changed path.");
   const packet = validateReviewPacket({
-    schemaVersion: 1,
+    schemaVersion: 2,
     issue: evidence.issue,
     repository: contract.repository,
+    executionSurface: evidence.executionSurface,
     primaryModel: evidence.primaryModel,
-    reviewerModel: workflowConfiguration.reviewerMap[evidence.primaryModel],
+    risk,
+    requiredReviewerFamilies: reviewerFamilies,
     baseSha,
     headSha: currentHeadSha,
     verifySha: currentHeadSha,
     contractPath,
     contractDigest: contract.digest,
     verifyPath,
-    verifyDigest: digestValue(verification),
+    verifyDigest: digestUtf8(serializeJson(verification)),
     diffPath,
-    diffDigest: digestValue(repositoryDiff),
+    diffDigest: digestUtf8(repositoryDiff),
     changedPaths,
     requiredContracts: requiredReviewContracts(changedPaths),
     createdAt: evidence.completedAt,
-  }, root);
+  }, root, contract);
   await writeJson(path.join(root, verifyPath), verification);
   await writeFile(path.join(root, diffPath), repositoryDiff, "utf8");
   await writeJson(path.join(root, packetPath), packet);
@@ -752,11 +1087,13 @@ export async function recordReviewResult(root, issue, value) {
   if (!Number.isInteger(issue) || issue < 1) throw new Error("Issue must be a positive integer.");
   const currentHeadSha = runGit(root, ["rev-parse", "HEAD"]).trim();
   const headRoot = `.artifacts/issues/${issue}/${currentHeadSha}`;
+  const contract = await readArtifactJson(root, `.artifacts/issues/${issue}/issue-contract.json`);
   const packet = await readArtifactJson(root, `${headRoot}/review-packet.json`);
-  const review = validateReviewAgainstPacket(value, packet, root);
-  const reviewPath = `${headRoot}/review.json`;
+  const review = validateReviewAgainstPacket(value, packet, root, contract);
+  const reviewPath = `${headRoot}/reviews/${review.reviewerModel.family}.json`;
   await writeJson(path.join(root, reviewPath), review);
-  return { review, reviewPath, nextState: stateForReview(review) };
+  const nextState = review.verdict === "approved" ? "review-requested" : stateForReview(review);
+  return { review, reviewPath, nextState };
 }
 
 /**
@@ -775,14 +1112,21 @@ export async function loadAuthoritativeGateInput(root, issue) {
   const issueRoot = `.artifacts/issues/${issue}`;
   const headRoot = `${issueRoot}/${currentHeadSha}`;
   const contract = await readArtifactJson(root, `${issueRoot}/issue-contract.json`);
-  const verification = await readArtifactJson(root, `${headRoot}/verify.json`);
   const packet = await readArtifactJson(root, `${headRoot}/review-packet.json`);
-  const review = await readArtifactJson(root, `${headRoot}/review.json`);
-  const validatedPacket = validateReviewPacket(packet, root);
+  const validatedPacket = validateReviewPacket(packet, root, contract);
+  const verifyPath = resolveInside(root, validatedPacket.verifyPath, headRoot);
+  const verifyActualPath = await realpath(verifyPath);
+  resolveInside(root, verifyActualPath, headRoot);
+  const verificationSource = await readFile(verifyActualPath, "utf8");
+  const verification = JSON.parse(verificationSource);
+  const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
+  validateBranchForSurface(currentBranch, issue, validatedPacket.executionSurface, executionPolicy);
+  const reviews = await Promise.all(validatedPacket.requiredReviewerFamilies.map((family) =>
+    readArtifactJson(root, `${headRoot}/reviews/${family}.json`)));
   const authoritativeBaseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
   if (validatedPacket.baseSha !== authoritativeBaseSha) throw new Error("Review packet base SHA does not match the authoritative base ref.");
 
-  const verifyDigest = digestValue(verification);
+  const verifyDigest = digestUtf8(verificationSource);
   if (validatedPacket.verifyDigest !== verifyDigest) throw new Error("Review packet verification digest mismatch.");
 
   const diffPath = resolveInside(root, validatedPacket.diffPath, headRoot);
@@ -791,7 +1135,7 @@ export async function loadAuthoritativeGateInput(root, issue) {
   const recordedDiff = await readFile(diffActualPath, "utf8");
   const repositoryDiff = runGit(root, ["diff", "--no-ext-diff", "--no-renames", "--binary", authoritativeBaseSha, currentHeadSha, "--"]);
   if (recordedDiff !== repositoryDiff) throw new Error("Recorded review diff does not match the repository diff.");
-  if (validatedPacket.diffDigest !== digestValue(recordedDiff)) throw new Error("Review packet diff digest mismatch.");
+  if (validatedPacket.diffDigest !== digestUtf8(recordedDiff)) throw new Error("Review packet diff digest mismatch.");
 
   const repositoryChangedPaths = runGit(root, ["-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", "-z", authoritativeBaseSha, currentHeadSha, "--"])
     .split("\0")
@@ -802,7 +1146,7 @@ export async function loadAuthoritativeGateInput(root, issue) {
     throw new Error("Review packet changed paths do not match the repository diff.");
   }
 
-  return { currentHeadSha, contract, verification, packet, review, root };
+  return { currentHeadSha, contract, verification, packet, reviews, root };
 }
 
 /** @param {string} root @param {number} issue */
@@ -815,16 +1159,32 @@ export async function renderAuthoritativePullRequestBody(root, issue) {
   return renderPullRequestBody(await loadAuthoritativeGateInput(root, issue));
 }
 
-/** @param {string} root @param {number} issue @param {number} prNumber */
-export async function createMergeOperationRequest(root, issue, prNumber) {
+/**
+ * @param {string} root
+ * @param {number} issue
+ * @param {number} prNumber
+ * @param {{ executionSurface?: "codex-local" | "claude-local" | "cursor-cloud", runId?: string, activationEvidenceRef?: string | null }} [authorityInput]
+ */
+export async function createMergeOperationRequest(root, issue, prNumber, authorityInput = {}) {
   const input = await loadAuthoritativeGateInput(root, issue);
   const gate = runPremergeGate(input);
+  const executionSurface = authorityInput.executionSurface ?? input.verification.executionSurface;
+  const runId = authorityInput.runId ?? (executionSurface === "codex-local" ? `local-issue-${issue}-merge` : null);
+  if (!runId) throw new Error(`${executionSurface} merge request requires an explicit run identifier.`);
+  const provider = operationProvider("github.merge_pr");
+  const owner = expectedConnectorOwner(root, provider);
   const request = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     requestId: `issue-${issue}-github-merge-pr-1`,
     issue,
     operation: "github.merge_pr",
-    target: { kind: "github.repository", identifier: targetSources.github },
+    authority: {
+      executionSurface,
+      runId,
+      contractDigest: input.contract.digest,
+      activationEvidenceRef: authorityInput.activationEvidenceRef ?? null,
+      connectorIdentity: connectorIdentityFor(provider, owner),
+    },
     environment: "production",
     reasonCode: "reviewed-release",
     inputs: { issue, prNumber, headSha: gate.headSha, method: "squash" },
@@ -840,7 +1200,7 @@ export function renderPullRequestBody(input) {
   const gate = runPremergeGate(input);
   const contract = validateIssueContract(input.contract);
   const verification = validateVerification(input.verification);
-  const review = validateReviewResult(input.review);
+  const reviews = input.reviews.map(validateReviewResult);
   /** @param {string} value */
   const safe = (value) => value
     .replaceAll("`", "\\`")
@@ -854,7 +1214,9 @@ export function renderPullRequestBody(input) {
   const remainingWork = verification.remainingWork.length === 0
     ? "- None for this Issue."
     : verification.remainingWork.map((item) => `- ${safe(item)}`).join("\n");
-  return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Head SHA: \`${gate.headSha}\`\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Opposite-model review\n- Primary: ${review.primaryModel}\n- Reviewer: ${review.reviewerModel}\n- Reviewed SHA: \`${review.headSha}\`\n- Verdict: ${review.verdict}\n- Contracts: ${review.contracts.join(", ")}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
+  const reviewLines = reviews.map((review) => `- Reviewer ${review.reviewerModel.family}: ${safe(review.reviewerModel.configured)} | ${safe(review.reviewerModel.observed)} | ${review.reviewerModel.family} | ${review.reviewerModel.fallback} | ${review.verdict} | ${review.contracts.join(", ")}`).join("\n");
+  const riskReasons = verification.risk.reasons.length > 0 ? verification.risk.reasons.map(safe).join(", ") : "none";
+  return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Cross-model review\n- Execution surface: ${verification.executionSurface}\n- Primary configured model: ${safe(verification.primaryModel.configured)}\n- Primary observed model: ${safe(verification.primaryModel.observed)}\n- Primary family: ${verification.primaryModel.family}\n- Primary fallback: ${verification.primaryModel.fallback}\n- Risk: ${verification.risk.level}\n- Risk reasons: ${riskReasons}\n- Reviewed SHA: \`${gate.headSha}\`\n${reviewLines}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
 }
 
 /** @param {unknown} value @param {string} root */
@@ -897,8 +1259,7 @@ export function collectAndValidateCleanupPlan(evidenceValue, root) {
   const candidateBranches = runGit(root, [
     "for-each-ref",
     "--format=%(refname:short)",
-    `refs/heads/codex/${evidence.issue}-*`,
-    `refs/heads/claude/${evidence.issue}-*`,
+    ...Object.values(executionPolicy.surfaces).map(({ branchPrefix }) => `refs/heads/${branchPrefix}/${evidence.issue}-*`),
   ]).split(/\r?\n/u).filter(Boolean).toSorted();
   const candidateWorktrees = runGit(root, ["worktree", "list", "--porcelain"])
     .split(/\r?\n/u)
@@ -920,17 +1281,19 @@ export function collectAndValidateCleanupPlan(evidenceValue, root) {
 /** @param {string} outputPath @param {unknown} value */
 async function writeJson(outputPath, value) {
   await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeFile(outputPath, serializeJson(value), "utf8");
 }
 
 const fixtureSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   fetchedAt: timestampSchema,
   completedAt: timestampSchema,
   reviewedAt: timestampSchema,
   issueContract: issueContractInputSchema,
   slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
-  primaryModel: modelSchema,
+  executionSurface: surfaceSchema,
+  primaryModel: modelIdentitySchema,
+  reviewerModels: z.array(modelIdentitySchema).min(1),
   changedPaths: z.array(relativeFileSchema).min(1),
   commands: verificationSchema.shape.commands,
   acceptanceEvidence: verificationSchema.shape.acceptanceEvidence,
@@ -944,15 +1307,21 @@ const fixtureSchema = z.object({
 /** @param {unknown} fixtureValue @param {string} root */
 export async function simulateWorkflowFixture(fixtureValue, root) {
   const fixture = fixtureSchema.parse(fixtureValue);
-  const branch = `${fixture.primaryModel}/${fixture.issueContract.issue}-${fixture.slug}`;
+  const branchPrefix = executionPolicy.surfaces[fixture.executionSurface].branchPrefix;
+  const branch = validateBranchForSurface(
+    `${branchPrefix}/${fixture.issueContract.issue}-${fixture.slug}`,
+    fixture.issueContract.issue,
+    fixture.executionSurface,
+    executionPolicy,
+  );
   await mkdir(path.join(root, "config"), { recursive: true });
   await writeFile(path.join(root, ".gitignore"), ".artifacts/\n", "utf8");
   await writeJson(path.join(root, "config", "ownership.json"), {
     schemaVersion: 1,
     github: { owner: fixture.issueContract.repository.split("/")[0], repository: fixture.issueContract.repository.split("/")[1] },
-    supabase: { organizationName: "fixture", projectRef: null },
-    vercel: { scope: null, projectId: null },
-    cloudflare: { accountName: "fixture", zoneId: null, domains: [] },
+    supabase: { organizationName: "fixture", projectRef: "fixtureprojectref0001" },
+    vercel: { scope: "fixture-scope", projectId: "fixture-project" },
+    cloudflare: { accountId: "00000000000000000000000000000042", accountName: "fixture", zoneId: "00000000000000000000000000000042", domains: ["fixture.example.com"] },
   });
   await writeFile(path.join(root, "README.md"), "# Workflow fixture\n", "utf8");
   runGit(root, ["init", "--initial-branch=main"]);
@@ -979,8 +1348,9 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const contractPathRelative = path.join(issueRootRelative, "issue-contract.json").replaceAll("\\", "/");
   await writeJson(path.join(root, contractPathRelative), contract);
   const prepared = await prepareReviewArtifacts(root, {
-    schemaVersion: 1,
+    schemaVersion: 2,
     issue: contract.issue,
+    executionSurface: fixture.executionSurface,
     primaryModel: fixture.primaryModel,
     status: "passed",
     commands: fixture.commands,
@@ -990,20 +1360,24 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
     completedAt: fixture.completedAt,
   });
   const packet = prepared.packet;
-  const recorded = await recordReviewResult(root, contract.issue, {
-    schemaVersion: 1,
+  const recorded = await Promise.all(fixture.reviewerModels.map((reviewerModel) => recordReviewResult(root, contract.issue, {
+    schemaVersion: 2,
     issue: contract.issue,
+    executionSurface: packet.executionSurface,
     primaryModel: packet.primaryModel,
-    reviewerModel: packet.reviewerModel,
+    reviewerModel,
+    risk: packet.risk,
     headSha: packet.headSha,
     verifySha: packet.verifySha,
+    verifyDigest: packet.verifyDigest,
+    diffDigest: packet.diffDigest,
     contractDigest: contract.digest,
     verdict: "approved",
     contracts: packet.requiredContracts,
     findings: fixture.findings,
     acceptanceAssessment: fixture.acceptanceAssessment,
     reviewedAt: fixture.reviewedAt,
-  });
+  })));
   /** @type {{ current: string, previous: string, resumeState: string | null }} */
   let state = { current: "approved", previous: "proposed", resumeState: null };
   const transitions = [];
@@ -1017,14 +1391,38 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const gate = runPremergeGate(authoritativeInput);
   const prBody = renderPullRequestBody(authoritativeInput);
   await writeFile(path.join(headRoot, "pull-request.md"), prBody, "utf8");
-  const merge = await createMergeOperationRequest(root, contract.issue, fixture.prNumber);
+  let operationAuthority = {};
+  if (fixture.executionSurface === "cursor-cloud") {
+    const runId = "bc-00000000-0000-0000-0000-000000000042";
+    const activationEvidenceRef = `.artifacts/cursor/${runId}.json`;
+    await writeJson(path.join(root, activationEvidenceRef), {
+      schemaVersion: 1,
+      surface: "cursor-cloud",
+      run: { id: runId, modelObserved: "composer-2.5" },
+      repository: { fullName: contract.repository, branch, headSha },
+      build: { status: "ready", node: "24.13.0", npm: "11.6.2", docker: true, chromium: true },
+      reviewers: {
+        openai: { observed: "gpt-5.6-sol", repositoryReadProbe: "passed", fileProbe: "denied", shellProbe: "denied", providerToolProbe: "denied", completionProbe: "passed" },
+        anthropic: { observed: "claude-opus-5", repositoryReadProbe: "passed", fileProbe: "denied", shellProbe: "denied", providerToolProbe: "denied", completionProbe: "passed" },
+      },
+      providers: {
+        github: { owner: contract.repository.split("/")[0], fullName: contract.repository, status: "verified" },
+        supabase: { organizationName: "fixture", projectRef: "fixtureprojectref0001", status: "verified" },
+        vercel: { scope: "fixture-scope", projectId: "fixture-project", status: "verified" },
+        cloudflare: { accountId: "00000000000000000000000000000042", accountName: "fixture", zoneId: "00000000000000000000000000000042", domain: "fixture.example.com", status: "verified" },
+      },
+      verifiedAt: new Date().toISOString(),
+    });
+    operationAuthority = { executionSurface: "cursor-cloud", runId, activationEvidenceRef };
+  }
+  const merge = await createMergeOperationRequest(root, contract.issue, fixture.prNumber, operationAuthority);
 
   return { gate, state, branch, baseSha, headSha, request: merge.request, paths: {
     contract: contractPathRelative,
     verification: prepared.paths.verification,
     diff: prepared.paths.diff,
     packet: prepared.paths.packet,
-    review: recorded.reviewPath,
+    reviews: recorded.map(({ reviewPath }) => reviewPath),
     pullRequest: path.join(headRootRelative, "pull-request.md").replaceAll("\\", "/"),
     mergeRequest: merge.requestPath,
   } };
@@ -1033,8 +1431,12 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
 export const schemas = {
   issueContractInputSchema,
   issueContractSchema,
+  modelIdentitySchema,
+  riskSchema,
   verificationSchema,
   reviewResultSchema,
   reviewPacketSchema,
   cleanupPlanSchema,
+  externalRequestBaseSchema,
+  operationResultSchema,
 };
