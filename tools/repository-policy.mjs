@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findCredentialEvidence } from "./template-core.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const defaultRoot = path.resolve(path.dirname(modulePath), "..");
@@ -50,17 +51,6 @@ const requiredFiles = [
   "tests/domain-workflow.test.mjs",
   "tests/workstation-doctor.test.mjs",
 ];
-const secretPatterns = [
-  /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----/u,
-  /\bgh[pousr]_[A-Za-z0-9_]{30,}\b/u,
-  /\bsbp_[A-Za-z0-9]{20,}\b/u,
-  /\bsb_secret_[A-Za-z0-9_-]{20,}\b/u,
-  /\bsk_live_[A-Za-z0-9]{20,}\b/u,
-  /\bAKIA[0-9A-Z]{16}\b/u,
-  /(?:SERVICE_ROLE|SUPABASE_SERVICE_ROLE_KEY)\s*[:=]\s*["']?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/iu,
-  /\bv1\.0-[A-Za-z0-9_-]{40,}\b/u,
-];
-
 /** @param {unknown} value @returns {unknown} */
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -90,7 +80,7 @@ function collectTrackedFiles(root) {
 
 /** @param {string} content */
 export function containsPotentialSecret(content) {
-  return secretPatterns.some((pattern) => pattern.test(content));
+  return findCredentialEvidence(content).length > 0;
 }
 
 /** @param {{ authority: string, decisions: string }} input */

@@ -40,6 +40,7 @@ The canonical state names, transitions, reviewer mapping, and privileged-path co
 ## 5. Review
 
 - Derive risk from the exact changed paths and frozen external operations. Normal risk needs one approved evaluator whose observed family differs from the primary family. High risk needs separate approved OpenAI-family and Anthropic-family results, and at least one differs from the primary.
+- Canonical authority/security/workflow/activation/verification/onboarding documentation and Cursor decision/specification files are exact-path high risk under `config/execution.json`; a normal-risk PR claim for any of them fails the GitHub gate.
 - Send the same bounded Issue contract, byte-exact diff, verification evidence, and required contracts to each evaluator independently.
 - The reviewer remains read-only and returns severity-ranked findings in the strict result contract. Cursor activation must have proved file/shell/provider-tool denial for each subagent slot.
 - Address material findings or record a concrete rationale before merge.

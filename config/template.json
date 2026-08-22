@@ -50,7 +50,7 @@
       "config/ownership.json": 1,
       "config/template.json": 1,
       "docs/domain.md": 1,
-      "tests/cursor-cloud-doctor.test.mjs": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 2,
       "tests/domain-workflow.test.mjs": 10
     },
     "localhostOrigin": {
@@ -106,7 +106,7 @@
       "config/ownership.json": 1,
       "config/template.json": 2,
       "docs/domain.md": 1,
-      "tests/cursor-cloud-doctor.test.mjs": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 2,
       "tests/domain-workflow.test.mjs": 15
     },
     "githubRepository": {
@@ -152,7 +152,7 @@
       "package.json": 1,
       "supabase/config.toml": 1,
       "tests/client-bundle-scan.test.ts": 1,
-      "tests/cursor-cloud-doctor.test.mjs": 1,
+      "tests/cursor-cloud-doctor.test.mjs": 2,
       "tests/deployment-preflight.test.mjs": 1,
       "tests/deployment-release.test.mjs": 2,
       "tests/deployment-workflow-lint.test.mjs": 1,

@@ -33,7 +33,7 @@ RUN apt-get update \\
 const ownership = {
   schemaVersion: 1,
   github: { owner: "yuto1201", repository: "Web-Template" },
-  supabase: { organizationName: "yuto1201's Org", projectRef: null },
+  supabase: { organizationName: "yuto1201's Org", projectRef: "abcdefghijklmnopqrst" },
   vercel: { scope: "team_public", projectId: "prj_public" },
   cloudflare: {
     accountId: "public_account_id",
@@ -50,21 +50,44 @@ const executionPolicy = {
   },
 };
 
+const referenceTime = new Date("2026-08-22T12:05:00+09:00");
+const headSha = "a".repeat(40);
+
 const ready = {
   schemaVersion: 1,
   surface: "cursor-cloud",
   run: { id: "bc-00000000-0000-0000-0000-000000000029", modelObserved: "composer-2.5" },
-  repository: { fullName: "yuto1201/Web-Template", branch: "cursor/29-cloud-mode" },
+  repository: { fullName: "yuto1201/Web-Template", branch: "cursor/29-cloud-mode", headSha },
   build: { status: "ready", node: "24.13.0", npm: "11.6.2", docker: true, chromium: true },
   reviewers: {
-    openai: { observed: "gpt-5.6-sol", readonlyProbe: "passed", providerToolProbe: "denied" },
-    anthropic: { observed: "claude-opus-5", readonlyProbe: "passed", providerToolProbe: "denied" },
+    openai: {
+      observed: "gpt-5.6-sol",
+      repositoryReadProbe: "passed",
+      fileProbe: "denied",
+      shellProbe: "denied",
+      providerToolProbe: "denied",
+      completionProbe: "passed",
+    },
+    anthropic: {
+      observed: "claude-opus-5",
+      repositoryReadProbe: "passed",
+      fileProbe: "denied",
+      shellProbe: "denied",
+      providerToolProbe: "denied",
+      completionProbe: "passed",
+    },
   },
   providers: {
-    github: { owner: "yuto1201", target: "yuto1201/Web-Template", status: "verified" },
-    supabase: { owner: "yuto1201's Org", targetSource: "config/ownership.json", status: "verified" },
-    vercel: { ownerSource: "config/ownership.json", targetSource: "config/ownership.json", status: "verified" },
-    cloudflare: { owner: "Yuto Dev", targetSource: "config/ownership.json", status: "verified" },
+    github: { owner: "yuto1201", fullName: "yuto1201/Web-Template", status: "verified" },
+    supabase: { organizationName: "yuto1201's Org", projectRef: "abcdefghijklmnopqrst", status: "verified" },
+    vercel: { scope: "team_public", projectId: "prj_public", status: "verified" },
+    cloudflare: {
+      accountId: "public_account_id",
+      accountName: "Yuto Dev",
+      zoneId: "public_zone_id",
+      domain: "web-template.yutodev.com",
+      status: "verified",
+    },
   },
   verifiedAt: "2026-08-22T12:00:00+09:00",
 };
@@ -79,6 +102,7 @@ function readySnapshot(overrides = {}) {
       packageNpmVersion: "11.6.2",
       packageManager: "npm@11.6.2",
       branch: "cursor/29-cloud-mode",
+      headSha,
       environment: structuredClone(environment),
       dockerfile,
     },
@@ -90,12 +114,16 @@ function readySnapshot(overrides = {}) {
 }
 
 function validateActivation(value) {
-  return validateActivationEvidence(value, executionPolicy);
+  return validateActivationEvidence(value, executionPolicy, { referenceTime });
+}
+
+function evaluate(snapshot, options = {}) {
+  return evaluateCursorCloud(snapshot, { ...options, referenceTime });
 }
 
 describe("Cursor Cloud doctor", () => {
   it("accepts deterministic repository/build readiness and records the base-image warning", () => {
-    const report = evaluateCursorCloud(readySnapshot(), { build: true });
+    const report = evaluate(readySnapshot(), { build: true });
 
     expect(report.status).toBe("ready");
     expect(report.blockers).toEqual([]);
@@ -110,7 +138,7 @@ describe("Cursor Cloud doctor", () => {
     snapshot.runtime.node = "25.0.0";
     snapshot.runtime.npm = "12.0.0";
 
-    const report = evaluateCursorCloud(snapshot, { build: true });
+    const report = evaluate(snapshot, { build: true });
 
     expect(report.status).toBe("blocked:environment");
     expect(report.blockers).toEqual(expect.arrayContaining([
@@ -121,7 +149,7 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("names unavailable Docker and Chromium without probing provider credentials", () => {
-    const report = evaluateCursorCloud(readySnapshot({
+    const report = evaluate(readySnapshot({
       runtime: { node: "24.13.0", npm: "11.6.2", docker: false, chromium: false },
     }), { build: true });
 
@@ -132,7 +160,7 @@ describe("Cursor Cloud doctor", () => {
 
   it("validates a strict redacted activation fixture", () => {
     expect(validateActivation(ready)).toEqual(ready);
-    expect(evaluateCursorCloud(readySnapshot(), { build: true, activation: ready })).toMatchObject({
+    expect(evaluate(readySnapshot(), { build: true, activation: ready })).toMatchObject({
       status: "ready",
       blockers: [],
     });
@@ -165,8 +193,11 @@ describe("Cursor Cloud doctor", () => {
       ["parent model", (value) => { value.run.modelObserved = "unknown"; }],
       ["reviewer model", (value) => { value.reviewers.openai.observed = "unknown"; }],
       ["fallback model", (value) => { value.reviewers.openai.observed = "claude-opus-5"; }],
-      ["readonly probe", (value) => { value.reviewers.anthropic.readonlyProbe = "failed"; }],
+      ["repository-read probe", (value) => { value.reviewers.anthropic.repositoryReadProbe = "failed"; }],
+      ["file probe", (value) => { value.reviewers.openai.fileProbe = "allowed"; }],
+      ["shell probe", (value) => { value.reviewers.anthropic.shellProbe = "allowed"; }],
       ["provider-tool probe", (value) => { value.reviewers.openai.providerToolProbe = "allowed"; }],
+      ["completion probe", (value) => { value.reviewers.anthropic.completionProbe = "failed"; }],
     ];
 
     for (const [label, mutate] of mutations) {
@@ -199,7 +230,7 @@ describe("Cursor Cloud doctor", () => {
     fallbackAnthropic.reviewers.anthropic.observed = "claude-fable-5";
     expect(() => validateActivation(fallbackAnthropic)).toThrow(/configured reviewer model/iu);
 
-    expect(() => validateActivationEvidence(ready, {})).toThrow(/trusted reviewer model/iu);
+    expect(() => validateActivationEvidence(ready, {}, { referenceTime })).toThrow(/trusted reviewer model/iu);
   });
 
   it("maps invalid activation surfaces to the repository blocked-state taxonomy", () => {
@@ -213,15 +244,15 @@ describe("Cursor Cloud doctor", () => {
     for (const [status, mutate] of cases) {
       const value = structuredClone(ready);
       mutate(value);
-      expect(evaluateCursorCloud(readySnapshot(), { build: true, activation: value }).status).toBe(status);
+      expect(evaluate(readySnapshot(), { build: true, activation: value }).status).toBe(status);
     }
   });
 
   it("blocks activation when observed owners or targets differ from public ownership config", () => {
     const wrongGitHub = structuredClone(ready);
     wrongGitHub.providers.github.owner = "different-owner";
-    wrongGitHub.providers.github.target = "different-owner/Web-Template";
-    const githubReport = evaluateCursorCloud(readySnapshot(), { build: true, activation: wrongGitHub });
+    wrongGitHub.providers.github.fullName = "different-owner/Web-Template";
+    const githubReport = evaluate(readySnapshot(), { build: true, activation: wrongGitHub });
     expect(githubReport.status).toBe("blocked:ops");
     expect(githubReport.blockers).toEqual(expect.arrayContaining([
       "github-owner-mismatch",
@@ -229,30 +260,91 @@ describe("Cursor Cloud doctor", () => {
     ]));
 
     const wrongProviders = structuredClone(ready);
-    wrongProviders.providers.supabase.owner = "Different Org";
-    wrongProviders.providers.cloudflare.owner = "Different Account";
-    const providerReport = evaluateCursorCloud(readySnapshot(), { build: true, activation: wrongProviders });
+    wrongProviders.providers.supabase.organizationName = "Different Org";
+    wrongProviders.providers.supabase.projectRef = "differentprojectref01";
+    wrongProviders.providers.vercel.scope = "different-scope";
+    wrongProviders.providers.vercel.projectId = "different-project";
+    wrongProviders.providers.cloudflare.accountId = "different-account-id";
+    wrongProviders.providers.cloudflare.accountName = "Different Account";
+    wrongProviders.providers.cloudflare.zoneId = "different-zone-id";
+    wrongProviders.providers.cloudflare.domain = "different.example.com";
+    const providerReport = evaluate(readySnapshot(), { build: true, activation: wrongProviders });
     expect(providerReport.status).toBe("blocked:ops");
     expect(providerReport.blockers).toEqual(expect.arrayContaining([
       "supabase-owner-mismatch",
+      "supabase-project-mismatch",
+      "vercel-scope-mismatch",
+      "vercel-project-mismatch",
+      "cloudflare-account-id-mismatch",
       "cloudflare-owner-mismatch",
+      "cloudflare-zone-mismatch",
+      "cloudflare-domain-mismatch",
     ]));
+  });
+
+  it("blocks activation when any configured provider target is unavailable", () => {
+    const snapshot = readySnapshot();
+    snapshot.ownership.supabase.projectRef = null;
+
+    const report = evaluate(snapshot, { build: true, activation: ready });
+
+    expect(report.status).toBe("blocked:ops");
+    expect(report.blockers).toContain("supabase-project-unconfigured");
   });
 
   it("binds activation evidence to the exact collected Cursor branch", () => {
     const stale = structuredClone(ready);
     stale.repository.branch = "cursor/999-stale-activation";
-    const staleReport = evaluateCursorCloud(readySnapshot(), { build: true, activation: stale });
+    const staleReport = evaluate(readySnapshot(), { build: true, activation: stale });
     expect(staleReport.status).toBe("blocked:conflict");
     expect(staleReport.blockers).toContain("activation-branch-mismatch");
 
     for (const branch of [null, "codex/29-cursor-cloud-mode", "feature"] ) {
-      const report = evaluateCursorCloud(readySnapshot({
+      const report = evaluate(readySnapshot({
         repository: { ...readySnapshot().repository, branch },
       }), { build: true, activation: ready });
       expect(report.status).toBe("blocked:conflict");
       expect(report.blockers).toContain(branch === null ? "current-branch-unavailable" : "current-branch-not-cursor");
     }
+  });
+
+  it("binds activation evidence to the exact collected Head", () => {
+    const stale = structuredClone(ready);
+    stale.repository.headSha = "b".repeat(40);
+
+    const report = evaluate(readySnapshot(), { build: true, activation: stale });
+
+    expect(report.status).toBe("blocked:conflict");
+    expect(report.blockers).toContain("activation-head-mismatch");
+
+    const unavailable = readySnapshot();
+    unavailable.repository.headSha = null;
+    expect(evaluate(unavailable, { build: true, activation: ready })).toMatchObject({
+      status: "blocked:conflict",
+      blockers: expect.arrayContaining(["current-head-unavailable"]),
+    });
+  });
+
+  it("requires activation evidence to be fresh and not future-dated", () => {
+    const oldestAccepted = structuredClone(ready);
+    oldestAccepted.verifiedAt = "2026-08-21T12:05:00+09:00";
+    expect(validateActivation(oldestAccepted)).toEqual(oldestAccepted);
+
+    const newestAccepted = structuredClone(ready);
+    newestAccepted.verifiedAt = "2026-08-22T12:10:00+09:00";
+    expect(validateActivation(newestAccepted)).toEqual(newestAccepted);
+
+    const stale = structuredClone(ready);
+    stale.verifiedAt = "2026-08-21T12:04:59+09:00";
+    expect(() => validateActivation(stale)).toThrow(/fresh/iu);
+    expect(evaluate(readySnapshot(), { build: true, activation: stale })).toMatchObject({
+      status: "blocked:conflict",
+      blockers: expect.arrayContaining(["activation-evidence-invalid"]),
+    });
+
+    const future = structuredClone(ready);
+    future.verifiedAt = "2026-08-22T12:10:01+09:00";
+    expect(() => validateActivation(future)).toThrow(/fresh/iu);
   });
 
   it("collects only non-secret repository/runtime facts", async () => {
@@ -261,11 +353,14 @@ describe("Cursor Cloud doctor", () => {
     try {
       const snapshot = await collectCursorCloudSnapshot(path.resolve("."));
       const branchResult = spawnSync("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf8" });
+      const headResult = spawnSync("git", ["rev-parse", "--verify", "HEAD"], { encoding: "utf8" });
       const expectedBranch = branchResult.status === 0 ? `${branchResult.stdout}`.trim() : null;
+      const expectedHead = headResult.status === 0 ? `${headResult.stdout}`.trim() : null;
       expect(JSON.stringify(snapshot)).not.toContain(marker);
       expect(snapshot.repository.environment).toEqual(environment);
       expect(snapshot.repository.dockerfile).toContain("FROM node:24.13.0-bookworm");
       expect(snapshot.repository.branch).toBe(expectedBranch);
+      expect(snapshot.repository.headSha).toBe(expectedHead);
       expect(snapshot.ownership.github).toEqual({ owner: "yuto1201", repository: "Web-Template" });
       expect(snapshot.executionPolicy.cursorModels).toEqual(executionPolicy.cursorModels);
     } finally {
@@ -297,12 +392,25 @@ describe("Cursor Cloud doctor", () => {
         cwd: ambientRoot,
         encoding: "utf8",
       }).status).toBe(0);
+      await writeFile(path.join(targetRoot, "target-marker.txt"), "target\n", "utf8");
+      await writeFile(path.join(ambientRoot, "ambient-marker.txt"), "ambient\n", "utf8");
+      for (const fixtureRoot of [targetRoot, ambientRoot]) {
+        expect(spawnSync("git", ["add", "."], { cwd: fixtureRoot, encoding: "utf8" }).status).toBe(0);
+        expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture"], {
+          cwd: fixtureRoot,
+          encoding: "utf8",
+        }).status).toBe(0);
+      }
 
       process.chdir(ambientRoot);
       const snapshot = await collectCursorCloudSnapshot(targetRoot);
+      const expectedHead = `${spawnSync("git", ["rev-parse", "HEAD"], { cwd: targetRoot, encoding: "utf8" }).stdout}`.trim();
+      const ambientHead = `${spawnSync("git", ["rev-parse", "HEAD"], { cwd: ambientRoot, encoding: "utf8" }).stdout}`.trim();
 
       expect(snapshot.repository.branch).toBe("cursor/777-target");
       expect(snapshot.repository.branch).not.toBe("cursor/888-ambient");
+      expect(snapshot.repository.headSha).toBe(expectedHead);
+      expect(snapshot.repository.headSha).not.toBe(ambientHead);
     } finally {
       process.chdir(originalCwd);
       await rm(temporary, { recursive: true, force: true });
@@ -310,7 +418,7 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("formats activation output without rendering activation evidence values", () => {
-    const report = evaluateCursorCloud(readySnapshot(), { build: true, activation: ready });
+    const report = evaluate(readySnapshot(), { build: true, activation: ready });
     const output = formatCursorCloudReport(report, readySnapshot().ownership, true);
 
     expect(output).toContain("Status: ready");
@@ -330,7 +438,7 @@ describe("Cursor Cloud doctor", () => {
       await writeFile(path.join(root, ".env.local"), "PROVIDER_TOKEN=must-not-be-read\n", "utf8");
       await symlink(path.join(root, ".env.local"), path.join(artifactDirectory, "linked.json"));
 
-      await expect(readActivationEvidence(root, ".artifacts/cursor/activation.json", executionPolicy)).resolves.toEqual(ready);
+      await expect(readActivationEvidence(root, ".artifacts/cursor/activation.json", executionPolicy, { referenceTime })).resolves.toEqual(ready);
       await expect(readActivationEvidence(root, ".env.local", executionPolicy)).rejects.toThrow(/redacted artifact directory/iu);
       await expect(readActivationEvidence(root, ".artifacts/cursor/linked.json", executionPolicy)).rejects.toThrow(/regular file/iu);
       await expect(readActivationEvidence(root, ".artifacts/cursor/../activation.json", executionPolicy)).rejects.toThrow(/redacted artifact directory/iu);

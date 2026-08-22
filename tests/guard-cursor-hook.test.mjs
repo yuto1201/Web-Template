@@ -150,19 +150,30 @@ describe("Cursor Cloud hook guard", () => {
     ".claude/settings.json",
     ".codex/agents/change-evaluator.toml",
     "config/agents.json",
+    "config/acceptance.json",
     "config/execution.json",
     "config/github-ruleset.json",
     "config/ownership.json",
     "config/review-contract.schema.json",
+    "config/template.json",
     "config/workflow.json",
     "docs/authority.md",
+    "docs/security.md",
     "docs/workflow.md",
+    "docs/activation.md",
+    "docs/verification.md",
+    "docs/onboarding-cursor-cloud.md",
+    "specs/decisions.md",
     "specs/cursor-cloud.md",
     "tools/guard-claude-tool.mjs",
     "tools/guard-cursor-hook.mjs",
     "tools/github-review-gate.mjs",
     "tools/issue-workflow.mjs",
     "tools/repository-policy.mjs",
+    "tools/template-core.mjs",
+    "tools/verify-template-instantiation.mjs",
+    "tools/verify-acceptance-trace.mjs",
+    "tools/cursor-cloud-doctor.mjs",
     "tools/workflow-core.mjs",
     ".artifacts/issues/29/deadbeef/review-packet.json",
     ".artifacts/ops-results/issue-29.result.json",
@@ -177,6 +188,24 @@ describe("Cursor Cloud hook guard", () => {
       file_path: path.join(fixtureRoot, relativePath),
       edits: [],
     })).toBe("deny");
+  });
+
+  it.each([
+    ["canonical config", "config/acceptance.json"],
+    ["authority documentation", "docs/security.md"],
+    ["accepted decisions", "specs/decisions.md"],
+    ["verification tooling", "tools/verify-acceptance-trace.mjs"],
+  ])("classifies %s path %s as protected without blocking ordinary source", (_category, relativePath) => {
+    expect(decision({
+      hook_event_name: "preToolUse",
+      tool_name: "Write",
+      tool_input: { path: path.join(fixtureRoot, relativePath), contents: "rewrite" },
+    })).toBe("deny");
+    expect(decision({
+      hook_event_name: "preToolUse",
+      tool_name: "Write",
+      tool_input: { path: path.join(fixtureRoot, "src", "feature.ts"), contents: "ordinary" },
+    })).toBe("allow");
   });
 
   it("denies credential and environment reads without returning the candidate value", () => {

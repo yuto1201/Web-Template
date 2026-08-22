@@ -12,6 +12,7 @@ export const providerPlaceholders = Object.freeze({
 });
 
 export const cursorTemplateGuardrailPaths = Object.freeze([
+  ".cursor/Dockerfile",
   ".cursor/environment.json",
   ".cursor/hooks.json",
   ".cursor/agents/change-evaluator-anthropic.md",
@@ -36,13 +37,58 @@ const ignoredDirectories = new Set([
 const ignoredFileExtensions = new Set([
   ".gif", ".ico", ".jpeg", ".jpg", ".pdf", ".png", ".tsbuildinfo", ".webp", ".zip",
 ]);
-const templateCredentialPatterns = [
-  /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----/u,
-  /\bgh[pousr]_[A-Za-z0-9_]{30,}\b/u,
-  /\bsbp_[A-Za-z0-9]{20,}\b/u,
-  /\bsb_secret_[A-Za-z0-9_-]{20,}\b/u,
-  /\bsk_live_[A-Za-z0-9]{20,}\b/u,
-];
+const credentialEvidencePatterns = Object.freeze([
+  {
+    kind: "supabase-service-role-assignment",
+    source: `["']?(?:SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SECRET_KEY|SERVICE_ROLE_KEY)["']?\\s*[:=]\\s*["']?(?:eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}|sb_(?:secret|p)_[A-Za-z0-9_-]{20,})`,
+    flags: "giu",
+  },
+  {
+    kind: "vercel-token-assignment",
+    source: `["']?(?:VERCEL_TOKEN|VERCEL_ACCESS_TOKEN)["']?\\s*[:=]\\s*["']?[A-Za-z0-9_-]{20,}`,
+    flags: "giu",
+  },
+  {
+    kind: "cloudflare-credential-assignment",
+    source: `["']?(?:CLOUDFLARE_API_TOKEN|CF_API_TOKEN|CLOUDFLARE_GLOBAL_API_KEY|CF_API_KEY)["']?\\s*[:=]\\s*["']?[A-Za-z0-9_-]{20,}`,
+    flags: "giu",
+  },
+  {
+    kind: "aws-secret-assignment",
+    source: `["']?(?:AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)["']?\\s*[:=]\\s*["']?[A-Za-z0-9/+=_-]{32,}`,
+    flags: "giu",
+  },
+  { kind: "private-key", source: "-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----", flags: "gu" },
+  { kind: "github-fine-grained-token", source: "\\bgithub_pat_[A-Za-z0-9_]{20,}\\b", flags: "gu" },
+  { kind: "github-classic-token", source: "\\bgh[pousr]_[A-Za-z0-9_]{30,}\\b", flags: "gu" },
+  { kind: "aws-access-key", source: "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b", flags: "gu" },
+  { kind: "supabase-access-token", source: "\\bsbp_[A-Za-z0-9]{20,}\\b", flags: "gu" },
+  { kind: "supabase-secret-key", source: "\\bsb_secret_[A-Za-z0-9_-]{20,}\\b", flags: "gu" },
+  { kind: "stripe-live-key", source: "\\bsk_live_[A-Za-z0-9]{20,}\\b", flags: "gu" },
+  { kind: "cloudflare-legacy-key", source: "\\bv1\\.0-[A-Za-z0-9_-]{40,}\\b", flags: "gu" },
+]);
+
+/**
+ * Return only fixed credential categories and offsets; never return candidate values.
+ * Overlapping raw-token and assignment matches represent one credential finding.
+ * @param {string} content
+ */
+export function findCredentialEvidence(content) {
+  /** @type {Array<{ kind: string, index: number, end: number }>} */
+  const findings = [];
+  for (const definition of credentialEvidencePatterns) {
+    const pattern = new RegExp(definition.source, definition.flags);
+    for (const match of content.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      const end = index + match[0].length;
+      if (findings.some((finding) => index < finding.end && end > finding.index)) continue;
+      findings.push({ kind: definition.kind, index, end });
+    }
+  }
+  return findings
+    .toSorted((left, right) => left.index - right.index || left.kind.localeCompare(right.kind))
+    .map(({ kind, index }) => ({ kind, index }));
+}
 const portOffsets = Object.freeze({
   supabaseBase: 0,
   supabaseApi: 1,
@@ -272,14 +318,19 @@ export async function discoverOccurrences(root, tokens) {
 
 /** @param {string} root */
 export async function verifyCursorTemplateRetention(root) {
+  let sourceAccountCredentials = 0;
+  const credentialPaths = [];
   for (const relative of cursorTemplateGuardrailPaths) {
     const content = await readFile(path.join(root, relative), "utf8");
     assert(content.length > 0, `Retained Cursor guardrail is empty: ${relative}.`);
-    assert(
-      !templateCredentialPatterns.some((pattern) => pattern.test(content)),
-      `Retained Cursor guardrail contains a provider credential: ${relative}.`,
-    );
+    const findings = findCredentialEvidence(content);
+    sourceAccountCredentials += findings.length;
+    if (findings.length > 0) credentialPaths.push(relative);
   }
+  assert(
+    sourceAccountCredentials === 0,
+    `Retained Cursor guardrail contains a provider credential: ${credentialPaths.join(", ")}.`,
+  );
   const expectedAgents = cursorTemplateGuardrailPaths
     .filter((relative) => relative.startsWith(".cursor/agents/"))
     .map((relative) => path.basename(relative))
@@ -290,6 +341,9 @@ export async function verifyCursorTemplateRetention(root) {
     "Generated repository must retain exactly the six canonical Cursor agents.",
   );
   const readme = await readFile(path.join(root, "README.md"), "utf8");
+  const readmeCredentialFindings = findCredentialEvidence(readme);
+  sourceAccountCredentials += readmeCredentialFindings.length;
+  assert(sourceAccountCredentials === 0, "Retained Cursor onboarding link contains a provider credential.");
   assert(
     readme.includes("[Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md)"),
     "Generated repository must link to Cursor Cloud onboarding.",
@@ -298,6 +352,7 @@ export async function verifyCursorTemplateRetention(root) {
     files: [...cursorTemplateGuardrailPaths],
     cursorAgents: actualAgents.length,
     onboarding: "docs/onboarding-cursor-cloud.md",
+    sourceAccountCredentials,
   };
 }
 

@@ -12,6 +12,7 @@ import {
 } from "../tools/template-core.mjs";
 
 const cursorGuardrailPaths = [
+  ".cursor/Dockerfile",
   ".cursor/environment.json",
   ".cursor/hooks.json",
   ".cursor/agents/change-evaluator-anthropic.md",
@@ -79,6 +80,7 @@ async function sourceFixture() {
     "utf8",
   );
   await writeFile(path.join(root, ".cursor", "environment.json"), "{\"build\":{}}\n", "utf8");
+  await writeFile(path.join(root, ".cursor", "Dockerfile"), "FROM node:24.13.0-bookworm\n", "utf8");
   await writeFile(path.join(root, ".cursor", "hooks.json"), "{\"version\":1}\n", "utf8");
   for (const relative of cursorGuardrailPaths.filter((candidate) => candidate.startsWith(".cursor/agents/"))) {
     const name = path.basename(relative, ".md");
@@ -198,6 +200,7 @@ describe("template initialization", () => {
       files: cursorGuardrailPaths,
       cursorAgents: 6,
       onboarding: "docs/onboarding-cursor-cloud.md",
+      sourceAccountCredentials: 0,
     });
     expect(after).toEqual(before);
     expect(await readFile(path.join(root, "README.md"), "utf8")).toContain(
@@ -215,6 +218,23 @@ describe("template initialization", () => {
     );
 
     await expect(templateCore.verifyCursorTemplateRetention(root)).rejects.toThrow(/credential/u);
+  });
+
+  it("uses one detector across retained paths and derives credential counts", async () => {
+    const values = [
+      ["github", "_pat_", "22_BBB", "B".repeat(40)].join(""),
+      ["VERCEL_TOKEN", "=", "v".repeat(32)].join(""),
+      ["CF_API_KEY", "=", "c".repeat(40)].join(""),
+    ];
+    expect(templateCore.findCredentialEvidence(values.join("\n"))).toHaveLength(values.length);
+
+    const root = await sourceFixture();
+    await writeFile(path.join(root, ".cursor", "Dockerfile"), `FROM node:24.13.0-bookworm\n# ${values[1]}\n`, "utf8");
+    await expect(templateCore.verifyCursorTemplateRetention(root)).rejects.toThrow(/credential/u);
+
+    const verifier = await readFile(path.resolve("tools/verify-template-instantiation.mjs"), "utf8");
+    expect(verifier).toContain("sourceAccountCredentials: cursorGuardrails.sourceAccountCredentials");
+    expect(verifier).not.toContain("sourceAccountCredentials: 0");
   });
 
   it("reports clean-room verification as not applicable for an initialized repository", async () => {

@@ -114,10 +114,27 @@ describe("repository policy", () => {
   });
 
   it("detects representative provider credentials without flagging placeholders", () => {
-    expect(containsPotentialSecret(["AK", "IA1234567890ABCDEF"].join(""))).toBe(true);
-    expect(containsPotentialSecret(["sb", "p_12345678901234567890"].join(""))).toBe(true);
-    expect(containsPotentialSecret(["-----BEGIN PRIVATE", " KEY-----"].join(""))).toBe(true);
+    const credentials = [
+      ["github", "_pat_", "11_AAA", "A".repeat(40)].join(""),
+      ["gh", "p_", "A".repeat(36)].join(""),
+      ["AS", "IA", "1".repeat(16)].join(""),
+      ["AWS_SECRET_ACCESS_KEY", "=", "s".repeat(40)].join(""),
+      ["-----BEGIN PRIVATE", " KEY-----"].join(""),
+      ["sb", "p_", "a".repeat(24)].join(""),
+      ["sb", "_secret_", "a".repeat(24)].join(""),
+      ["SUPABASE_SERVICE_ROLE_KEY", "=", "eyJ", "a".repeat(20), ".", "b".repeat(20), ".", "c".repeat(20)].join(""),
+      ["VERCEL_TOKEN", "=", "v".repeat(32)].join(""),
+      ["CLOUDFLARE_API_TOKEN", "=", "c".repeat(40)].join(""),
+      ["CLOUDFLARE_GLOBAL_API_KEY", "=", "d".repeat(40)].join(""),
+    ];
+    for (const credential of credentials) expect(containsPotentialSecret(credential), credential.slice(0, 12)).toBe(true);
+
     expect(containsPotentialSecret("SUPABASE_SERVICE_ROLE_KEY=replace-me")).toBe(false);
+    expect(containsPotentialSecret(JSON.stringify({
+      supabase: { projectRef: "abcdefghijklmnopqrst", publishableKey: ["sb", "_publishable_", "public-example"].join("") },
+      vercel: { scope: "team_public", projectId: "prj_public" },
+      cloudflare: { accountId: "a".repeat(32), zoneId: "b".repeat(32) },
+    }))).toBe(false);
   });
 
   it("requires durable Cursor operator authority and an accepted narrow D-003 supersession", async () => {

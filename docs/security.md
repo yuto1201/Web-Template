@@ -24,11 +24,13 @@ Run `npm test -- guard-claude-tool` after changing the guard. Codex owns changes
 
 ## Cursor Cloud guard
 
-Cursor Cloud loads `.cursor/hooks.json`, whose five finite command hooks run `tools/guard-cursor-hook.mjs` with `failClosed: true`. The guard permits ordinary parent application/test edits, fixed repository checks, bounded read-only Git inspection, and exactly the six generated Cursor subagents on configured models. It denies credential paths, repository escapes, destructive or extensible shell forms, subagent edits/shell/provider tools, modified-file completion, and direct writes to canonical guard, policy, generated-agent, GitHub, and evidence paths.
+Cursor Cloud loads `.cursor/hooks.json`, whose five finite command hooks run `tools/guard-cursor-hook.mjs` with `failClosed: true`. The guard permits ordinary parent application/test edits, fixed repository checks, bounded read-only Git inspection, and exactly the six generated Cursor subagents on configured models. It denies credential paths, repository escapes, destructive or extensible shell forms, subagent edits/shell/provider tools, modified-file completion, and direct writes to canonical guard, policy, generated-agent, GitHub, authority/security/decision, acceptance/template, and evidence-verifier paths.
 
 These checks are local/evidence guards. They do not create an OS sandbox, authenticate a connector, constrain code executed inside an allowed repository test/build, or authorize provider state. Current Cursor Cloud project hooks do not run `beforeMCPExecution` or `afterMCPExecution`, and early read-only exploration may precede hook coverage. Provider authority therefore depends on live capability probes, least-privilege connectors, frozen Issue operations, fixed ownership targets, redaction, and post-state verification. Direct canonical guard/policy edits remain denied until deterministic Issue path authorization is implemented.
 
 Run `npm run cursor:hook-check` and `npm test -- guard-cursor-hook repository-policy generated-assets` after a reviewed Codex change to the Cursor guardrails. Cursor itself cannot make that direct protected-path change under the current fail-closed policy.
+
+Changes to `docs/authority.md`, `docs/security.md`, `docs/workflow.md`, `docs/activation.md`, `docs/verification.md`, `docs/onboarding-cursor-cloud.md`, `specs/decisions.md`, or `specs/cursor-cloud.md` are deterministically high risk and require exact-Head OpenAI-family and Anthropic-family review evidence.
 
 ## Prompt injection and untrusted data
 

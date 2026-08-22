@@ -89,7 +89,7 @@ if (sourceState.status === "initialized") {
       status: "clean-room-verified",
       packageName: generatedPackage.name,
       sourceLeakage: 0,
-      sourceAccountCredentials: 0,
+      sourceAccountCredentials: cursorGuardrails.sourceAccountCredentials,
       idempotence: "passed",
       cursorGuardrails,
       providerActivation,

@@ -13,6 +13,8 @@ const modulePath = fileURLToPath(import.meta.url);
 const defaultRoot = path.resolve(path.dirname(modulePath), "..");
 const expectedNodeVersion = "24.13.0";
 const expectedNpmVersion = "11.6.2";
+const activationMaximumAgeMilliseconds = 24 * 60 * 60 * 1_000;
+const activationMaximumFutureMilliseconds = 5 * 60 * 1_000;
 
 class SafeCliError extends Error {
   constructor(message) {
@@ -37,6 +39,7 @@ const runSchema = z.strictObject({
 const repositorySchema = z.strictObject({
   fullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u),
   branch: z.string().regex(/^cursor\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u),
+  headSha: z.string().regex(/^[0-9a-f]{40}$/u),
 });
 const buildSchema = z.strictObject({
   status: z.literal("ready"),
@@ -47,10 +50,12 @@ const buildSchema = z.strictObject({
 });
 const reviewerProbeSchema = (modelPattern) => z.strictObject({
   observed: z.string().regex(modelPattern),
-  readonlyProbe: z.literal("passed"),
+  repositoryReadProbe: z.literal("passed"),
+  fileProbe: z.literal("denied"),
+  shellProbe: z.literal("denied"),
   providerToolProbe: z.literal("denied"),
+  completionProbe: z.literal("passed"),
 });
-const verifiedSource = z.literal("config/ownership.json");
 
 /** @param {string} value */
 function isRfc3339Timestamp(value) {
@@ -86,22 +91,24 @@ const activationSchema = z.strictObject({
   providers: z.strictObject({
     github: z.strictObject({
       owner: z.string().trim().min(1).max(120),
-      target: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u),
+      fullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u),
       status: z.literal("verified"),
     }),
     supabase: z.strictObject({
-      owner: z.string().trim().min(1).max(160),
-      targetSource: verifiedSource,
+      organizationName: z.string().trim().min(1).max(160),
+      projectRef: z.string().trim().min(1).max(160),
       status: z.literal("verified"),
     }),
     vercel: z.strictObject({
-      ownerSource: verifiedSource,
-      targetSource: verifiedSource,
+      scope: z.string().trim().min(1).max(160),
+      projectId: z.string().trim().min(1).max(160),
       status: z.literal("verified"),
     }),
     cloudflare: z.strictObject({
-      owner: z.string().trim().min(1).max(160),
-      targetSource: verifiedSource,
+      accountId: z.string().trim().min(1).max(160),
+      accountName: z.string().trim().min(1).max(160),
+      zoneId: z.string().trim().min(1).max(160),
+      domain: z.string().trim().min(1).max(253),
       status: z.literal("verified"),
     }),
   }),
@@ -138,8 +145,12 @@ function trustedReviewerModels(executionPolicy) {
   return { openai, anthropic };
 }
 
-/** @param {unknown} value @param {unknown} executionPolicy */
-export function validateActivationEvidence(value, executionPolicy) {
+/**
+ * @param {unknown} value
+ * @param {unknown} executionPolicy
+ * @param {{ referenceTime?: Date | string | number }} [options]
+ */
+export function validateActivationEvidence(value, executionPolicy, options = {}) {
   if (hasSecretShape(value)) {
     throw new ActivationEvidenceError("Cursor activation evidence contains secret-shaped input.", "blocked:ops");
   }
@@ -177,6 +188,18 @@ export function validateActivationEvidence(value, executionPolicy) {
       "blocked:review",
     );
   }
+  const referenceTime = options.referenceTime === undefined ? Date.now() : new Date(options.referenceTime).getTime();
+  const verifiedAt = Date.parse(result.data.verifiedAt);
+  if (
+    !Number.isFinite(referenceTime) ||
+    verifiedAt < referenceTime - activationMaximumAgeMilliseconds ||
+    verifiedAt > referenceTime + activationMaximumFutureMilliseconds
+  ) {
+    throw new ActivationEvidenceError(
+      "Cursor activation evidence must be fresh relative to the reference time.",
+      "blocked:conflict",
+    );
+  }
   return result.data;
 }
 
@@ -198,8 +221,13 @@ async function isFile(target) {
   }
 }
 
-/** @param {string} root @param {string} input @param {unknown} executionPolicy */
-export async function readActivationEvidence(root, input, executionPolicy) {
+/**
+ * @param {string} root
+ * @param {string} input
+ * @param {unknown} executionPolicy
+ * @param {{ referenceTime?: Date | string | number }} [options]
+ */
+export async function readActivationEvidence(root, input, executionPolicy, options = {}) {
   if (path.isAbsolute(input)) {
     throw new SafeCliError("Activation input must stay in the redacted artifact directory.");
   }
@@ -224,7 +252,7 @@ export async function readActivationEvidence(root, input, executionPolicy) {
   } catch {
     throw new SafeCliError("Cursor activation evidence must be valid JSON.");
   }
-  return validateActivationEvidence(value, executionPolicy);
+  return validateActivationEvidence(value, executionPolicy, options);
 }
 
 async function chromiumAvailable() {
@@ -265,6 +293,7 @@ export async function collectCursorCloudSnapshot(root = defaultRoot) {
       packageNpmVersion: packageJson.engines?.npm ?? null,
       packageManager: packageJson.packageManager ?? null,
       branch: commandOutput("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], root),
+      headSha: commandOutput("git", ["rev-parse", "--verify", "HEAD"], root),
       environment: JSON.parse(environmentText),
       dockerfile,
     },
@@ -296,7 +325,7 @@ function gate(blockers, blocker, passed) {
 
 /**
  * @param {Awaited<ReturnType<typeof collectCursorCloudSnapshot>> | Record<string, any>} snapshot
- * @param {{ build?: boolean, activation?: unknown }} [options]
+ * @param {{ build?: boolean, activation?: unknown, referenceTime?: Date | string | number }} [options]
  */
 export function evaluateCursorCloud(snapshot, options = {}) {
   const blockers = [];
@@ -358,7 +387,9 @@ export function evaluateCursorCloud(snapshot, options = {}) {
   let activationFailure = null;
   if (options.activation !== undefined) {
     try {
-      activation = validateActivationEvidence(options.activation, snapshot.executionPolicy);
+      activation = validateActivationEvidence(options.activation, snapshot.executionPolicy, {
+        referenceTime: options.referenceTime,
+      });
       checks.push(check("activation-schema", true));
     } catch (error) {
       blockers.push("activation-evidence-invalid");
@@ -382,14 +413,47 @@ export function evaluateCursorCloud(snapshot, options = {}) {
         activation.repository.branch === currentBranch,
       )));
     }
+    const currentHead = repository.headSha;
+    const currentHeadAvailable = typeof currentHead === "string" && /^[0-9a-f]{40}$/u.test(currentHead);
+    checks.push(check("current-head", gate(
+      blockers,
+      "current-head-unavailable",
+      currentHeadAvailable,
+    )));
+    if (activation && currentHeadAvailable) {
+      checks.push(check("activation-head", gate(
+        blockers,
+        "activation-head-mismatch",
+        activation.repository.headSha === currentHead,
+      )));
+    }
   }
   if (activation) {
     const expectedGitHub = `${snapshot.ownership?.github?.owner ?? ""}/${snapshot.ownership?.github?.repository ?? ""}`;
+    const expectedSupabaseProject = snapshot.ownership?.supabase?.projectRef;
+    const expectedVercelScope = snapshot.ownership?.vercel?.scope;
+    const expectedVercelProject = snapshot.ownership?.vercel?.projectId;
+    const expectedCloudflareAccountId = snapshot.ownership?.cloudflare?.accountId;
+    const expectedCloudflareAccountName = snapshot.ownership?.cloudflare?.accountName;
+    const expectedCloudflareZoneId = snapshot.ownership?.cloudflare?.zoneId;
+    const expectedCloudflareDomains = snapshot.ownership?.cloudflare?.domains;
     const ownershipChecks = [
       ["github-owner", "github-owner-mismatch", activation.providers.github.owner === snapshot.ownership?.github?.owner],
-      ["github-target", "github-target-mismatch", activation.providers.github.target === expectedGitHub && activation.repository.fullName === expectedGitHub],
-      ["supabase-owner", "supabase-owner-mismatch", activation.providers.supabase.owner === snapshot.ownership?.supabase?.organizationName],
-      ["cloudflare-owner", "cloudflare-owner-mismatch", activation.providers.cloudflare.owner === snapshot.ownership?.cloudflare?.accountName],
+      ["github-target", "github-target-mismatch", activation.providers.github.fullName === expectedGitHub && activation.repository.fullName === expectedGitHub],
+      ["supabase-owner", "supabase-owner-mismatch", activation.providers.supabase.organizationName === snapshot.ownership?.supabase?.organizationName],
+      ["supabase-project-configured", "supabase-project-unconfigured", typeof expectedSupabaseProject === "string" && expectedSupabaseProject.length > 0],
+      ["supabase-project", "supabase-project-mismatch", activation.providers.supabase.projectRef === expectedSupabaseProject],
+      ["vercel-scope-configured", "vercel-scope-unconfigured", typeof expectedVercelScope === "string" && expectedVercelScope.length > 0],
+      ["vercel-scope", "vercel-scope-mismatch", activation.providers.vercel.scope === expectedVercelScope],
+      ["vercel-project-configured", "vercel-project-unconfigured", typeof expectedVercelProject === "string" && expectedVercelProject.length > 0],
+      ["vercel-project", "vercel-project-mismatch", activation.providers.vercel.projectId === expectedVercelProject],
+      ["cloudflare-account-id-configured", "cloudflare-account-id-unconfigured", typeof expectedCloudflareAccountId === "string" && expectedCloudflareAccountId.length > 0],
+      ["cloudflare-account-id", "cloudflare-account-id-mismatch", activation.providers.cloudflare.accountId === expectedCloudflareAccountId],
+      ["cloudflare-owner", "cloudflare-owner-mismatch", activation.providers.cloudflare.accountName === expectedCloudflareAccountName],
+      ["cloudflare-zone-configured", "cloudflare-zone-unconfigured", typeof expectedCloudflareZoneId === "string" && expectedCloudflareZoneId.length > 0],
+      ["cloudflare-zone", "cloudflare-zone-mismatch", activation.providers.cloudflare.zoneId === expectedCloudflareZoneId],
+      ["cloudflare-domain-configured", "cloudflare-domain-unconfigured", Array.isArray(expectedCloudflareDomains) && expectedCloudflareDomains.length > 0],
+      ["cloudflare-domain", "cloudflare-domain-mismatch", Array.isArray(expectedCloudflareDomains) && expectedCloudflareDomains.includes(activation.providers.cloudflare.domain)],
     ];
     for (const [id, blocker, passed] of ownershipChecks) {
       checks.push(check(id, gate(blockers, blocker, passed)));
@@ -404,11 +468,13 @@ export function evaluateCursorCloud(snapshot, options = {}) {
     "docker-executable-unavailable",
     "chromium-executable-unavailable",
   ].includes(blocker));
-  const opsBlocked = blockers.some((blocker) => /(?:owner|target)-mismatch$/u.test(blocker));
+  const opsBlocked = blockers.some((blocker) => /(?:-mismatch|-unconfigured)$/u.test(blocker));
   const conflictBlocked = blockers.some((blocker) => [
     "current-branch-unavailable",
     "current-branch-not-cursor",
     "activation-branch-mismatch",
+    "current-head-unavailable",
+    "activation-head-mismatch",
   ].includes(blocker));
   return {
     status: environmentBlocked

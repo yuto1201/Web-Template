@@ -23,6 +23,8 @@ Cursor activation does not change either local mode. Claude local remains a cons
 
 Machine-readable public identifiers live in `config/ownership.json`. They are expected targets, not credentials or proof of the connector's current account.
 
+Cursor activation evidence must carry the observed GitHub owner and full repository name; Supabase organization and project ref; Vercel scope and project ID; and Cloudflare account ID/name, zone ID, and domain. Every value is compared directly with `config/ownership.json`; a file-path placeholder is not target evidence. A missing trusted target, including the template source's `supabase.projectRef: null`, leaves Cursor `blocked:ops`.
+
 ## Authenticated external operations
 
 An external operation is any authenticated read or write involving:
@@ -82,4 +84,4 @@ Claude's committed settings and guard deny shell, network/MCP, sensitive paths, 
 
 Cursor's project hooks check supported file, shell, and subagent events and produce local evidence. Current Cursor Cloud project hooks do not cover `beforeMCPExecution` or `afterMCPExecution`, and the earliest read-only exploratory turns may not run hooks. The parent hook therefore cannot authorize a provider connector, authenticate its identity, or prove a subagent tool boundary. Connector least privilege, frozen operations, activation probes, redacted results, and post-state checks supply those boundaries.
 
-Direct Cursor edits to `AGENTS.md`, `.cursor/`, `.claude/`, `.codex/`, `.github/`, canonical authority/workflow/evidence config, and guard/gate tooling fail closed. They remain blocked until a reviewed deterministic Issue path-authorization artifact exists. Repository hooks and same-user processes are not cryptographic isolation; stronger isolation requires a separate account, VM, or container without personal credentials.
+Direct Cursor edits to `AGENTS.md`, `.cursor/`, `.claude/`, `.codex/`, `.github/`, canonical authority/security/workflow/activation/verification/onboarding documentation, Cursor decisions/specification, acceptance/template configuration, and guard/gate/doctor/template verification tooling fail closed. They remain blocked until a reviewed deterministic Issue path-authorization artifact exists. Repository hooks and same-user processes are not cryptographic isolation; stronger isolation requires a separate account, VM, or container without personal credentials.

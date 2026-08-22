@@ -72,6 +72,22 @@ describe("execution policy", () => {
     expect(() => classifyRisk({ changedPaths: [], externalOperations: ["github.run_anything"] }, policy)).toThrow(/operation/u);
   });
 
+  it.each([
+    "docs/authority.md",
+    "docs/security.md",
+    "docs/workflow.md",
+    "docs/activation.md",
+    "docs/verification.md",
+    "docs/onboarding-cursor-cloud.md",
+    "specs/decisions.md",
+    "specs/cursor-cloud.md",
+  ])("classifies canonical authority path %s as high risk", (changedPath) => {
+    expect(classifyRisk({ changedPaths: [changedPath], externalOperations: [] }, policy)).toEqual({
+      level: "high",
+      reasons: [`path:${changedPath}`],
+    });
+  });
+
   it("requires observed reviewer families that satisfy risk-specific diversity", () => {
     expect(requiredReviewerFamilies({ risk: "high", primaryFamily: "openai" })).toEqual(["anthropic", "openai"]);
     expect(requiredReviewerFamilies({ risk: "normal", primaryFamily: "anthropic" })).toEqual(["openai"]);

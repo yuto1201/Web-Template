@@ -120,6 +120,24 @@ describe("GitHub exact-Head review gate", () => {
     })).toMatchObject({ ok: true, risk: "normal" });
   });
 
+  it("requires high-risk dual-family evidence for canonical authority documentation", () => {
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody()),
+      changedPaths: ["docs/authority.md"],
+      diff: "",
+      workflow,
+      executionPolicy,
+    })).toThrow(/Risk claim/u);
+
+    expect(evaluateGitHubReviewGate({
+      event: event(highRiskBody({ riskReasons: "path:docs/authority.md" })),
+      changedPaths: ["docs/authority.md"],
+      diff: "",
+      workflow,
+      executionPolicy,
+    })).toMatchObject({ risk: "high", reviewers: ["anthropic", "openai"] });
+  });
+
   it("rejects stale, duplicate, hidden, unknown, ambiguous, and injected claims", () => {
     const input = (body) => ({ event: event(body), changedPaths: ["README.md"], diff: "", workflow, executionPolicy });
     expect(() => evaluateGitHubReviewGate(input(reviewBody({ sha: "9".repeat(40) })))).toThrow(/current Head/u);
