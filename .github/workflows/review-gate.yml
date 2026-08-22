@@ -34,6 +34,12 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version-file: trusted/.node-version
+          cache: npm
+          cache-dependency-path: trusted/package-lock.json
+
+      - name: Install trusted verifier dependencies
+        working-directory: trusted
+        run: npm ci --ignore-scripts
 
       - name: Verify exact-Head review evidence
         env:

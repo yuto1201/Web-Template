@@ -111,6 +111,13 @@ describe("GitHub exact-Head review gate", () => {
       reviewers: ["anthropic", "openai"],
       risk: "high",
     });
+    expect(evaluateGitHubReviewGate({
+      event: event(reviewBody({ reviewers: [{ family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator, supabase-auditor" }] })),
+      changedPaths: ["README.md"],
+      diff: "",
+      workflow,
+      executionPolicy,
+    })).toMatchObject({ ok: true, risk: "normal" });
   });
 
   it("rejects stale, duplicate, hidden, unknown, ambiguous, and injected claims", () => {
@@ -146,6 +153,8 @@ describe("GitHub exact-Head review gate", () => {
       ],
     }), ["supabase/migrations/001.sql"])).toThrow(/supabase-auditor/u);
     expect(() => evaluate(reviewBody(), [".cursor/hooks.json"])).toThrow(/Risk claim/u);
+    expect(() => evaluate(highRiskBody({ riskReasons: "operation:not-real" }))).toThrow(/unknown operation risk reason/u);
+    expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", observed: "claude-opus-5", verdict: "approved", contracts: "change-evaluator, fictional-auditor" }] }))).toThrow(/unknown review contract/u);
 
     const fork = event(reviewBody());
     fork.pull_request.head.repo.full_name = "attacker/Web-Template";
@@ -187,6 +196,12 @@ describe("GitHub exact-Head review gate", () => {
     expect(source).toContain('HEAD_REPOSITORY" != "$BASE_REPOSITORY');
     expect(source).toContain("candidate");
     expect(source).toContain("trusted/config/execution.json");
+    expect(source).toContain("cache-dependency-path: trusted/package-lock.json");
+    expect(source).toContain("working-directory: trusted");
+    expect(source).toContain("npm ci --ignore-scripts");
+    expect(source.indexOf("npm ci --ignore-scripts")).toBeLessThan(source.indexOf("Verify exact-Head review evidence"));
+    expect(source).not.toMatch(/working-directory:\s*candidate[\s\S]{0,160}npm (?:ci|install)/u);
+    expect(source).not.toMatch(/npm (?:--prefix\s+candidate|ci[^\n]*candidate|install[^\n]*candidate)/u);
     expect(source).not.toContain("62da0e1699ddfcf39f35914b54ad963fe5aa0740");
     expect(source).not.toContain("codex/22-exact-head-review");
     expect(source).not.toContain("initial rollout");

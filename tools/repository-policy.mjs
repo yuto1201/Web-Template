@@ -242,6 +242,8 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("CI must verify the workstation contract on a real macOS runner.");
   }
   const reviewWorkflow = await readFile(path.join(root, ".github", "workflows", "review-gate.yml"), "utf8");
+  const trustedInstallIndex = reviewWorkflow.indexOf("npm ci --ignore-scripts");
+  const verificationIndex = reviewWorkflow.indexOf("Verify exact-Head review evidence");
   if (
     !reviewWorkflow.includes("name: Exact Head review policy") ||
     !reviewWorkflow.includes("types: [opened, synchronize, reopened, edited, ready_for_review]") ||
@@ -249,6 +251,13 @@ export async function validateRepository(root = defaultRoot) {
     !reviewWorkflow.includes('gate_path="trusted/tools/github-review-gate.mjs"') ||
     !reviewWorkflow.includes('workflow_path="trusted/config/workflow.json"') ||
     !reviewWorkflow.includes('execution_policy_path="trusted/config/execution.json"') ||
+    !reviewWorkflow.includes("cache-dependency-path: trusted/package-lock.json") ||
+    !reviewWorkflow.includes("working-directory: trusted") ||
+    trustedInstallIndex === -1 ||
+    verificationIndex === -1 ||
+    trustedInstallIndex > verificationIndex ||
+    /working-directory:\s*candidate[\s\S]{0,160}npm (?:ci|install)/u.test(reviewWorkflow) ||
+    /npm (?:--prefix\s+candidate|ci[^\n]*candidate|install[^\n]*candidate)/u.test(reviewWorkflow) ||
     !reviewWorkflow.includes('HEAD_REPOSITORY" != "$BASE_REPOSITORY"') ||
     !reviewWorkflow.includes("github.event.pull_request.head.repo.full_name") ||
     !reviewWorkflow.includes("github.event.pull_request.base.repo.full_name") ||

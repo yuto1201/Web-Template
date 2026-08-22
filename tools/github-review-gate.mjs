@@ -201,6 +201,21 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   assert(pullRequest.head?.repo?.full_name === pullRequest.base?.repo?.full_name, "Independent review requires a same repository branch.");
   assert(evidence.reviewedSha === headSha, "Reviewed SHA must match the current Head SHA.");
   assert(executionPolicy && typeof executionPolicy === "object", "Execution policy is required for independent review.");
+  const allowedOperations = new Set([
+    ...(executionPolicy.routineDeliveryOperations ?? []),
+    ...(executionPolicy.highRiskOperations ?? []),
+  ]);
+  for (const reason of evidence.risk.reasons.filter((value) => value.startsWith("operation:"))) {
+    const operation = reason.slice("operation:".length);
+    assert(allowedOperations.has(operation), `unknown operation risk reason ${operation}.`);
+  }
+  const allowedContracts = new Set(["change-evaluator"]);
+  for (const rule of workflow.privilegedPathRules ?? []) {
+    for (const contract of rule.contracts ?? []) allowedContracts.add(contract);
+  }
+  for (const review of evidence.reviews) {
+    for (const contract of review.contracts) assert(allowedContracts.has(contract), `unknown review contract ${contract}.`);
+  }
   const primaryModel = normalizeModelIdentity(
     evidence.primaryModel.configured,
     evidence.primaryModel.observed,
