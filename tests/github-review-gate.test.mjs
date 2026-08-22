@@ -165,6 +165,10 @@ describe("GitHub exact-Head review gate", () => {
     expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<details>\n## Cross-model review").replace("## Remaining work", "</details>\n\n## Remaining work"))).toThrow(/raw HTML/u);
     expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<div>\n## Cross-model review").replace("## Remaining work", "</div>\n\n## Remaining work"))).toThrow(/raw HTML/u);
     expect(() => parseReviewBody(reviewBody().replace("- Risk:", "<div>\n- Risk:").replace("## Remaining work", "</div>\n\n## Remaining work"))).toThrow(/raw HTML/u);
+    expect(() => parseReviewBody(reviewBody().replace("Closes #29", "```text\nCloses #29\n```"))).toThrow(/fenced/u);
+    expect(() => parseReviewBody(reviewBody()
+      .replace("## Cross-model review", "<div hidden>\n<!-- </div> -->\n## Cross-model review")
+      .replace("## Remaining work", "</div>\n\n## Remaining work"))).toThrow(/raw HTML/u);
     expect(() => parseReviewBody(reviewBody().replace("- Risk:", "- Unsupported label: no\n- Risk:"))).toThrow(/unknown review field/u);
     expect(() => parseReviewBody(reviewBody().replace("change-evaluator", "change-evaluator,, supabase-auditor"))).toThrow(/canonical comma-separated/u);
     expect(() => parseReviewBody(reviewBody().replace("- Reviewer anthropic:", "- Reviewer anthropic:\n- Injected:"))).toThrow(/newline|unknown review field/u);

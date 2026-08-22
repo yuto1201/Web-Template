@@ -91,7 +91,8 @@ function assertReviewSectionVisible(body, headingIndex, section) {
   assert(!section.includes("<!--") && !section.includes("-->"), "Review evidence must not be inside an HTML comment.");
   const htmlContainerPattern = /<\/?(?:details|div)\b[^>]*>/giu;
   const openContainers = [];
-  for (const match of prefix.matchAll(htmlContainerPattern)) {
+  const prefixWithoutComments = prefix.replace(/<!--[\s\S]*?-->/gu, "");
+  for (const match of prefixWithoutComments.matchAll(htmlContainerPattern)) {
     const tag = /^<\/(details|div)\b/iu.exec(match[0])?.[1]?.toLowerCase();
     if (tag) {
       assert(openContainers.at(-1) === tag, "Review evidence must not be inside a raw HTML container.");
@@ -130,6 +131,7 @@ export function parseReviewBody(body) {
   assertReviewSectionVisible(body, headings[0].index ?? 0, section);
   const issueClaims = [...body.matchAll(/^Closes #([1-9][0-9]*)[ \t]*$/gmu)];
   assert(issueClaims.length === 1, "PR body must contain exactly one canonical Closes Issue claim.");
+  assertReviewSectionVisible(body, issueClaims[0].index ?? 0, "");
   const issue = Number(issueClaims[0][1]);
 
   const labels = [
