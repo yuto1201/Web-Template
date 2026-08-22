@@ -80,6 +80,15 @@ import {
  * @property {ProviderEvidence} providers
  * @property {string} verifiedAt
  */
+/** @typedef {{ fullName: string, status: string }} GitHubEvidenceWithoutOwner */
+/** @typedef {{ owner: string, fullName: string, status: string, token: string }} GitHubEvidenceWithToken */
+/** @typedef {{ id: string, modelObserved: string, note: string }} RunEvidenceWithNote */
+/** @typedef {Omit<ProviderEvidence, "github"> & { github: GitHubEvidenceWithoutOwner }} ProviderEvidenceWithoutGitHubOwner */
+/** @typedef {Omit<ProviderEvidence, "github"> & { github: GitHubEvidenceWithToken }} ProviderEvidenceWithGitHubToken */
+/** @typedef {Omit<ActivationEvidence, "providers"> & { providers: ProviderEvidenceWithoutGitHubOwner }} ActivationEvidenceWithoutGitHubOwner */
+/** @typedef {Omit<ActivationEvidence, "run"> & { run: RunEvidenceWithNote }} ActivationEvidenceWithRunNote */
+/** @typedef {Omit<ActivationEvidence, "providers"> & { providers: ProviderEvidenceWithGitHubToken }} ActivationEvidenceWithGitHubToken */
+/** @typedef {[string, (value: ActivationEvidence) => void]} ActivationMutationCase */
 /** @typedef {{ build?: boolean, activation?: ActivationEvidence }} EvaluationOptions */
 
 /** @type {CursorEnvironment} */
@@ -275,17 +284,50 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("rejects missing identities, unexpected fields, and credential-shaped input", () => {
-    const missingIdentity = structuredClone(ready);
-    delete missingIdentity.providers.github.owner;
-    expect(() => validateActivation(missingIdentity)).toThrow(/github owner/iu);
+    /** @type {ActivationEvidenceWithoutGitHubOwner} */
+    const missingIdentity = {
+      ...structuredClone(ready),
+      providers: {
+        ...structuredClone(ready.providers),
+        github: {
+          fullName: ready.providers.github.fullName,
+          status: ready.providers.github.status,
+        },
+      },
+    };
+    expect(() => validateActivationEvidence(
+      missingIdentity,
+      executionPolicy,
+      { referenceTime },
+    )).toThrow(/github owner/iu);
 
-    const extra = structuredClone(ready);
-    extra.run.note = "unexpected";
-    expect(() => validateActivation(extra)).toThrow(/unexpected propert/iu);
+    /** @type {ActivationEvidenceWithRunNote} */
+    const extra = {
+      ...structuredClone(ready),
+      run: { ...structuredClone(ready.run), note: "unexpected" },
+    };
+    expect(() => validateActivationEvidence(
+      extra,
+      executionPolicy,
+      { referenceTime },
+    )).toThrow(/unexpected propert/iu);
 
-    const secretField = structuredClone(ready);
-    secretField.providers.github.token = ["ghp", "_123456789012345678901234567890"].join("");
-    expect(() => validateActivation(secretField)).toThrow(/secret-shaped/iu);
+    /** @type {ActivationEvidenceWithGitHubToken} */
+    const secretField = {
+      ...structuredClone(ready),
+      providers: {
+        ...structuredClone(ready.providers),
+        github: {
+          ...structuredClone(ready.providers.github),
+          token: ["ghp", "_123456789012345678901234567890"].join(""),
+        },
+      },
+    };
+    expect(() => validateActivationEvidence(
+      secretField,
+      executionPolicy,
+      { referenceTime },
+    )).toThrow(/secret-shaped/iu);
 
     const secretValue = structuredClone(ready);
     secretValue.providers.github.owner = ["ghp", "_123456789012345678901234567890"].join("");
@@ -293,6 +335,7 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("rejects wrong surfaces, branches, timestamps, models, and reviewer capabilities", () => {
+    /** @type {ActivationMutationCase[]} */
     const mutations = [
       ["surface", (value) => { value.surface = "codex-local"; }],
       ["branch", (value) => { value.repository.branch = "codex/29-cloud-mode"; }],
@@ -316,13 +359,16 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("rejects runtime drift and any non-ready Build state", () => {
-    for (const mutate of [
+    /** @type {Array<(value: ActivationEvidence) => void>} */
+    const mutations = [
       (value) => { value.build.status = "blocked"; },
       (value) => { value.build.node = "25.0.0"; },
       (value) => { value.build.npm = "12.0.0"; },
       (value) => { value.build.docker = false; },
       (value) => { value.build.chromium = false; },
-    ]) {
+    ];
+
+    for (const mutate of mutations) {
       const value = structuredClone(ready);
       mutate(value);
       expect(() => validateActivation(value)).toThrow();
@@ -342,6 +388,7 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("maps invalid activation surfaces to the repository blocked-state taxonomy", () => {
+    /** @type {ActivationMutationCase[]} */
     const cases = [
       ["blocked:review", (value) => { value.reviewers.openai.providerToolProbe = "allowed"; }],
       ["blocked:conflict", (value) => { value.repository.branch = "codex/29-cloud-mode"; }],
