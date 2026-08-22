@@ -43,6 +43,13 @@ const ownership = {
   },
 };
 
+const executionPolicy = {
+  cursorModels: {
+    openai: "gpt-5.6-sol[effort=high]",
+    anthropic: "claude-opus-5[effort=high]",
+  },
+};
+
 const ready = {
   schemaVersion: 1,
   surface: "cursor-cloud",
@@ -71,13 +78,19 @@ function readySnapshot(overrides = {}) {
       packageNodeVersion: "24.13.0",
       packageNpmVersion: "11.6.2",
       packageManager: "npm@11.6.2",
+      branch: "cursor/29-cloud-mode",
       environment: structuredClone(environment),
       dockerfile,
     },
     runtime: { node: "24.13.0", npm: "11.6.2", docker: true, chromium: true },
     ownership: structuredClone(ownership),
+    executionPolicy: structuredClone(executionPolicy),
     ...overrides,
   };
+}
+
+function validateActivation(value) {
+  return validateActivationEvidence(value, executionPolicy);
 }
 
 describe("Cursor Cloud doctor", () => {
@@ -118,7 +131,7 @@ describe("Cursor Cloud doctor", () => {
   });
 
   it("validates a strict redacted activation fixture", () => {
-    expect(validateActivationEvidence(ready)).toEqual(ready);
+    expect(validateActivation(ready)).toEqual(ready);
     expect(evaluateCursorCloud(readySnapshot(), { build: true, activation: ready })).toMatchObject({
       status: "ready",
       blockers: [],
@@ -128,19 +141,19 @@ describe("Cursor Cloud doctor", () => {
   it("rejects missing identities, unexpected fields, and credential-shaped input", () => {
     const missingIdentity = structuredClone(ready);
     delete missingIdentity.providers.github.owner;
-    expect(() => validateActivationEvidence(missingIdentity)).toThrow(/github owner/iu);
+    expect(() => validateActivation(missingIdentity)).toThrow(/github owner/iu);
 
     const extra = structuredClone(ready);
     extra.run.note = "unexpected";
-    expect(() => validateActivationEvidence(extra)).toThrow(/unexpected propert/iu);
+    expect(() => validateActivation(extra)).toThrow(/unexpected propert/iu);
 
     const secretField = structuredClone(ready);
     secretField.providers.github.token = ["ghp", "_123456789012345678901234567890"].join("");
-    expect(() => validateActivationEvidence(secretField)).toThrow(/secret-shaped/iu);
+    expect(() => validateActivation(secretField)).toThrow(/secret-shaped/iu);
 
     const secretValue = structuredClone(ready);
     secretValue.providers.github.owner = ["ghp", "_123456789012345678901234567890"].join("");
-    expect(() => validateActivationEvidence(secretValue)).toThrow(/secret-shaped/iu);
+    expect(() => validateActivation(secretValue)).toThrow(/secret-shaped/iu);
   });
 
   it("rejects wrong surfaces, branches, timestamps, models, and reviewer capabilities", () => {
@@ -159,7 +172,7 @@ describe("Cursor Cloud doctor", () => {
     for (const [label, mutate] of mutations) {
       const value = structuredClone(ready);
       mutate(value);
-      expect(() => validateActivationEvidence(value), label).toThrow();
+      expect(() => validateActivation(value), label).toThrow();
     }
   });
 
@@ -173,8 +186,20 @@ describe("Cursor Cloud doctor", () => {
     ]) {
       const value = structuredClone(ready);
       mutate(value);
-      expect(() => validateActivationEvidence(value)).toThrow();
+      expect(() => validateActivation(value)).toThrow();
     }
+  });
+
+  it("rejects same-family fallback models that differ from trusted configured selectors", () => {
+    const fallbackOpenAI = structuredClone(ready);
+    fallbackOpenAI.reviewers.openai.observed = "gpt-5.6-luna";
+    expect(() => validateActivation(fallbackOpenAI)).toThrow(/configured reviewer model/iu);
+
+    const fallbackAnthropic = structuredClone(ready);
+    fallbackAnthropic.reviewers.anthropic.observed = "claude-fable-5";
+    expect(() => validateActivation(fallbackAnthropic)).toThrow(/configured reviewer model/iu);
+
+    expect(() => validateActivationEvidence(ready, {})).toThrow(/trusted reviewer model/iu);
   });
 
   it("maps invalid activation surfaces to the repository blocked-state taxonomy", () => {
@@ -214,15 +239,35 @@ describe("Cursor Cloud doctor", () => {
     ]));
   });
 
+  it("binds activation evidence to the exact collected Cursor branch", () => {
+    const stale = structuredClone(ready);
+    stale.repository.branch = "cursor/999-stale-activation";
+    const staleReport = evaluateCursorCloud(readySnapshot(), { build: true, activation: stale });
+    expect(staleReport.status).toBe("blocked:conflict");
+    expect(staleReport.blockers).toContain("activation-branch-mismatch");
+
+    for (const branch of [null, "codex/29-cursor-cloud-mode", "feature"] ) {
+      const report = evaluateCursorCloud(readySnapshot({
+        repository: { ...readySnapshot().repository, branch },
+      }), { build: true, activation: ready });
+      expect(report.status).toBe("blocked:conflict");
+      expect(report.blockers).toContain(branch === null ? "current-branch-unavailable" : "current-branch-not-cursor");
+    }
+  });
+
   it("collects only non-secret repository/runtime facts", async () => {
     const marker = "cursor-doctor-must-not-read-this-value";
     process.env.CURSOR_DOCTOR_TEST_SECRET = marker;
     try {
       const snapshot = await collectCursorCloudSnapshot(path.resolve("."));
+      const branchResult = spawnSync("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf8" });
+      const expectedBranch = branchResult.status === 0 ? `${branchResult.stdout}`.trim() : null;
       expect(JSON.stringify(snapshot)).not.toContain(marker);
       expect(snapshot.repository.environment).toEqual(environment);
       expect(snapshot.repository.dockerfile).toContain("FROM node:24.13.0-bookworm");
+      expect(snapshot.repository.branch).toBe(expectedBranch);
       expect(snapshot.ownership.github).toEqual({ owner: "yuto1201", repository: "Web-Template" });
+      expect(snapshot.executionPolicy.cursorModels).toEqual(executionPolicy.cursorModels);
     } finally {
       delete process.env.CURSOR_DOCTOR_TEST_SECRET;
     }
@@ -249,10 +294,10 @@ describe("Cursor Cloud doctor", () => {
       await writeFile(path.join(root, ".env.local"), "PROVIDER_TOKEN=must-not-be-read\n", "utf8");
       await symlink(path.join(root, ".env.local"), path.join(artifactDirectory, "linked.json"));
 
-      await expect(readActivationEvidence(root, ".artifacts/cursor/activation.json")).resolves.toEqual(ready);
-      await expect(readActivationEvidence(root, ".env.local")).rejects.toThrow(/redacted artifact directory/iu);
-      await expect(readActivationEvidence(root, ".artifacts/cursor/linked.json")).rejects.toThrow(/regular file/iu);
-      await expect(readActivationEvidence(root, ".artifacts/cursor/../activation.json")).rejects.toThrow(/redacted artifact directory/iu);
+      await expect(readActivationEvidence(root, ".artifacts/cursor/activation.json", executionPolicy)).resolves.toEqual(ready);
+      await expect(readActivationEvidence(root, ".env.local", executionPolicy)).rejects.toThrow(/redacted artifact directory/iu);
+      await expect(readActivationEvidence(root, ".artifacts/cursor/linked.json", executionPolicy)).rejects.toThrow(/regular file/iu);
+      await expect(readActivationEvidence(root, ".artifacts/cursor/../activation.json", executionPolicy)).rejects.toThrow(/redacted artifact directory/iu);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -268,5 +313,23 @@ describe("Cursor Cloud doctor", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Unknown Cursor Cloud doctor option.");
     expect(`${result.stdout}${result.stderr}`).not.toContain(marker);
+  });
+
+  it("maps malformed secret-bearing repository JSON to a fixed safe runtime error", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cursor-cloud-malformed-"));
+    const marker = ["ghp", "_123456789012345678901234567890"].join("");
+    try {
+      await writeFile(path.join(root, "package.json"), `{"name":"fixture","broken":${marker}}\n`, "utf8");
+      const result = spawnSync(process.execPath, [path.resolve("tools/cursor-cloud-doctor.mjs"), "--build"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe("cursor-doctor-runtime-failure\n");
+      expect(`${result.stdout}${result.stderr}`).not.toContain(marker);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

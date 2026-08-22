@@ -14,7 +14,14 @@ const defaultRoot = path.resolve(path.dirname(modulePath), "..");
 const expectedNodeVersion = "24.13.0";
 const expectedNpmVersion = "11.6.2";
 
-class ActivationEvidenceError extends Error {
+class SafeCliError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "SafeCliError";
+  }
+}
+
+class ActivationEvidenceError extends SafeCliError {
   /** @param {string} message @param {"blocked:environment" | "blocked:conflict" | "blocked:review" | "blocked:ops"} status */
   constructor(message, status) {
     super(message);
@@ -113,8 +120,26 @@ function hasSecretShape(value) {
   ));
 }
 
-/** @param {unknown} value */
-export function validateActivationEvidence(value) {
+/** @param {unknown} executionPolicy */
+function trustedReviewerModels(executionPolicy) {
+  const cursorModels = executionPolicy && typeof executionPolicy === "object" && "cursorModels" in executionPolicy &&
+    executionPolicy.cursorModels && typeof executionPolicy.cursorModels === "object"
+    ? executionPolicy.cursorModels
+    : null;
+  const openai = typeof cursorModels?.openai === "string"
+    ? /^(gpt-5\.6-(?:sol|terra|luna))\[[^\[\]]+\]$/u.exec(cursorModels.openai)?.[1]
+    : undefined;
+  const anthropic = typeof cursorModels?.anthropic === "string"
+    ? /^(claude-(?:opus|sonnet|fable)-5)\[[^\[\]]+\]$/u.exec(cursorModels.anthropic)?.[1]
+    : undefined;
+  if (!openai || !anthropic) {
+    throw new ActivationEvidenceError("Trusted reviewer model selectors are unavailable.", "blocked:review");
+  }
+  return { openai, anthropic };
+}
+
+/** @param {unknown} value @param {unknown} executionPolicy */
+export function validateActivationEvidence(value, executionPolicy) {
   if (hasSecretShape(value)) {
     throw new ActivationEvidenceError("Cursor activation evidence contains secret-shaped input.", "blocked:ops");
   }
@@ -142,6 +167,16 @@ export function validateActivationEvidence(value) {
       status,
     );
   }
+  const expectedModels = trustedReviewerModels(executionPolicy);
+  if (
+    result.data.reviewers.openai.observed !== expectedModels.openai ||
+    result.data.reviewers.anthropic.observed !== expectedModels.anthropic
+  ) {
+    throw new ActivationEvidenceError(
+      "Cursor activation evidence does not match the configured reviewer models.",
+      "blocked:review",
+    );
+  }
   return result.data;
 }
 
@@ -163,33 +198,33 @@ async function isFile(target) {
   }
 }
 
-/** @param {string} root @param {string} input */
-export async function readActivationEvidence(root, input) {
+/** @param {string} root @param {string} input @param {unknown} executionPolicy */
+export async function readActivationEvidence(root, input, executionPolicy) {
   if (path.isAbsolute(input)) {
-    throw new Error("Activation input must stay in the redacted artifact directory.");
+    throw new SafeCliError("Activation input must stay in the redacted artifact directory.");
   }
   const normalized = input.replaceAll("\\", "/");
   if (!/^\.artifacts\/cursor\/[A-Za-z0-9][A-Za-z0-9._-]*\.json$/u.test(normalized)) {
-    throw new Error("Activation input must stay in the redacted artifact directory.");
+    throw new SafeCliError("Activation input must stay in the redacted artifact directory.");
   }
   const rootPath = await realpath(root);
   const target = path.resolve(rootPath, normalized);
   const prefix = `${path.join(rootPath, ".artifacts", "cursor")}${path.sep}`;
   if (!target.startsWith(prefix) || !(await isFile(target))) {
-    throw new Error("Activation input must be a regular file.");
+    throw new SafeCliError("Activation input must be a regular file.");
   }
   const resolvedTarget = await realpath(target);
   if (!resolvedTarget.startsWith(prefix)) {
-    throw new Error("Activation input must be a regular file.");
+    throw new SafeCliError("Activation input must be a regular file.");
   }
   const text = await readFile(resolvedTarget, "utf8");
   let value;
   try {
     value = JSON.parse(text);
   } catch {
-    throw new Error("Cursor activation evidence must be valid JSON.");
+    throw new SafeCliError("Cursor activation evidence must be valid JSON.");
   }
-  return validateActivationEvidence(value);
+  return validateActivationEvidence(value, executionPolicy);
 }
 
 async function chromiumAvailable() {
@@ -212,13 +247,14 @@ export async function collectCursorCloudSnapshot(root = defaultRoot) {
     : process.platform === "win32"
       ? commandOutput("cmd.exe", ["/d", "/s", "/c", "npm --version"])
       : commandOutput("npm", ["--version"]);
-  const [policyErrors, nodeVersion, nvmVersion, environmentText, dockerfile, ownershipText] = await Promise.all([
+  const [policyErrors, nodeVersion, nvmVersion, environmentText, dockerfile, ownershipText, executionPolicyText] = await Promise.all([
     validateRepository(root),
     readFile(path.join(root, ".node-version"), "utf8"),
     readFile(path.join(root, ".nvmrc"), "utf8"),
     readFile(path.join(root, ".cursor", "environment.json"), "utf8"),
     readFile(path.join(root, ".cursor", "Dockerfile"), "utf8"),
     readFile(path.join(root, "config", "ownership.json"), "utf8"),
+    readFile(path.join(root, "config", "execution.json"), "utf8"),
   ]);
   return {
     repository: {
@@ -228,6 +264,7 @@ export async function collectCursorCloudSnapshot(root = defaultRoot) {
       packageNodeVersion: packageJson.engines?.node ?? null,
       packageNpmVersion: packageJson.engines?.npm ?? null,
       packageManager: packageJson.packageManager ?? null,
+      branch: commandOutput("git", ["symbolic-ref", "--quiet", "--short", "HEAD"]),
       environment: JSON.parse(environmentText),
       dockerfile,
     },
@@ -238,6 +275,7 @@ export async function collectCursorCloudSnapshot(root = defaultRoot) {
       chromium: await chromiumAvailable(),
     },
     ownership: JSON.parse(ownershipText),
+    executionPolicy: JSON.parse(executionPolicyText),
     expected: {
       node: expectedNodeVersion,
       npm: packageManagerMatch?.[1] ?? null,
@@ -320,12 +358,29 @@ export function evaluateCursorCloud(snapshot, options = {}) {
   let activationFailure = null;
   if (options.activation !== undefined) {
     try {
-      activation = validateActivationEvidence(options.activation);
+      activation = validateActivationEvidence(options.activation, snapshot.executionPolicy);
       checks.push(check("activation-schema", true));
     } catch (error) {
       blockers.push("activation-evidence-invalid");
       checks.push(check("activation-schema", false));
       activationFailure = error instanceof ActivationEvidenceError ? error.status : "blocked:ops";
+    }
+  }
+  if (options.activation !== undefined) {
+    const currentBranch = repository.branch;
+    const currentBranchAvailable = typeof currentBranch === "string" && currentBranch.length > 0;
+    const currentBranchIsCursor = currentBranchAvailable && /^cursor\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(currentBranch);
+    checks.push(check("current-branch", gate(
+      blockers,
+      currentBranchAvailable ? "current-branch-not-cursor" : "current-branch-unavailable",
+      currentBranchIsCursor,
+    )));
+    if (activation && currentBranchIsCursor) {
+      checks.push(check("activation-branch", gate(
+        blockers,
+        "activation-branch-mismatch",
+        activation.repository.branch === currentBranch,
+      )));
     }
   }
   if (activation) {
@@ -350,12 +405,19 @@ export function evaluateCursorCloud(snapshot, options = {}) {
     "chromium-executable-unavailable",
   ].includes(blocker));
   const opsBlocked = blockers.some((blocker) => /(?:owner|target)-mismatch$/u.test(blocker));
+  const conflictBlocked = blockers.some((blocker) => [
+    "current-branch-unavailable",
+    "current-branch-not-cursor",
+    "activation-branch-mismatch",
+  ].includes(blocker));
   return {
     status: environmentBlocked
       ? "blocked:environment"
-      : opsBlocked
-        ? "blocked:ops"
-        : activationFailure ?? "ready",
+      : conflictBlocked
+        ? "blocked:conflict"
+        : opsBlocked
+          ? "blocked:ops"
+          : activationFailure ?? "ready",
     checks,
     blockers,
     warnings,
@@ -396,10 +458,10 @@ function parseOptions(args) {
       activationInput = args[index + 1];
       index += 1;
     } else {
-      throw new Error("Unknown Cursor Cloud doctor option.");
+      throw new SafeCliError("Unknown Cursor Cloud doctor option.");
     }
   }
-  if (!build && activationInput === null) throw new Error("Cursor Cloud doctor requires --build or --activation-input.");
+  if (!build && activationInput === null) throw new SafeCliError("Cursor Cloud doctor requires --build or --activation-input.");
   return { build: build || activationInput !== null, activationInput };
 }
 
@@ -409,7 +471,7 @@ export async function runCli(args = process.argv.slice(2), root = process.cwd())
   const snapshot = await collectCursorCloudSnapshot(root);
   const activation = options.activationInput === null
     ? undefined
-    : await readActivationEvidence(root, options.activationInput);
+    : await readActivationEvidence(root, options.activationInput, snapshot.executionPolicy);
   const report = evaluateCursorCloud(snapshot, { build: options.build, activation });
   process.stdout.write(formatCursorCloudReport(report, snapshot.ownership, activation !== undefined));
   if (report.status !== "ready") process.exitCode = 1;
@@ -418,7 +480,7 @@ export async function runCli(args = process.argv.slice(2), root = process.cwd())
 
 if (path.resolve(process.argv[1] ?? "") === modulePath) {
   runCli().catch((error) => {
-    console.error(error instanceof Error ? error.message : "Cursor Cloud doctor failed.");
+    console.error(error instanceof SafeCliError ? error.message : "cursor-doctor-runtime-failure");
     process.exitCode = 1;
   });
 }

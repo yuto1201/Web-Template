@@ -106,7 +106,17 @@ const canonicalCursorEnvironment = {
   install: "npm ci && npm exec -- playwright install --with-deps chromium && npm run cursor:doctor -- --build",
   start: "sudo service docker start",
 };
-const approvedCursorBuildPackages = ["ca-certificates", "curl", "docker.io", "git", "ripgrep"];
+const canonicalCursorDockerfile = `FROM node:24.13.0-bookworm
+
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends \\
+      ca-certificates \\
+      curl \\
+      docker.io \\
+      git \\
+      ripgrep \\
+    && npm install --global npm@11.6.2 \\
+    && rm -rf /var/lib/apt/lists/*`;
 
 /** @param {unknown} value */
 function containsSecretShape(value) {
@@ -134,43 +144,9 @@ export function validateCursorEnvironmentPolicy(input) {
   }
 
   const dockerfile = typeof input.dockerfile === "string" ? input.dockerfile : "";
-  const firstInstruction = dockerfile.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
-  if (firstInstruction !== "FROM node:24.13.0-bookworm") {
-    errors.push(".cursor/Dockerfile must use node:24.13.0-bookworm.");
-  }
-
-  const packageInstall = /apt-get install -y --no-install-recommends\s+([\s\S]*?)\s+&& npm install/iu.exec(dockerfile);
-  const installedPackages = packageInstall?.[1]
-    .replaceAll("\\", " ")
-    .trim()
-    .split(/\s+/u)
-    .filter(Boolean)
-    .toSorted() ?? [];
-  const aptInstallCount = dockerfile.match(/\bapt-get\s+install\b/giu)?.length ?? 0;
-  if (aptInstallCount !== 1 || !equal(installedPackages, approvedCursorBuildPackages.toSorted())) {
-    errors.push(".cursor/Dockerfile must install exactly the approved public toolchain packages.");
-  }
-  const npmInstallCount = dockerfile.match(/\bnpm\s+(?:install|i)\b/giu)?.length ?? 0;
-  if (npmInstallCount !== 1 || !/\bnpm install --global npm@11\.6\.2\b/u.test(dockerfile)) {
-    errors.push(".cursor/Dockerfile must pin npm@11.6.2.");
-  }
-  if (!/\brm -rf \/var\/lib\/apt\/lists\/\*/u.test(dockerfile)) {
-    errors.push(".cursor/Dockerfile must remove apt package lists.");
-  }
-  if (
-    /^\s*(?:ADD|COPY)\b/imu.test(dockerfile) ||
-    /(?:^|[\/])\.env(?:\.|\b)/imu.test(dockerfile) ||
-    /(?:\/home\/|\/root\/|\$HOME\b|\$\{HOME\}|~\/)/u.test(dockerfile) ||
-    /^\s*(?:ARG|ENV)\b[^\n]*(?:token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|auth)/imu.test(dockerfile) ||
-    containsPotentialSecret(dockerfile)
-  ) {
-    errors.push(".cursor/Dockerfile must not copy repository, environment, home, or credential content.");
-  }
-  if (
-    /(?:^\s*RUN\s+|&&\s+)(?:sudo\s+)?(?:curl|wget)\b/imu.test(dockerfile) ||
-    /(?:sh|bash)\s+-c\s+["']?\$\((?:curl|wget)\b/iu.test(dockerfile)
-  ) {
-    errors.push(".cursor/Dockerfile must not execute downloaded shell content.");
+  const logicalDockerfile = dockerfile.endsWith("\n") ? dockerfile.slice(0, -1) : dockerfile;
+  if (logicalDockerfile !== canonicalCursorDockerfile) {
+    errors.push(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
   }
 
   const packageJson = input.packageJson && typeof input.packageJson === "object"
