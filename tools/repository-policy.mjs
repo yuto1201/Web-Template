@@ -246,8 +246,9 @@ export async function validateRepository(root = defaultRoot) {
     !reviewWorkflow.includes("name: Exact Head review policy") ||
     !reviewWorkflow.includes("types: [opened, synchronize, reopened, edited, ready_for_review]") ||
     !reviewWorkflow.includes("ref: ${{ github.event.pull_request.base.sha }}") ||
-    !reviewWorkflow.includes('BASE_SHA" != "62da0e1699ddfcf39f35914b54ad963fe5aa0740"') ||
-    !reviewWorkflow.includes('HEAD_REF" != "codex/22-exact-head-review"') ||
+    !reviewWorkflow.includes('gate_path="trusted/tools/github-review-gate.mjs"') ||
+    !reviewWorkflow.includes('workflow_path="trusted/config/workflow.json"') ||
+    !reviewWorkflow.includes('execution_policy_path="trusted/config/execution.json"') ||
     !reviewWorkflow.includes('HEAD_REPOSITORY" != "$BASE_REPOSITORY"') ||
     !reviewWorkflow.includes("github.event.pull_request.head.repo.full_name") ||
     !reviewWorkflow.includes("github.event.pull_request.base.repo.full_name") ||

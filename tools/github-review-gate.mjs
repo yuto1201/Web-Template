@@ -2,6 +2,12 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  classifyRisk,
+  normalizeModelIdentity,
+  requiredReviewerFamilies,
+  validateReviewerFamilies,
+} from "./execution-policy.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const shaPattern = /^[0-9a-f]{40}$/u;
@@ -11,12 +17,15 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-/** @param {string} body @param {string} label */
-function uniqueBodyField(body, label) {
+/** @param {string} body @param {string} section @param {string} label */
+function uniqueBodyField(body, section, label) {
   const prefix = `- ${label}:`;
   const matches = body.split(/\r?\n/u).filter((line) => line.startsWith(prefix));
   assert(matches.length === 1, `PR body must contain ${label} exactly once.`);
-  return matches[0].slice(prefix.length).trim();
+  assert(section.split(/\r?\n/u).includes(matches[0]), `${label} must appear inside the review section.`);
+  const value = matches[0].slice(prefix.length).trim();
+  assert(value && !/[\u0000-\u001f\u007f\u2028\u2029]/u.test(value), `${label} must be a single non-empty line.`);
+  return value;
 }
 
 /** @param {string} body @param {number} headingIndex @param {string} section */
@@ -35,31 +44,100 @@ function assertReviewSectionVisible(body, headingIndex, section) {
   assert(!section.includes("<!--") && !section.includes("-->"), "Review evidence must not be inside an HTML comment.");
 }
 
+/** @param {string} value @param {string} label @param {RegExp} itemPattern */
+function parseCanonicalList(value, label, itemPattern) {
+  const items = value.split(", ");
+  assert(items.length > 0 && items.every((item) => itemPattern.test(item)), `${label} must be a canonical comma-separated list.`);
+  assert(value === items.join(", ") && new Set(items).size === items.length, `${label} must be a unique canonical comma-separated list.`);
+  return items;
+}
+
+/** @param {string[]} values */
+function sorted(values) {
+  return [...values].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+}
+
 /** @param {string} body */
-function parseReviewBody(body) {
-  const headings = [...body.matchAll(/^## Opposite-model review\s*$/gimu)];
-  assert(headings.length === 1, "PR body must contain the Opposite-model review section exactly once.");
+export function parseReviewBody(body) {
+  assert(typeof body === "string", "PR body must be text.");
+  const headings = [...body.matchAll(/^## Cross-model review[ \t]*$/gmu)];
+  assert(headings.length === 1, "PR body must contain the Cross-model review section exactly once.");
   const start = (headings[0].index ?? 0) + headings[0][0].length;
   const tail = body.slice(start);
   const end = tail.search(/^##\s+/mu);
   const section = end === -1 ? tail : tail.slice(0, end);
   assertReviewSectionVisible(body, headings[0].index ?? 0, section);
-  for (const label of ["Primary", "Reviewer", "Reviewed SHA", "Verdict", "Contracts"]) {
-    assert(section.split(/\r?\n/u).filter((line) => line.startsWith(`- ${label}:`)).length === 1, `${label} must appear inside the review section.`);
+
+  const labels = [
+    "Execution surface",
+    "Primary configured model",
+    "Primary observed model",
+    "Primary family",
+    "Primary fallback",
+    "Risk",
+    "Risk reasons",
+    "Reviewed SHA",
+  ];
+  const knownPrefixes = labels.map((label) => `- ${label}:`);
+  for (const line of section.split(/\r?\n/u)) {
+    if (!line.trim()) continue;
+    if (knownPrefixes.some((prefix) => line.startsWith(prefix)) || /^- Reviewer [a-z][a-z0-9-]*:/u.test(line)) continue;
+    throw new Error("Cross-model review contains an unknown review field or newline injection.");
   }
-  const primary = uniqueBodyField(body, "Primary");
-  const reviewer = uniqueBodyField(body, "Reviewer");
-  const reviewedShaValue = uniqueBodyField(body, "Reviewed SHA");
-  const verdict = uniqueBodyField(body, "Verdict");
-  const contractsValue = uniqueBodyField(body, "Contracts");
+
+  const executionSurface = uniqueBodyField(body, section, "Execution surface");
+  const primaryConfigured = uniqueBodyField(body, section, "Primary configured model");
+  const primaryObserved = uniqueBodyField(body, section, "Primary observed model");
+  const primaryFamily = uniqueBodyField(body, section, "Primary family");
+  const primaryFallbackValue = uniqueBodyField(body, section, "Primary fallback");
+  const riskLevel = uniqueBodyField(body, section, "Risk");
+  const riskReasonsValue = uniqueBodyField(body, section, "Risk reasons");
+  const reviewedShaValue = uniqueBodyField(body, section, "Reviewed SHA");
+
+  assert(["codex-local", "claude-local", "cursor-cloud"].includes(executionSurface), "Execution surface is unknown.");
+  const modelPattern = /^[a-z0-9][a-z0-9._-]*(?:\[[a-z0-9._=-]+\])?$/u;
+  assert(modelPattern.test(primaryConfigured), "Primary configured model must be one canonical model identifier.");
+  assert(modelPattern.test(primaryObserved), "Primary observed model must be one canonical model identifier.");
+  assert(["openai", "anthropic", "cursor", "xai"].includes(primaryFamily), "Primary model family is unknown.");
+  assert(["true", "false"].includes(primaryFallbackValue), "Primary fallback must be true or false.");
+  assert(["normal", "high"].includes(riskLevel), "Risk must be normal or high.");
+  const riskReasons = riskReasonsValue === "none"
+    ? []
+    : parseCanonicalList(riskReasonsValue, "Risk reasons", /^(?:path:[A-Za-z0-9._/-]+|operation:[a-z0-9._-]+)$/u);
   const reviewedSha = /^`([0-9a-f]{40})`$/u.exec(reviewedShaValue)?.[1];
   assert(reviewedSha, "Reviewed SHA must be one backtick-wrapped 40-character lowercase SHA.");
-  assert(["codex", "claude"].includes(primary), "Primary model must be codex or claude.");
-  assert(["codex", "claude"].includes(reviewer), "Reviewer model must be codex or claude.");
-  assert(verdict === "approved", "Opposite-model review verdict must be approved.");
-  const contracts = contractsValue.split(",").map((value) => value.trim()).filter(Boolean);
-  assert(contracts.length > 0 && new Set(contracts).size === contracts.length, "Review contracts must be a unique non-empty list.");
-  return { primary, reviewer, reviewedSha, verdict, contracts };
+
+  const bodyReviewLines = body.split(/\r?\n/u).filter((line) => /^- Reviewer [a-z][a-z0-9-]*:/u.test(line));
+  const reviewLines = section.split(/\r?\n/u).filter((line) => /^- Reviewer [a-z][a-z0-9-]*:/u.test(line));
+  assert(bodyReviewLines.length === reviewLines.length, "Reviewer claims must appear only inside the review section.");
+  assert(reviewLines.length > 0, "Cross-model review must contain at least one reviewer.");
+  const reviews = reviewLines.map((line) => {
+    const match = /^- Reviewer ([a-z][a-z0-9-]*): ([^|]+) \| ([^|]+) \| (.+)$/u.exec(line);
+    assert(match, "Reviewer evidence must use the canonical observed | verdict | contracts format without comma ambiguity or newline injection.");
+    const [, family, observedValue, verdictValue, contractsValue] = match;
+    const observed = observedValue.trim();
+    const verdict = verdictValue.trim();
+    assert(["openai", "anthropic", "cursor", "xai"].includes(family), `unknown reviewer model family ${family}.`);
+    assert(modelPattern.test(observed), "Reviewer observed model must be one canonical model identifier.");
+    assert(verdict === "approved", "Cross-model review verdict must be approved.");
+    const contracts = parseCanonicalList(contractsValue, "Review contracts", /^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+    return { family, observed, verdict, contracts };
+  });
+  assert(new Set(reviews.map(({ family }) => family)).size === reviews.length, "Reviewer families must be unique.");
+  const contracts = sorted(reviews[0].contracts.filter((contract) => reviews.every((review) => review.contracts.includes(contract))));
+  return {
+    executionSurface,
+    primaryModel: {
+      configured: primaryConfigured,
+      observed: primaryObserved,
+      family: primaryFamily,
+      fallback: primaryFallbackValue === "true",
+    },
+    risk: { level: riskLevel, reasons: riskReasons },
+    reviews,
+    reviewedSha,
+    contracts,
+  };
 }
 
 /** @param {string[]} changedPaths @param {any} workflow */
@@ -99,9 +177,9 @@ function validateDependabotDiff(diff, policy) {
 }
 
 /**
- * @param {{event: any, changedPaths: string[], diff: string, workflow: any}} input
+ * @param {{event: any, changedPaths: string[], diff: string, workflow: any, executionPolicy?: any}} input
  */
-export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow }) {
+export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, executionPolicy }) {
   const pullRequest = event?.pull_request;
   assert(pullRequest && typeof pullRequest === "object", "GitHub event must contain a pull_request object.");
   const headSha = pullRequest.head?.sha;
@@ -120,11 +198,49 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow }
   }
 
   const evidence = parseReviewBody(String(pullRequest.body ?? ""));
+  assert(pullRequest.head?.repo?.full_name === pullRequest.base?.repo?.full_name, "Independent review requires a same repository branch.");
   assert(evidence.reviewedSha === headSha, "Reviewed SHA must match the current Head SHA.");
-  assert(workflow.reviewerMap?.[evidence.primary] === evidence.reviewer, "Reviewer must be the configured opposite model.");
+  assert(executionPolicy && typeof executionPolicy === "object", "Execution policy is required for independent review.");
+  const primaryModel = normalizeModelIdentity(
+    evidence.primaryModel.configured,
+    evidence.primaryModel.observed,
+    [],
+    executionPolicy,
+  );
+  assert(primaryModel.family === evidence.primaryModel.family, "Primary model family must match the observed model.");
+  assert(primaryModel.fallback === evidence.primaryModel.fallback, "Primary fallback claim must match the configured and observed models.");
+  assert(!primaryModel.fallback, "Primary model fallback cannot satisfy review policy.");
+  for (const review of evidence.reviews) {
+    const reviewerModel = normalizeModelIdentity(review.observed, review.observed, [], executionPolicy);
+    assert(reviewerModel.family === review.family && reviewerModel.family !== "unknown", `unknown or mismatched reviewer model family ${review.family}.`);
+  }
+  const derivedRisk = classifyRisk({ changedPaths, externalOperations: [] }, executionPolicy);
+  if (derivedRisk.level === "high") {
+    assert(evidence.risk.level === "high", "Risk claim cannot reduce the risk derived from changed paths.");
+    for (const reason of derivedRisk.reasons) assert(evidence.risk.reasons.includes(reason), `Risk reasons must include derived reason ${reason}.`);
+  }
+  if (evidence.risk.level === "normal") {
+    assert(evidence.risk.reasons.length === 0, "Normal risk evidence cannot contain risk reasons.");
+  } else {
+    assert(evidence.risk.reasons.length > 0, "High risk evidence must contain at least one risk reason.");
+    for (const reason of evidence.risk.reasons.filter((value) => value.startsWith("path:"))) {
+      assert(derivedRisk.reasons.includes(reason), `Claimed path risk reason ${reason} was not derived from changed paths.`);
+    }
+  }
+  const effectiveRisk = evidence.risk.level;
+  const reviewerFamilies = evidence.reviews.map(({ family }) => family);
+  const validatedFamilies = validateReviewerFamilies({
+    risk: effectiveRisk,
+    primaryFamily: primaryModel.family,
+    reviewerFamilies,
+  });
+  const requiredFamilies = requiredReviewerFamilies({ risk: effectiveRisk, primaryFamily: primaryModel.family });
+  assert(JSON.stringify(validatedFamilies) === JSON.stringify(sorted(requiredFamilies)), "Review evidence must contain exactly the required reviewer families.");
   const required = requiredContracts(changedPaths, workflow);
-  for (const contract of required) assert(evidence.contracts.includes(contract), `Review evidence is missing required contract ${contract}.`);
-  return { ok: true, mode: "independent-review", headSha, reviewer: evidence.reviewer, contracts: required };
+  for (const review of evidence.reviews) {
+    for (const contract of required) assert(review.contracts.includes(contract), `Review evidence is missing required contract ${contract} for reviewer ${review.family}.`);
+  }
+  return { ok: true, mode: "independent-review", headSha, reviewers: validatedFamilies, risk: effectiveRisk, contracts: required };
 }
 
 /** @param {string[]} argv */
@@ -140,6 +256,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   assert(eventPath, "Missing GitHub event path.");
   const repository = path.resolve(options.repository ?? ".");
   const workflowPath = path.resolve(options.workflow ?? path.join(repository, "config", "workflow.json"));
+  const executionPolicyPath = path.resolve(options["execution-policy"] ?? path.join(path.dirname(workflowPath), "execution.json"));
   const baseSha = options.base;
   const headSha = options.head;
   assert(baseSha && shaPattern.test(baseSha), "Missing or invalid --base SHA.");
@@ -157,6 +274,7 @@ export async function runCli(argv = process.argv.slice(2)) {
     return result.stdout;
   };
   const workflow = JSON.parse(await readFile(workflowPath, "utf8"));
+  const executionPolicy = JSON.parse(await readFile(executionPolicyPath, "utf8"));
   const event = JSON.parse(await readFile(path.resolve(eventPath), "utf8"));
   assert(event.pull_request?.base?.sha === baseSha, "CLI base SHA must match the GitHub event.");
   assert(event.pull_request?.head?.sha === headSha, "CLI Head SHA must match the GitHub event.");
@@ -164,7 +282,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   assert(shaPattern.test(diffBaseSha), "Git merge-base is invalid.");
   const changedPaths = gitBuffer("-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", diffBaseSha, headSha, "--").toString("utf8").split("\0").filter(Boolean);
   const diff = git("diff", "--unified=0", "--no-ext-diff", "--no-textconv", "--no-renames", diffBaseSha, headSha, "--");
-  process.stdout.write(`${JSON.stringify(evaluateGitHubReviewGate({ event, changedPaths, diff, workflow }), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, executionPolicy }), null, 2)}\n`);
 }
 
 if (path.resolve(process.argv[1] ?? "") === modulePath) {

@@ -3,6 +3,7 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { evaluateGitHubReviewGate, parseReviewBody } from "../tools/github-review-gate.mjs";
 import { readExternalOperationRequest } from "../tools/workflow-core.mjs";
 
 const repositoryRoot = path.resolve(".");
@@ -63,12 +64,35 @@ describe("provider-free Issue workflow simulation", () => {
     expect(prBody).toContain("Closes #42");
     expect(prBody).toContain(`Reviewed SHA: \`${result.headSha}\``);
     expect(prBody).toContain("Execution surface: cursor-cloud");
-    expect(prBody).toContain("Primary: cursor (composer-2.5)");
+    expect(prBody).toContain("Primary observed model: composer-2.5");
     expect(prBody).toContain("Risk: high");
     expect(prBody).toContain("Reviewer anthropic:");
     expect(prBody).toContain("Reviewer openai:");
     expect(prBody).toContain("## External changes");
     expect(prBody).toContain("Closes \\#999");
     expect(prBody).not.toContain("@reviewers");
+    expect(parseReviewBody(prBody)).toMatchObject({
+      executionSurface: "cursor-cloud",
+      primaryModel: { configured: "composer-2.5", observed: "composer-2.5", family: "cursor", fallback: false },
+      risk: { level: "high", reasons: ["operation:github.merge_pr"] },
+      reviewedSha: result.headSha,
+      reviews: [{ family: "anthropic" }, { family: "openai" }],
+    });
+    const workflow = JSON.parse(await readFile(path.join(repositoryRoot, "config", "workflow.json"), "utf8"));
+    const executionPolicy = JSON.parse(await readFile(path.join(repositoryRoot, "config", "execution.json"), "utf8"));
+    expect(evaluateGitHubReviewGate({
+      event: {
+        pull_request: {
+          body: prBody,
+          head: { sha: result.headSha, repo: { full_name: "yuto1201/Web-Template" } },
+          base: { sha: "b".repeat(40), repo: { full_name: "yuto1201/Web-Template" } },
+          user: { login: "yuto1201", id: 50611866, type: "User" },
+        },
+      },
+      changedPaths: ["src/app/page.tsx"],
+      diff: "",
+      workflow,
+      executionPolicy,
+    })).toMatchObject({ ok: true, mode: "independent-review", headSha: result.headSha, risk: "high" });
   });
 });

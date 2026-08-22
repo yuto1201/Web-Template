@@ -949,8 +949,9 @@ export function renderPullRequestBody(input) {
   const remainingWork = verification.remainingWork.length === 0
     ? "- None for this Issue."
     : verification.remainingWork.map((item) => `- ${safe(item)}`).join("\n");
-  const reviewLines = reviews.map((review) => `- Reviewer ${review.reviewerModel.family}: ${review.verdict}; observed ${safe(review.reviewerModel.observed)}; Reviewed SHA: \`${review.headSha}\`; Contracts: ${review.contracts.join(", ")}`).join("\n");
-  return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Execution surface: ${verification.executionSurface}\n- Primary: ${verification.primaryModel.family} (${safe(verification.primaryModel.observed)})\n- Risk: ${verification.risk.level}${verification.risk.reasons.length > 0 ? ` (${verification.risk.reasons.map(safe).join(", ")})` : ""}\n- Head SHA: \`${gate.headSha}\`\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Cross-model reviews\n${reviewLines}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
+  const reviewLines = reviews.map((review) => `- Reviewer ${review.reviewerModel.family}: ${safe(review.reviewerModel.observed)} | ${review.verdict} | ${review.contracts.join(", ")}`).join("\n");
+  const riskReasons = verification.risk.reasons.length > 0 ? verification.risk.reasons.map(safe).join(", ") : "none";
+  return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Cross-model review\n- Execution surface: ${verification.executionSurface}\n- Primary configured model: ${safe(verification.primaryModel.configured)}\n- Primary observed model: ${safe(verification.primaryModel.observed)}\n- Primary family: ${verification.primaryModel.family}\n- Primary fallback: ${verification.primaryModel.fallback}\n- Risk: ${verification.risk.level}\n- Risk reasons: ${riskReasons}\n- Reviewed SHA: \`${gate.headSha}\`\n${reviewLines}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
 }
 
 /** @param {unknown} value @param {string} root */
