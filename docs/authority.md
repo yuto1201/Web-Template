@@ -55,28 +55,36 @@ Routine GitHub delivery is limited to pushing the exact Issue branch, creating/u
 
 ## Claude delegation request
 
-When Claude needs an external action, it writes one versioned request beneath `.artifacts/ops-requests/` and continues with remaining local work. This example is accepted by the strict runtime validator:
+When Claude needs an external action, it may describe the need but cannot create an executable provider request because `claude-local` is not a provider operator. A provider operator creates the canonical request beneath `.artifacts/ops-requests/`. This Codex-local example shows the strict version 2 authority envelope (the contract digest and fingerprint are canonical SHA-256 values, not placeholders in a real artifact):
 
 ```json
 {
-  "schemaVersion": 1,
-  "requestId": "issue-5-supabase-apply-migrations-1",
+  "schemaVersion": 2,
+  "requestId": "issue-5-github-read-issue-1",
   "issue": 5,
-  "operation": "supabase.apply_migrations",
-  "target": {
-    "kind": "supabase.project",
-    "identifier": "config/ownership.json#supabase.projectRef"
+  "operation": "github.read_issue",
+  "authority": {
+    "executionSurface": "codex-local",
+    "runId": "local-issue-5-preflight",
+    "contractDigest": "sha256:<64 lowercase hex characters>",
+    "activationEvidenceRef": null,
+    "connectorIdentity": {
+      "provider": "github",
+      "owner": "yuto1201",
+      "fingerprint": "sha256:<64 lowercase hex characters>"
+    }
   },
-  "environment": "production",
-  "reasonCode": "acceptance-evidence",
+  "environment": "none",
+  "reasonCode": "issue-contract",
   "inputs": {
-    "projectRefSource": "config/ownership.json",
-    "migrations": ["supabase/migrations/20260821010000_example.sql"]
+    "issue": 5
   }
 }
 ```
 
-The request is not authorization. Codex validates it with `npm run workflow -- validate-request`, resolves the fixed identifier, checks the frozen Issue allowlist, performs the preflight, and stores the redacted result under `.artifacts/ops-results/`. Unknown operations, targets, instructions, inputs, environment/reason combinations, path escapes, or supplied approval evidence fail closed.
+The request is not authorization. `validate-request` checks the canonical filename, non-symlink path, operator surface, run, exact frozen contract digest, operation allowlist, ownership-derived target, connector owner/fingerprint, environment/reason pair, and operation-specific inputs. It derives target, input/mutation digests, reversibility, and expected evidence; callers cannot supply those conclusions. Cursor additionally requires `.artifacts/cursor-activation/<run-id>.json`, whose run and all provider identities/targets must validate against current ownership. Local surfaces must set `activationEvidenceRef` to `null`.
+
+After execution, write only `.artifacts/ops-results/<request-id>.result.json` and validate it with `npm run workflow -- validate-result --file <path>`. The strict result binds the request digest, Issue, operation, surface/run, contract, connector identity, resolved target, input/mutation digests, fixed reversibility, enumerated outcome, and redacted evidence digest. A successful result also requires a later `verified` post-state with a different collector run, exact target digest, evidence digest, and timestamp. Extra fields, secret-shaped content, substitution, symlinks, and false or missing success post-state fail closed.
 
 ## Enforcement limits
 

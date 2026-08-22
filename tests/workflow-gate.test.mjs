@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  connectorIdentityFor,
   digestValue,
   prepareReviewArtifacts,
   readExternalOperationRequest,
@@ -223,21 +224,28 @@ describe("current-Head pre-merge gate", () => {
     const ownership = /** @type {{
       supabase: { projectRef: string | null },
       vercel: { projectId: string | null },
-      cloudflare: { zoneId: string | null }
+      cloudflare: { accountId?: string | null, zoneId: string | null }
     }} */ (
       JSON.parse(await readFile(ownershipPath, "utf8"))
     );
     ownership.supabase.projectRef = "abcdefghijklmnopqrst";
     ownership.vercel.projectId = "prj_cursor_fixture";
     ownership.cloudflare.zoneId = "0".repeat(32);
+    ownership.cloudflare.accountId = "00000000000000000000000000000042";
     await writeFile(ownershipPath, `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
 
     for (const [index, candidate] of highRiskOperations.entries()) {
+      const provider = /** @type {"github" | "supabase" | "vercel" | "cloudflare"} */ (candidate.operation.split(".")[0]);
+      const owner = provider === "github" ? "yuto1201" : provider === "supabase" ? "fixture" : provider === "vercel" ? "fixture-scope" : "00000000000000000000000000000042";
       const request = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: `issue-42-${candidate.operation.replace(/[._]/gu, "-")}-${index + 1}`,
         issue: 42,
-        ...candidate,
+        authority: { executionSurface: "codex-local", runId: `local-issue-42-high-${index + 1}`, contractDigest: changedContract.digest, activationEvidenceRef: null, connectorIdentity: connectorIdentityFor(provider, owner) },
+        operation: candidate.operation,
+        environment: candidate.environment,
+        reasonCode: candidate.reasonCode,
+        inputs: candidate.inputs,
       };
       const requestPath = `.artifacts/ops-requests/${request.requestId}.json`;
       await mkdir(path.join(root, ".artifacts/ops-requests"), { recursive: true });
@@ -246,10 +254,14 @@ describe("current-Head pre-merge gate", () => {
     }
     for (const [index, candidate] of routineOperations.entries()) {
       const request = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: `issue-42-${candidate.operation.replace(/[._]/gu, "-")}-${index + 1}`,
         issue: 42,
-        ...candidate,
+        authority: { executionSurface: "codex-local", runId: `local-issue-42-routine-${index + 1}`, contractDigest: changedContract.digest, activationEvidenceRef: null, connectorIdentity: connectorIdentityFor("github", "yuto1201") },
+        operation: candidate.operation,
+        environment: candidate.environment,
+        reasonCode: candidate.reasonCode,
+        inputs: candidate.inputs,
       };
       const requestPath = `.artifacts/ops-requests/${request.requestId}.json`;
       await writeFile(path.join(root, requestPath), `${JSON.stringify(request, null, 2)}\n`, "utf8");

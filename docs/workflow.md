@@ -79,13 +79,21 @@ Review findings return to `changes-requested -> in-progress`. Blocked states rec
 
 ## Fixed external-operation transport
 
-Claude may write only a strict request under `.artifacts/ops-requests/<request-id>.json`. It cannot execute the request. Codex validates it with:
+Only a provider-operator surface may create a strict request under `.artifacts/ops-requests/<request-id>.json`; Claude may return a delegation need but remains denied. Validate a request with:
 
 ```powershell
 npm run workflow -- validate-request --file .artifacts/ops-requests/<request-id>.json
 ```
 
-Requests use `schemaVersion: 1`, a fixed operation allowlist, an ownership-config identifier, an operation-specific environment and reason code, a request ID bound to the Issue/operation, and strict inputs. The request operation must also appear in the frozen Issue contract; requests are therefore available only after Codex snapshots the Issue. Unknown or out-of-scope operations, free-form targets, additional fields such as `prompt` or `force`, path escapes, malformed JSON, and mismatched Issue inputs are rejected. The validator resolves the actual target from `config/ownership.json`; a missing target blocks execution. Merge and production release/DNS requests additionally rerun the authoritative review gate, and any supplied Head SHA must match it. Expected evidence is derived by the validator, never supplied as free-form reviewer authority. Results belong in `.artifacts/ops-results/<request-id>.result.json` after Codex preflight and execution.
+Requests use `schemaVersion: 2` and bind `executionSurface`, a canonical run ID, exact frozen `contractDigest`, provider-specific connector owner/fingerprint, and `activationEvidenceRef`. Codex-local requests require a `local-*` run and null activation reference. Cursor requires the exact `.artifacts/cursor-activation/<bc-run-id>.json`; that non-symlink artifact must be fresh and match the run plus every configured provider owner and target. Claude requests fail because its surface is not a provider operator. The operation must appear in the frozen Issue contract. The validator derives the ownership target, input and mutation digests, reversibility, and expected evidence from repository policy. Unknown fields, caller-supplied target/reversibility/evidence, path aliases, malformed JSON, or mismatched authority fail closed. High-risk requests rerun the exact-Head review gate.
+
+After execution, store the strict version 1 result at the one canonical path and validate it:
+
+```powershell
+npm run workflow -- validate-result --file .artifacts/ops-results/<request-id>.result.json
+```
+
+The result repeats no free-form authority: it must exactly bind the validated request digest, Issue, operation, surface/run, contract, connector identity, derived target, input/mutation digests, and fixed reversibility. `status` and outcome `code` are enums; summaries are single-line, length-bounded, and secret-scanned. Success requires an independently collected later post-state with a different run ID and exact target/evidence digests. Cross-request substitution, extra fields, secrets, missing/false post-state, path escape, or symlink fails closed.
 
 Activated Cursor uses the same frozen operation names and ownership sources, but project hooks do not authorize its connector call. Before each provider tool use, record the personal connector identity, resolved target, operation, risk/review evidence, and reversible intent; after the call, retain a redacted result and independently query the exact post-state. A prompt or provider response cannot create a new request field, operation, target, or approval.
 

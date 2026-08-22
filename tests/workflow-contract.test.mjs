@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   digestValue,
+  connectorIdentityFor,
   readExternalOperationRequest,
   requiredReviewContracts,
   schemas,
@@ -17,6 +18,15 @@ const headSha = "2".repeat(40);
 const contractDigest = `sha256:${"3".repeat(64)}`;
 const verifyDigest = `sha256:${"4".repeat(64)}`;
 const diffDigest = `sha256:${"5".repeat(64)}`;
+
+/** @param {ReturnType<typeof snapshotIssueContract>} contract @param {"github" | "supabase" | "vercel" | "cloudflare"} [provider] */
+const authority = (contract, provider = "github") => ({
+  executionSurface: "codex-local",
+  runId: "local-issue-5-test",
+  contractDigest: contract.digest,
+  activationEvidenceRef: null,
+  connectorIdentity: connectorIdentityFor(provider, provider === "github" ? "yuto1201" : provider === "supabase" ? "yuto1201's Org" : provider === "vercel" ? "team_ANEUn6gVL8dccPaY08wkvxFt" : "7ea8e713d76506f9e303f58624829aa5"),
+});
 
 /** @typedef {import("zod").infer<typeof schemas.modelIdentitySchema>} ModelIdentity */
 
@@ -97,11 +107,11 @@ describe("workflow contracts", () => {
     /** @param {unknown} value */
     const validate = (value) => validateExternalOperationRequest(value, path.resolve("."), frozenContract);
     const request = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "issue-5-github-merge-pr-1",
       issue: 5,
       operation: "github.merge_pr",
-      target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+      authority: authority(frozenContract),
       environment: "production",
       reasonCode: "reviewed-release",
       inputs: { issue: 5, prNumber: 15, headSha, method: "squash" },
@@ -112,7 +122,7 @@ describe("workflow contracts", () => {
     expect(() => validate({ ...request, inputs: { ...request.inputs, force: true } })).toThrow();
     expect(() => validate({ ...request, requestId: "issue-99-github-merge-pr-1" })).toThrow(/does not match/u);
     expect(() => validate({ ...request, environment: "preview" })).toThrow(/environment/u);
-    expect(() => validate({ ...request, target: { ...request.target, identifier: "free form target" } })).toThrow(/identifier/u);
+    expect(() => validate({ ...request, target: { kind: "github.repository", identifier: "free form target" } })).toThrow();
 
     const outOfScopeContract = snapshotIssueContract({ ...contractInput(), externalOperations: [] }, "2026-08-21T01:00:00+09:00");
     expect(() => validateExternalOperationRequest(request, path.resolve("."), outOfScopeContract)).toThrow(/outside the frozen/u);
@@ -149,11 +159,11 @@ describe("workflow contracts", () => {
 
     for (const [index, candidate] of operations.entries()) {
       const request = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: `issue-5-${candidate.operation.replace(/[._]/gu, "-")}-${index + 1}`,
         issue: 5,
         operation: candidate.operation,
-        target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+        authority: authority(frozenContract),
         environment: candidate.environment,
         reasonCode: candidate.reasonCode,
         inputs: candidate.inputs,
@@ -172,11 +182,11 @@ describe("workflow contracts", () => {
       externalOperations: ["github.update_ruleset"],
     }, "2026-08-21T01:00:00+09:00");
     const request = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestId: "issue-5-github-update-ruleset-1",
       issue: 5,
       operation: "github.update_ruleset",
-      target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+      authority: authority(frozenContract),
       environment: "production",
       reasonCode: "reviewed-release",
       inputs: {

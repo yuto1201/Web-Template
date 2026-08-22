@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -14,6 +14,8 @@ import {
   validateBranchForSurface,
   validateReviewerFamilies,
 } from "./execution-policy.mjs";
+import { validateActivationEvidence } from "./cursor-cloud-doctor.mjs";
+import { containsPotentialSecret } from "./repository-policy.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(moduleDirectory, "..");
@@ -82,6 +84,14 @@ const branchPrefixPattern = Object.values(executionPolicy.surfaces)
 const branchSchema = z.string().regex(new RegExp(`^(?:${branchPrefixPattern})\\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$`, "u"));
 const worktreeSchema = z.string().regex(/^\.worktrees\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const repositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
+const runIdSchema = z.string().regex(/^(?:local-[a-z0-9]+(?:-[a-z0-9]+)*|bc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/u);
+const connectorProviderSchema = z.enum(["github", "supabase", "vercel", "cloudflare"]);
+const connectorOwnerSchema = z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9_' .:@/-]+$/u);
+const connectorIdentitySchema = z.object({
+  provider: connectorProviderSchema,
+  owner: connectorOwnerSchema,
+  fingerprint: digestSchema,
+}).strict();
 
 const targetSources = {
   github: "config/ownership.json#github",
@@ -96,7 +106,8 @@ const operationDefinitions = /** @type {Record<string, {
   environments: string[],
   reasonCodes: string[],
   inputs: import("zod").ZodType,
-  evidence: string[]
+  evidence: string[],
+  reversibility: "read-only" | "reversible" | "conditional" | "irreversible"
 }>} */ ({
   "github.read_issue": {
     targetKind: "github.repository",
@@ -105,6 +116,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["issue-contract"],
     inputs: z.object({ issue: z.number().int().positive() }).strict(),
     evidence: ["authenticated GitHub login", "repository", "sanitized Issue snapshot"],
+    reversibility: "read-only",
   },
   "github.push_branch": {
     targetKind: "github.repository",
@@ -113,6 +125,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["acceptance-evidence"],
     inputs: z.object({ branch: branchSchema, headSha: shaSchema }).strict(),
     evidence: ["authenticated GitHub login", "repository", "pushed branch Head SHA"],
+    reversibility: "reversible",
   },
   "github.create_pr": {
     targetKind: "github.repository",
@@ -126,6 +139,7 @@ const operationDefinitions = /** @type {Record<string, {
       headSha: shaSchema,
     }).strict(),
     evidence: ["authenticated GitHub login", "draft PR URL", "PR Head SHA"],
+    reversibility: "reversible",
   },
   "github.merge_pr": {
     targetKind: "github.repository",
@@ -134,6 +148,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["reviewed-release"],
     inputs: z.object({ issue: z.number().int().positive(), prNumber: z.number().int().positive(), headSha: shaSchema, method: z.literal("squash") }).strict(),
     evidence: ["authenticated GitHub login", "matched PR Head SHA", "squash merge commit", "closed Issue"],
+    reversibility: "conditional",
   },
   "github.delete_branch": {
     targetKind: "github.repository",
@@ -142,6 +157,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["verified-cleanup"],
     inputs: z.object({ branch: branchSchema, mergedPrNumber: z.number().int().positive(), headSha: shaSchema }).strict(),
     evidence: ["merged PR identity", "deleted exact remote branch"],
+    reversibility: "reversible",
   },
   "github.update_ruleset": {
     targetKind: "github.repository",
@@ -156,6 +172,7 @@ const operationDefinitions = /** @type {Record<string, {
       enforcement: z.literal("active"),
     }).strict(),
     evidence: ["authenticated GitHub owner", "ruleset ID", "active enforcement", "required exact-Head check"],
+    reversibility: "reversible",
   },
   "supabase.inspect_project": {
     targetKind: "supabase.project",
@@ -164,6 +181,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["issue-contract"],
     inputs: z.object({ projectRefSource: z.literal("config/ownership.json") }).strict(),
     evidence: ["authenticated Supabase organization", "project ref fingerprint", "read-only inspection"],
+    reversibility: "read-only",
   },
   "supabase.apply_migrations": {
     targetKind: "supabase.project",
@@ -175,6 +193,7 @@ const operationDefinitions = /** @type {Record<string, {
       migrations: z.array(relativeFileSchema.regex(/^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/u)).min(1),
     }).strict(),
     evidence: ["authenticated Supabase organization", "project ref fingerprint", "applied migration names"],
+    reversibility: "conditional",
   },
   "vercel.inspect_project": {
     targetKind: "vercel.project",
@@ -183,6 +202,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["issue-contract"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
     evidence: ["authenticated Vercel scope", "project identity", "read-only inspection"],
+    reversibility: "read-only",
   },
   "vercel.deploy_preview": {
     targetKind: "vercel.project",
@@ -191,6 +211,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["acceptance-evidence"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
     evidence: ["authenticated Vercel scope", "preview deployment URL", "deployed Head SHA"],
+    reversibility: "reversible",
   },
   "vercel.deploy_production": {
     targetKind: "vercel.project",
@@ -199,6 +220,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["reviewed-release"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
     evidence: ["authenticated Vercel scope", "production deployment URL", "deployed Head SHA"],
+    reversibility: "conditional",
   },
   "cloudflare.inspect_zone": {
     targetKind: "cloudflare.zone",
@@ -207,6 +229,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["issue-contract"],
     inputs: z.object({ zoneSource: z.literal("config/ownership.json") }).strict(),
     evidence: ["authenticated Cloudflare account", "zone identity", "read-only DNS snapshot"],
+    reversibility: "read-only",
   },
   "cloudflare.upsert_dns": {
     targetKind: "cloudflare.zone",
@@ -221,18 +244,55 @@ const operationDefinitions = /** @type {Record<string, {
       proxied: z.literal(false),
     }).strict(),
     evidence: ["authenticated Cloudflare account", "zone identity", "exact DNS record after write"],
+    reversibility: "reversible",
   },
 });
 
 const externalRequestBaseSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   requestId: z.string().regex(/^issue-[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*-[1-9][0-9]*$/u),
   issue: z.number().int().positive(),
   operation: operationSchema,
-  target: z.object({ kind: z.string().min(1), identifier: z.string().min(1).max(200) }).strict(),
+  authority: z.object({
+    executionSurface: surfaceSchema,
+    runId: runIdSchema,
+    contractDigest: digestSchema,
+    activationEvidenceRef: relativeFileSchema.nullable(),
+    connectorIdentity: connectorIdentitySchema,
+  }).strict(),
   environment: z.enum(["none", "preview", "production"]),
   reasonCode: z.enum(["issue-contract", "acceptance-evidence", "reviewed-release", "verified-cleanup"]),
   inputs: z.record(z.string(), z.unknown()),
+}).strict();
+
+const operationResultSchema = z.object({
+  schemaVersion: z.literal(1),
+  requestId: externalRequestBaseSchema.shape.requestId,
+  requestDigest: digestSchema,
+  issue: z.number().int().positive(),
+  operation: operationSchema,
+  executionSurface: surfaceSchema,
+  runId: runIdSchema,
+  contractDigest: digestSchema,
+  connectorIdentity: connectorIdentitySchema,
+  resolvedTarget: z.object({ kind: z.string().min(1).max(80), value: z.string().min(1).max(253) }).strict(),
+  inputDigest: digestSchema,
+  mutationDigest: digestSchema,
+  reversibility: z.enum(["read-only", "reversible", "conditional", "irreversible"]),
+  status: z.enum(["succeeded", "failed"]),
+  outcome: z.object({
+    code: z.enum(["completed", "rejected", "provider-error"]),
+    summary: z.string().trim().min(1).max(240).regex(/^[^\r\n]+$/u),
+    evidenceDigest: digestSchema,
+  }).strict(),
+  postState: z.object({
+    status: z.literal("verified"),
+    collectorRunId: runIdSchema,
+    targetDigest: digestSchema,
+    evidenceDigest: digestSchema,
+    observedAt: timestampSchema,
+  }).strict().nullable(),
+  completedAt: timestampSchema,
 }).strict();
 
 const singleLineSchema = z.string().trim().min(1).regex(/^[^\r\n]+$/u);
@@ -472,6 +532,74 @@ function resolveOwnershipTarget(root, source) {
   throw new Error(`Ownership target ${source} is not configured.`);
 }
 
+/** @param {string} operation */
+function operationProvider(operation) {
+  return connectorProviderSchema.parse(operation.split(".")[0]);
+}
+
+/** @param {string} root @param {"github" | "supabase" | "vercel" | "cloudflare"} provider */
+function expectedConnectorOwner(root, provider) {
+  const ownership = JSON.parse(readFileSync(path.join(root, "config", "ownership.json"), "utf8"));
+  const owner = provider === "github"
+    ? ownership.github?.owner
+    : provider === "supabase"
+      ? ownership.supabase?.organizationName
+      : provider === "vercel"
+        ? ownership.vercel?.scope
+        : ownership.cloudflare?.accountId;
+  return connectorOwnerSchema.parse(owner);
+}
+
+/** @param {"github" | "supabase" | "vercel" | "cloudflare"} provider @param {string} owner */
+export function connectorIdentityFor(provider, owner) {
+  const identity = { provider, owner, fingerprint: digestValue({ provider, owner }) };
+  return connectorIdentitySchema.parse(identity);
+}
+
+/** @param {string} candidate @param {string} label */
+function requireRegularFileWithoutSymlink(candidate, label) {
+  const metadata = lstatSync(candidate);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`${label} must be a regular non-symlink file.`);
+}
+
+/** @param {string} root @param {string} reference @param {string} runId */
+function readCursorActivation(root, reference, runId) {
+  const expected = `.artifacts/cursor-activation/${runId}.json`;
+  if (reference !== expected) throw new Error("Cursor activation evidence must use its canonical run-bound artifact path.");
+  const resolved = resolveInside(root, reference, ".artifacts/cursor-activation");
+  requireRegularFileWithoutSymlink(resolved, "Cursor activation evidence");
+  const actual = realpathSync.native(resolved);
+  if (actual !== resolved) throw new Error("Cursor activation evidence must not use a filesystem alias or symlink.");
+  const activation = validateActivationEvidence(JSON.parse(readFileSync(actual, "utf8")), executionPolicy);
+  if (activation.run.id !== runId) throw new Error("Cursor activation evidence run does not match the operation request.");
+  const ownership = JSON.parse(readFileSync(path.join(root, "config", "ownership.json"), "utf8"));
+  const expectedRepository = `${ownership.github?.owner}/${ownership.github?.repository}`;
+  const ownershipMatches =
+    activation.providers.github.owner === ownership.github?.owner &&
+    activation.providers.github.fullName === expectedRepository &&
+    activation.repository.fullName === expectedRepository &&
+    activation.providers.supabase.organizationName === ownership.supabase?.organizationName &&
+    activation.providers.supabase.projectRef === ownership.supabase?.projectRef &&
+    activation.providers.vercel.scope === ownership.vercel?.scope &&
+    activation.providers.vercel.projectId === ownership.vercel?.projectId &&
+    activation.providers.cloudflare.accountId === ownership.cloudflare?.accountId &&
+    activation.providers.cloudflare.accountName === ownership.cloudflare?.accountName &&
+    activation.providers.cloudflare.zoneId === ownership.cloudflare?.zoneId &&
+    Array.isArray(ownership.cloudflare?.domains) && ownership.cloudflare.domains.includes(activation.providers.cloudflare.domain);
+  if (!ownershipMatches) throw new Error("Cursor activation evidence does not match configured provider ownership and targets.");
+  return activation;
+}
+
+/** @param {unknown} value @returns {boolean} */
+function containsSecretShapedEvidence(value) {
+  if (Array.isArray(value)) return value.some(containsSecretShapedEvidence);
+  if (!value || typeof value !== "object") return typeof value === "string" && containsPotentialSecret(value);
+  return Object.entries(value).some(([key, child]) => (
+    /(?:token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|authorization)/iu.test(key) ||
+    containsSecretShapedEvidence(child)
+  ));
+}
+
 /** @param {unknown} value @param {string} [root] @param {unknown} [contractValue] */
 export function validateExternalOperationRequest(value, root = defaultRoot, contractValue) {
   const request = externalRequestBaseSchema.parse(value);
@@ -484,11 +612,29 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
     throw new Error(`Operation ${request.operation} is outside the frozen Issue contract.`);
   }
   const definition = operationDefinitions[request.operation];
-  if (request.target.kind !== definition.targetKind) {
-    throw new Error(`Operation ${request.operation} requires target kind ${definition.targetKind}.`);
+  if (request.authority.contractDigest !== contract.digest) throw new Error("Operation request contract digest does not match the frozen Issue contract.");
+  const surface = executionPolicy.surfaces[request.authority.executionSurface];
+  if (!surface.providerOperator) throw new Error(`${request.authority.executionSurface} is not an authorized provider operator.`);
+  const provider = operationProvider(request.operation);
+  const expectedIdentity = connectorIdentityFor(provider, expectedConnectorOwner(root, provider));
+  if (canonicalJson(request.authority.connectorIdentity) !== canonicalJson(expectedIdentity)) {
+    throw new Error("Operation request connector identity does not match configured ownership.");
   }
-  if (request.target.identifier !== definition.targetIdentifier) {
-    throw new Error(`Operation ${request.operation} requires target identifier ${definition.targetIdentifier}.`);
+  if (request.authority.executionSurface === "cursor-cloud") {
+    if (!request.authority.activationEvidenceRef) throw new Error("Cursor Cloud operation requires activation evidence.");
+    const activation = readCursorActivation(root, request.authority.activationEvidenceRef, request.authority.runId);
+    const activationOwner = provider === "github"
+      ? activation.providers.github.owner
+      : provider === "supabase"
+        ? activation.providers.supabase.organizationName
+        : provider === "vercel"
+          ? activation.providers.vercel.scope
+          : activation.providers.cloudflare.accountId;
+    if (activationOwner !== expectedIdentity.owner) throw new Error("Cursor activation connector identity does not match configured ownership.");
+    const expectedRepository = resolveOwnershipTarget(root, targetSources.github);
+    if (activation.repository.fullName !== expectedRepository) throw new Error("Cursor activation repository does not match configured ownership.");
+  } else if (request.authority.activationEvidenceRef !== null) {
+    throw new Error("Local operation requests must not reference Cursor activation evidence.");
   }
   if (!definition.environments.includes(request.environment)) throw new Error(`Invalid environment for ${request.operation}.`);
   if (!definition.reasonCodes.includes(request.reasonCode)) throw new Error(`Invalid reason code for ${request.operation}.`);
@@ -499,11 +645,22 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
     throw new Error("Operation request Issue does not match operation inputs.");
   }
   validateOperationBranchIssue(request.operation, inputs, request.issue);
+  const resolvedTarget = resolveOwnershipTarget(root, definition.targetIdentifier);
   return {
     ...request,
     inputs,
-    resolvedTarget: resolveOwnershipTarget(root, definition.targetIdentifier),
+    resolvedTarget,
+    resolvedTargetKind: definition.targetKind,
     expectedEvidence: definition.evidence,
+    reversibility: definition.reversibility,
+    inputDigest: digestValue(inputs),
+    mutationDigest: digestValue({
+      operation: request.operation,
+      environment: request.environment,
+      resolvedTarget: { kind: definition.targetKind, value: resolvedTarget },
+      inputs,
+    }),
+    requestDigest: digestValue(request),
   };
 }
 
@@ -544,9 +701,12 @@ export function resolveInside(root, candidate, subtree) {
 export async function readExternalOperationRequest(root, requestPath) {
   const resolved = resolveInside(root, requestPath, path.join(".artifacts", "ops-requests"));
   if (path.extname(resolved).toLowerCase() !== ".json") throw new Error("Operation request must be JSON.");
+  requireRegularFileWithoutSymlink(resolved, "Operation request");
   const actual = await realpath(resolved);
   resolveInside(root, actual, path.join(".artifacts", "ops-requests"));
   const request = validateExternalOperationRequest(JSON.parse(await readFile(actual, "utf8")), root);
+  const expectedPath = path.join(canonicalPath(root), ".artifacts", "ops-requests", `${request.requestId}.json`);
+  if (actual !== expectedPath) throw new Error("Operation request must use its canonical requestId-bound artifact path.");
   let gate = null;
   if (executionPolicy.highRiskOperations.includes(request.operation)) {
     gate = await runAuthoritativePremergeGate(root, request.issue);
@@ -559,6 +719,63 @@ export async function readExternalOperationRequest(root, requestPath) {
     gate,
     resultPath: path.join(".artifacts", "ops-results", `${request.requestId}.result.json`).replaceAll("\\", "/"),
   };
+}
+
+/** @param {unknown} value @param {ReturnType<typeof validateExternalOperationRequest>} request */
+export function validateExternalOperationResult(value, request) {
+  if (containsSecretShapedEvidence(value)) throw new Error("Operation result contains secret-shaped evidence.");
+  const result = operationResultSchema.parse(value);
+  const exact = [
+    [result.requestId, request.requestId, "requestId"],
+    [result.requestDigest, request.requestDigest, "request digest"],
+    [result.issue, request.issue, "Issue"],
+    [result.operation, request.operation, "operation"],
+    [result.executionSurface, request.authority.executionSurface, "execution surface"],
+    [result.runId, request.authority.runId, "run"],
+    [result.contractDigest, request.authority.contractDigest, "contract digest"],
+    [result.inputDigest, request.inputDigest, "input digest"],
+    [result.mutationDigest, request.mutationDigest, "mutation digest"],
+    [result.reversibility, request.reversibility, "reversibility"],
+    [result.resolvedTarget.kind, request.resolvedTargetKind, "target kind"],
+    [result.resolvedTarget.value, request.resolvedTarget, "target"],
+  ];
+  for (const [actual, expected, label] of exact) {
+    if (actual !== expected) throw new Error(`Operation result ${label} does not match the validated request.`);
+  }
+  if (canonicalJson(result.connectorIdentity) !== canonicalJson(request.authority.connectorIdentity)) {
+    throw new Error("Operation result connector identity does not match the validated request.");
+  }
+  if (result.status === "succeeded") {
+    if (result.outcome.code !== "completed") throw new Error("Successful operation result must have completed outcome evidence.");
+    if (!result.postState) throw new Error("Successful operation result requires independently collected post-state evidence.");
+  } else if (result.outcome.code === "completed") {
+    throw new Error("Failed operation result cannot claim a completed outcome.");
+  }
+  if (result.postState) {
+    if (result.postState.collectorRunId === result.runId) throw new Error("Post-state evidence must be collected by an independent run.");
+    const expectedTargetDigest = digestValue(result.resolvedTarget);
+    if (result.postState.targetDigest !== expectedTargetDigest) throw new Error("Post-state evidence target digest does not match the resolved target.");
+    if (Date.parse(result.postState.observedAt) < Date.parse(result.completedAt)) {
+      throw new Error("Post-state evidence must be observed after operation completion.");
+    }
+  }
+  return result;
+}
+
+/** @param {string} root @param {string} resultPath */
+export async function readExternalOperationResult(root, resultPath) {
+  const resolved = resolveInside(root, resultPath, path.join(".artifacts", "ops-results"));
+  if (path.extname(resolved).toLowerCase() !== ".json") throw new Error("Operation result must be JSON.");
+  requireRegularFileWithoutSymlink(resolved, "Operation result");
+  const actual = await realpath(resolved);
+  resolveInside(root, actual, path.join(".artifacts", "ops-results"));
+  const raw = JSON.parse(await readFile(actual, "utf8"));
+  const requestId = operationResultSchema.shape.requestId.parse(raw?.requestId);
+  const expectedResultPath = path.join(canonicalPath(root), ".artifacts", "ops-results", `${requestId}.result.json`);
+  if (actual !== expectedResultPath) throw new Error("Operation result must use its canonical requestId-bound artifact path.");
+  const requestPath = `.artifacts/ops-requests/${requestId}.json`;
+  const { request } = await readExternalOperationRequest(root, requestPath);
+  return validateExternalOperationResult(raw, request);
 }
 
 /** @param {string[]} changedPaths */
@@ -946,16 +1163,32 @@ export async function renderAuthoritativePullRequestBody(root, issue) {
   return renderPullRequestBody(await loadAuthoritativeGateInput(root, issue));
 }
 
-/** @param {string} root @param {number} issue @param {number} prNumber */
-export async function createMergeOperationRequest(root, issue, prNumber) {
+/**
+ * @param {string} root
+ * @param {number} issue
+ * @param {number} prNumber
+ * @param {{ executionSurface?: "codex-local" | "claude-local" | "cursor-cloud", runId?: string, activationEvidenceRef?: string | null }} [authorityInput]
+ */
+export async function createMergeOperationRequest(root, issue, prNumber, authorityInput = {}) {
   const input = await loadAuthoritativeGateInput(root, issue);
   const gate = runPremergeGate(input);
+  const executionSurface = authorityInput.executionSurface ?? input.verification.executionSurface;
+  const runId = authorityInput.runId ?? (executionSurface === "codex-local" ? `local-issue-${issue}-merge` : null);
+  if (!runId) throw new Error(`${executionSurface} merge request requires an explicit run identifier.`);
+  const provider = operationProvider("github.merge_pr");
+  const owner = expectedConnectorOwner(root, provider);
   const request = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     requestId: `issue-${issue}-github-merge-pr-1`,
     issue,
     operation: "github.merge_pr",
-    target: { kind: "github.repository", identifier: targetSources.github },
+    authority: {
+      executionSurface,
+      runId,
+      contractDigest: input.contract.digest,
+      activationEvidenceRef: authorityInput.activationEvidenceRef ?? null,
+      connectorIdentity: connectorIdentityFor(provider, owner),
+    },
     environment: "production",
     reasonCode: "reviewed-release",
     inputs: { issue, prNumber, headSha: gate.headSha, method: "squash" },
@@ -1090,9 +1323,9 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   await writeJson(path.join(root, "config", "ownership.json"), {
     schemaVersion: 1,
     github: { owner: fixture.issueContract.repository.split("/")[0], repository: fixture.issueContract.repository.split("/")[1] },
-    supabase: { organizationName: "fixture", projectRef: null },
-    vercel: { scope: null, projectId: null },
-    cloudflare: { accountName: "fixture", zoneId: null, domains: [] },
+    supabase: { organizationName: "fixture", projectRef: "fixtureprojectref0001" },
+    vercel: { scope: "fixture-scope", projectId: "fixture-project" },
+    cloudflare: { accountId: "00000000000000000000000000000042", accountName: "fixture", zoneId: "00000000000000000000000000000042", domains: ["fixture.example.com"] },
   });
   await writeFile(path.join(root, "README.md"), "# Workflow fixture\n", "utf8");
   runGit(root, ["init", "--initial-branch=main"]);
@@ -1162,7 +1395,31 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const gate = runPremergeGate(authoritativeInput);
   const prBody = renderPullRequestBody(authoritativeInput);
   await writeFile(path.join(headRoot, "pull-request.md"), prBody, "utf8");
-  const merge = await createMergeOperationRequest(root, contract.issue, fixture.prNumber);
+  let operationAuthority = {};
+  if (fixture.executionSurface === "cursor-cloud") {
+    const runId = "bc-00000000-0000-0000-0000-000000000042";
+    const activationEvidenceRef = `.artifacts/cursor-activation/${runId}.json`;
+    await writeJson(path.join(root, activationEvidenceRef), {
+      schemaVersion: 1,
+      surface: "cursor-cloud",
+      run: { id: runId, modelObserved: "composer-2.5" },
+      repository: { fullName: contract.repository, branch, headSha },
+      build: { status: "ready", node: "24.13.0", npm: "11.6.2", docker: true, chromium: true },
+      reviewers: {
+        openai: { observed: "gpt-5.6-sol", repositoryReadProbe: "passed", fileProbe: "denied", shellProbe: "denied", providerToolProbe: "denied", completionProbe: "passed" },
+        anthropic: { observed: "claude-opus-5", repositoryReadProbe: "passed", fileProbe: "denied", shellProbe: "denied", providerToolProbe: "denied", completionProbe: "passed" },
+      },
+      providers: {
+        github: { owner: contract.repository.split("/")[0], fullName: contract.repository, status: "verified" },
+        supabase: { organizationName: "fixture", projectRef: "fixtureprojectref0001", status: "verified" },
+        vercel: { scope: "fixture-scope", projectId: "fixture-project", status: "verified" },
+        cloudflare: { accountId: "00000000000000000000000000000042", accountName: "fixture", zoneId: "00000000000000000000000000000042", domain: "fixture.example.com", status: "verified" },
+      },
+      verifiedAt: new Date().toISOString(),
+    });
+    operationAuthority = { executionSurface: "cursor-cloud", runId, activationEvidenceRef };
+  }
+  const merge = await createMergeOperationRequest(root, contract.issue, fixture.prNumber, operationAuthority);
 
   return { gate, state, branch, baseSha, headSha, request: merge.request, paths: {
     contract: contractPathRelative,
@@ -1184,4 +1441,6 @@ export const schemas = {
   reviewResultSchema,
   reviewPacketSchema,
   cleanupPlanSchema,
+  externalRequestBaseSchema,
+  operationResultSchema,
 };
