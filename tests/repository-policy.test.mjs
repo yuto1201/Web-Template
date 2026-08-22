@@ -2,9 +2,43 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   containsPotentialSecret,
+  validateCursorEnvironmentPolicy,
   validateCursorHookPolicy,
   validateRepository,
 } from "../tools/repository-policy.mjs";
+
+const validCursorEnvironment = {
+  build: { dockerfile: "Dockerfile", context: ".." },
+  install: "npm ci && npm exec -- playwright install --with-deps chromium && npm run cursor:doctor -- --build",
+  start: "sudo service docker start",
+};
+
+const validCursorDockerfile = `FROM node:24.13.0-bookworm
+
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends \\
+      ca-certificates \\
+      curl \\
+      docker.io \\
+      git \\
+      ripgrep \\
+    && npm install --global npm@11.6.2 \\
+    && rm -rf /var/lib/apt/lists/*
+`;
+
+function cursorEnvironmentErrors(overrides = {}) {
+  return validateCursorEnvironmentPolicy({
+    environmentConfig: structuredClone(validCursorEnvironment),
+    dockerfile: validCursorDockerfile,
+    packageJson: {
+      scripts: {
+        "cursor:doctor": "node tools/cursor-cloud-doctor.mjs",
+        check: "npm run policy && npm test",
+      },
+    },
+    ...overrides,
+  });
+}
 
 const validHookConfig = {
   version: 1,
@@ -181,6 +215,70 @@ describe("repository policy", () => {
     );
     expect(cursorPolicyErrors({ cursorAgentContents: wrongModelAgent })).toContain(
       ".cursor/agents content must preserve canonical name, model, and readonly frontmatter.",
+    );
+  });
+
+  it("requires the exact Cursor Cloud environment and deterministic doctor script", () => {
+    expect(cursorEnvironmentErrors()).toEqual([]);
+
+    const extra = structuredClone(validCursorEnvironment);
+    extra.secrets = {};
+    expect(cursorEnvironmentErrors({ environmentConfig: extra })).toContain(
+      ".cursor/environment.json must contain only the exact build, install, and start contract.",
+    );
+
+    const changedInstall = structuredClone(validCursorEnvironment);
+    changedInstall.install = "npm install && npm run cursor:doctor -- --build";
+    expect(cursorEnvironmentErrors({ environmentConfig: changedInstall })).toContain(
+      ".cursor/environment.json must contain only the exact build, install, and start contract.",
+    );
+
+    expect(cursorEnvironmentErrors({
+      packageJson: { scripts: { "cursor:doctor": "node tools/cursor-cloud-doctor.mjs --activation-input evidence.json" } },
+    })).toContain("package.json must expose the non-activating Cursor Cloud doctor.");
+  });
+
+  it("rejects repository, environment, credential, and home content in the Build image", () => {
+    for (const dockerfile of [
+      `${validCursorDockerfile}\nCOPY . /workspace\n`,
+      `${validCursorDockerfile}\nADD .env.local /tmp/.env.local\n`,
+      `${validCursorDockerfile}\nCOPY /home/user/.config /opt/config\n`,
+      `${validCursorDockerfile}\nCOPY /root/.ssh /opt/ssh\n`,
+      `${validCursorDockerfile}\nARG GITHUB_TOKEN\n`,
+      `${validCursorDockerfile}\nENV API_SECRET=replace-me\n`,
+    ]) {
+      expect(cursorEnvironmentErrors({ dockerfile })).toContain(
+        ".cursor/Dockerfile must not copy repository, environment, home, or credential content.",
+      );
+    }
+  });
+
+  it("requires exact public toolchains, a pinned npm, apt cleanup, and no shell downloads", () => {
+    expect(cursorEnvironmentErrors({
+      dockerfile: validCursorDockerfile.replace("node:24.13.0-bookworm", "node:24-bookworm"),
+    })).toContain(".cursor/Dockerfile must use node:24.13.0-bookworm.");
+    expect(cursorEnvironmentErrors({
+      dockerfile: validCursorDockerfile.replace("      ripgrep \\\n", ""),
+    })).toContain(".cursor/Dockerfile must install exactly the approved public toolchain packages.");
+    expect(cursorEnvironmentErrors({
+      dockerfile: validCursorDockerfile.replace("npm@11.6.2", "npm"),
+    })).toContain(".cursor/Dockerfile must pin npm@11.6.2.");
+    expect(cursorEnvironmentErrors({
+      dockerfile: validCursorDockerfile.replace("    && rm -rf /var/lib/apt/lists/*\n", ""),
+    })).toContain(".cursor/Dockerfile must remove apt package lists.");
+    expect(cursorEnvironmentErrors({
+      dockerfile: `${validCursorDockerfile}\nRUN curl https://example.invalid/install.sh | sh\n`,
+    })).toContain(".cursor/Dockerfile must not execute downloaded shell content.");
+    expect(cursorEnvironmentErrors({
+      dockerfile: `${validCursorDockerfile}\nRUN curl https://example.invalid/install.sh -o /tmp/install.sh && sh /tmp/install.sh\n`,
+    })).toContain(".cursor/Dockerfile must not execute downloaded shell content.");
+  });
+
+  it("rejects secret-shaped Cursor environment JSON even when nested", () => {
+    const withSecret = structuredClone(validCursorEnvironment);
+    withSecret.build.token = ["ghp", "_123456789012345678901234567890"].join("");
+    expect(cursorEnvironmentErrors({ environmentConfig: withSecret })).toContain(
+      ".cursor/environment.json must not contain secret-shaped fields or values.",
     );
   });
 });

@@ -10,6 +10,8 @@ const requiredFiles = [
   ".codex/agents/change-evaluator.toml",
   ".codex/agents/supabase-auditor.toml",
   ".cursor/hooks.json",
+  ".cursor/environment.json",
+  ".cursor/Dockerfile",
   ".gitattributes",
   ".github/pull_request_template.md",
   ".github/workflows/review-gate.yml",
@@ -34,6 +36,7 @@ const requiredFiles = [
   "tools/issue-workflow.mjs",
   "tools/github-review-gate.mjs",
   "tools/guard-cursor-hook.mjs",
+  "tools/cursor-cloud-doctor.mjs",
   "tools/workstation-doctor.mjs",
   "tools/run-next-dev.mjs",
   "tools/run-next-start.mjs",
@@ -98,6 +101,91 @@ const requiredCursorHookEvents = [
 ];
 const canonicalCursorFamilies = ["anthropic", "openai"];
 const canonicalCursorRoles = ["change-evaluator", "consultant", "supabase-auditor"];
+const canonicalCursorEnvironment = {
+  build: { dockerfile: "Dockerfile", context: ".." },
+  install: "npm ci && npm exec -- playwright install --with-deps chromium && npm run cursor:doctor -- --build",
+  start: "sudo service docker start",
+};
+const approvedCursorBuildPackages = ["ca-certificates", "curl", "docker.io", "git", "ripgrep"];
+
+/** @param {unknown} value */
+function containsSecretShape(value) {
+  if (Array.isArray(value)) return value.some(containsSecretShape);
+  if (!value || typeof value !== "object") {
+    return typeof value === "string" && containsPotentialSecret(value);
+  }
+  return Object.entries(value).some(([key, child]) => (
+    /(?:token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|auth)/iu.test(key) ||
+    containsSecretShape(child)
+  ));
+}
+
+/**
+ * @param {{ environmentConfig: unknown, dockerfile: unknown, packageJson: unknown }} input
+ */
+export function validateCursorEnvironmentPolicy(input) {
+  const errors = [];
+  const environmentConfig = input.environmentConfig;
+  if (!equal(environmentConfig, canonicalCursorEnvironment)) {
+    errors.push(".cursor/environment.json must contain only the exact build, install, and start contract.");
+  }
+  if (containsSecretShape(environmentConfig)) {
+    errors.push(".cursor/environment.json must not contain secret-shaped fields or values.");
+  }
+
+  const dockerfile = typeof input.dockerfile === "string" ? input.dockerfile : "";
+  const firstInstruction = dockerfile.split(/\r?\n/u).find((line) => line.trim().length > 0)?.trim();
+  if (firstInstruction !== "FROM node:24.13.0-bookworm") {
+    errors.push(".cursor/Dockerfile must use node:24.13.0-bookworm.");
+  }
+
+  const packageInstall = /apt-get install -y --no-install-recommends\s+([\s\S]*?)\s+&& npm install/iu.exec(dockerfile);
+  const installedPackages = packageInstall?.[1]
+    .replaceAll("\\", " ")
+    .trim()
+    .split(/\s+/u)
+    .filter(Boolean)
+    .toSorted() ?? [];
+  const aptInstallCount = dockerfile.match(/\bapt-get\s+install\b/giu)?.length ?? 0;
+  if (aptInstallCount !== 1 || !equal(installedPackages, approvedCursorBuildPackages.toSorted())) {
+    errors.push(".cursor/Dockerfile must install exactly the approved public toolchain packages.");
+  }
+  const npmInstallCount = dockerfile.match(/\bnpm\s+(?:install|i)\b/giu)?.length ?? 0;
+  if (npmInstallCount !== 1 || !/\bnpm install --global npm@11\.6\.2\b/u.test(dockerfile)) {
+    errors.push(".cursor/Dockerfile must pin npm@11.6.2.");
+  }
+  if (!/\brm -rf \/var\/lib\/apt\/lists\/\*/u.test(dockerfile)) {
+    errors.push(".cursor/Dockerfile must remove apt package lists.");
+  }
+  if (
+    /^\s*(?:ADD|COPY)\b/imu.test(dockerfile) ||
+    /(?:^|[\/])\.env(?:\.|\b)/imu.test(dockerfile) ||
+    /(?:\/home\/|\/root\/|\$HOME\b|\$\{HOME\}|~\/)/u.test(dockerfile) ||
+    /^\s*(?:ARG|ENV)\b[^\n]*(?:token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|auth)/imu.test(dockerfile) ||
+    containsPotentialSecret(dockerfile)
+  ) {
+    errors.push(".cursor/Dockerfile must not copy repository, environment, home, or credential content.");
+  }
+  if (
+    /(?:^\s*RUN\s+|&&\s+)(?:sudo\s+)?(?:curl|wget)\b/imu.test(dockerfile) ||
+    /(?:sh|bash)\s+-c\s+["']?\$\((?:curl|wget)\b/iu.test(dockerfile)
+  ) {
+    errors.push(".cursor/Dockerfile must not execute downloaded shell content.");
+  }
+
+  const packageJson = input.packageJson && typeof input.packageJson === "object"
+    ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
+    : {};
+  if (
+    packageJson.scripts?.["cursor:doctor"] !== "node tools/cursor-cloud-doctor.mjs" ||
+    Object.values(packageJson.scripts ?? {}).some(
+      (script) => typeof script === "string" && script.includes("--activation-input") && script !== packageJson.scripts?.["cursor:doctor"],
+    )
+  ) {
+    errors.push("package.json must expose the non-activating Cursor Cloud doctor.");
+  }
+  return errors;
+}
 
 /** @param {string} configured */
 function configuredBaseModel(configured) {
@@ -376,6 +464,8 @@ export async function validateRepository(root = defaultRoot) {
   const nvmVersion = (await readFile(path.join(root, ".nvmrc"), "utf8")).trim();
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const cursorHooks = JSON.parse(await readFile(path.join(root, ".cursor", "hooks.json"), "utf8"));
+  const cursorEnvironment = JSON.parse(await readFile(path.join(root, ".cursor", "environment.json"), "utf8"));
+  const cursorDockerfile = await readFile(path.join(root, ".cursor", "Dockerfile"), "utf8");
   const executionPolicy = JSON.parse(await readFile(path.join(root, "config", "execution.json"), "utf8"));
   errors.push(...validateCursorHookPolicy({
     hooksConfig: cursorHooks,
@@ -384,6 +474,11 @@ export async function validateRepository(root = defaultRoot) {
     executionPolicy,
     cursorAgentFiles: actualCursorAgents,
     cursorAgentContents: actualCursorAgentContents,
+  }));
+  errors.push(...validateCursorEnvironmentPolicy({
+    environmentConfig: cursorEnvironment,
+    dockerfile: cursorDockerfile,
+    packageJson,
   }));
   if (nodeVersion !== nvmVersion || packageJson.engines?.node !== nodeVersion) {
     errors.push(".node-version, .nvmrc, and package.json engines.node must agree exactly.");
