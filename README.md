@@ -1,6 +1,6 @@
 # Web Template
 
-Codex を主担当、Claude を独立評価者または相談者として使う、個人向け Web アプリ開発の guarded golden template です。標準構成は Next.js App Router、strict TypeScript、Supabase、Vercel、Cloudflare DNS です。
+Codex local、Claude local、Cursor Cloud の3つの実行 surface を用途別に使う、個人向け Web アプリ開発の guarded golden template です。標準構成は Next.js App Router、strict TypeScript、Supabase、Vercel、Cloudflare DNS です。実行 surface と実際に応答した model family は別々に記録します。
 
 このリポジトリは最小のコード断片ではありません。生成後のアプリにも、Auth/RLS、秘密情報境界、Preview/Production、DNS、反対モデル評価を実際に検査するガードを残します。サンプル業務機能は含めず、ライブ Supabase・Vercel・Cloudflare の有効化は選択可能な別工程です。
 
@@ -21,7 +21,7 @@ npm run check
 
 1回目は `initialized`、2回目は `idempotent` を返します。レビュー済みのテンプレート値が先に編集されていた場合や、異なる入力で再初期化しようとした場合は、既存値を上書きせず失敗します。
 
-初期化の詳細と外部サービスの順序は [activation runbook](docs/activation.md) を参照してください。
+初期化の詳細と外部サービスの順序は [activation runbook](docs/activation.md) を参照してください。Cursor Cloud を使う場合は、先に [Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md) の Build・model・権限 probe を順番どおり実施します。
 
 ## 作業PCをMacへ移す
 
@@ -36,14 +36,16 @@ npm run workstation:doctor -- --require-env --require-docker
 
 通常診断では `.env.local` と Docker を optional として扱い、後者の厳格モードではMac移行完了に必要な項目としてfail closedで検査します。
 
-## ローカル準備とライブ準備
+## ローカル準備、Cursor Build、ライブ準備
 
 `npm run readiness` は次を別々に表示します。
 
 - `local.status: ready`: package slug、所有者設定、URL、ローカルポートが整合し、ローカル実装を開始できる。
-- `liveProviders.*.status: needs-codex`: 対象の個人アカウントや hosted project がまだ確定していない。
+- `liveProviders.*.status: needs-codex`: この provider-free readiness コマンドでは、対象の個人アカウントや hosted project がまだ確定していない。
 
-ローカル準備完了は、デプロイやドメイン公開の成功を意味しません。Supabase、Vercel、Cloudflare、GitHub の認証済み外部操作は Codex だけが行います。Claude はローカル実装と読み取り評価に使い、外部情報が必要な場合は Codex へ委譲します。
+`npm run cursor:doctor -- --build` は、committed environment、Node/npm、Docker executable、Chromium executable を検査します。`Status: ready` は Build readiness であり、Cursor の connector、実 model、provider identity、または write authority の有効化を意味しません。
+
+ローカル準備完了は、デプロイやドメイン公開の成功を意味しません。未有効化の clean-room template は provider activation を `needs-cursor-or-codex` として扱います。外部操作は、個人 connector identity・対象・Issue allowlist・redacted result・post-state を確認した Codex、または live activation 済み Cursor Cloud だけが行えます。Claude local は authenticated provider の read/write と shell/network/MCP を引き続き禁止され、外部情報が必要な場合は Codex へ委譲します。
 
 ## 環境変数
 
@@ -78,6 +80,8 @@ npm run audit:completion -- --include-integration --require-all
 
 クリーンルームで別名アプリを生成し、依存関係の固定インストール、`npm run check`、readiness、desktop/mobile smoke まで実行する検証は `npm run template:verify` です。
 
+Cursor の repository/Build 準備だけを確認する場合は `npm run cursor:doctor -- --build`、live activation の redacted evidence を検査する場合は `npm run cursor:doctor -- --activation-input .artifacts/cursor/<file>.json` を使います。後者は現在の `cursor/<issue>-<slug>` branch、configured reviewer model、public ownership identifiers と一致しなければ fail closed です。
+
 ## リポジトリの正本
 
 - [AGENTS.md](AGENTS.md): 全モデル共通の実行規約
@@ -88,5 +92,6 @@ npm run audit:completion -- --include-integration --require-all
 - [security](docs/security.md): 秘密情報と Claude 実行ガード
 - [verification](docs/verification.md): 必須検証と証跡
 - [macOS onboarding](docs/onboarding-macos.md): fresh cloneによる作業PC移行と完了ゲート
+- [Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md): Build、model/capability probe、connector activation、first PR、revocation
 
 この golden repository の実装履歴は [GitHub Issues](https://github.com/yuto1201/Web-Template/issues) にあります。生成後はリンクが生成先 owner/repository に置き換わり、そのリポジトリの Issue が作業の正本になります。

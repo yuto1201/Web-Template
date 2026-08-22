@@ -11,6 +11,19 @@ export const providerPlaceholders = Object.freeze({
   cloudflareZoneId: "11111111111111111111111111111111",
 });
 
+export const cursorTemplateGuardrailPaths = Object.freeze([
+  ".cursor/environment.json",
+  ".cursor/hooks.json",
+  ".cursor/agents/change-evaluator-anthropic.md",
+  ".cursor/agents/change-evaluator-openai.md",
+  ".cursor/agents/consultant-anthropic.md",
+  ".cursor/agents/consultant-openai.md",
+  ".cursor/agents/supabase-auditor-anthropic.md",
+  ".cursor/agents/supabase-auditor-openai.md",
+  "config/execution.json",
+  "docs/onboarding-cursor-cloud.md",
+]);
+
 /** @param {string} value */
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -23,6 +36,13 @@ const ignoredDirectories = new Set([
 const ignoredFileExtensions = new Set([
   ".gif", ".ico", ".jpeg", ".jpg", ".pdf", ".png", ".tsbuildinfo", ".webp", ".zip",
 ]);
+const templateCredentialPatterns = [
+  /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----/u,
+  /\bgh[pousr]_[A-Za-z0-9_]{30,}\b/u,
+  /\bsbp_[A-Za-z0-9]{20,}\b/u,
+  /\bsb_secret_[A-Za-z0-9_-]{20,}\b/u,
+  /\bsk_live_[A-Za-z0-9]{20,}\b/u,
+];
 const portOffsets = Object.freeze({
   supabaseBase: 0,
   supabaseApi: 1,
@@ -33,6 +53,19 @@ const portOffsets = Object.freeze({
   supabasePooler: 9,
   supabaseInspector: 63,
 });
+
+/** @param {string} root @param {string} relative */
+async function isIgnoredSddControllerDirectory(root, relative) {
+  if (relative.split(path.sep).join("/") !== ".superpowers/sdd") return false;
+  try {
+    const ignore = await readFile(path.join(root, relative, ".gitignore"), "utf8");
+    const rules = ignore.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
+    return rules.length === 1 && rules[0] === "*";
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
 
 /** @param {unknown} condition @param {string} message */
 function assert(condition, message) {
@@ -197,7 +230,9 @@ async function textFiles(root, relative = "") {
   for (const entry of entries) {
     const child = relative ? path.join(relative, entry.name) : entry.name;
     if (entry.isDirectory()) {
-      if (!ignoredDirectories.has(entry.name)) files.push(...await textFiles(root, child));
+      if (!ignoredDirectories.has(entry.name) && !(await isIgnoredSddControllerDirectory(root, child))) {
+        files.push(...await textFiles(root, child));
+      }
       continue;
     }
     if (entry.name === ".git") continue;
@@ -233,6 +268,37 @@ export async function discoverOccurrences(root, tokens) {
     }
   }
   return result;
+}
+
+/** @param {string} root */
+export async function verifyCursorTemplateRetention(root) {
+  for (const relative of cursorTemplateGuardrailPaths) {
+    const content = await readFile(path.join(root, relative), "utf8");
+    assert(content.length > 0, `Retained Cursor guardrail is empty: ${relative}.`);
+    assert(
+      !templateCredentialPatterns.some((pattern) => pattern.test(content)),
+      `Retained Cursor guardrail contains a provider credential: ${relative}.`,
+    );
+  }
+  const expectedAgents = cursorTemplateGuardrailPaths
+    .filter((relative) => relative.startsWith(".cursor/agents/"))
+    .map((relative) => path.basename(relative))
+    .toSorted();
+  const actualAgents = (await readdir(path.join(root, ".cursor", "agents"))).toSorted();
+  assert(
+    JSON.stringify(actualAgents) === JSON.stringify(expectedAgents),
+    "Generated repository must retain exactly the six canonical Cursor agents.",
+  );
+  const readme = await readFile(path.join(root, "README.md"), "utf8");
+  assert(
+    readme.includes("[Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md)"),
+    "Generated repository must link to Cursor Cloud onboarding.",
+  );
+  return {
+    files: [...cursorTemplateGuardrailPaths],
+    cursorAgents: actualAgents.length,
+    onboarding: "docs/onboarding-cursor-cloud.md",
+  };
 }
 
 /** @param {unknown} value */

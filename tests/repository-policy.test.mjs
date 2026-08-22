@@ -1,5 +1,7 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import * as repositoryPolicy from "../tools/repository-policy.mjs";
 import {
   containsPotentialSecret,
   validateCursorEnvironmentPolicy,
@@ -116,6 +118,15 @@ describe("repository policy", () => {
     expect(containsPotentialSecret(["sb", "p_12345678901234567890"].join(""))).toBe(true);
     expect(containsPotentialSecret(["-----BEGIN PRIVATE", " KEY-----"].join(""))).toBe(true);
     expect(containsPotentialSecret("SUPABASE_SERVICE_ROLE_KEY=replace-me")).toBe(false);
+  });
+
+  it("requires durable Cursor operator authority and an accepted narrow D-003 supersession", async () => {
+    const [authority, decisions] = await Promise.all([
+      readFile(path.resolve("docs/authority.md"), "utf8"),
+      readFile(path.resolve("specs/decisions.md"), "utf8"),
+    ]);
+
+    expect(repositoryPolicy.validateCursorAuthorityDocumentation({ authority, decisions })).toEqual([]);
   });
 
   it("accepts only the five finite fail-closed Cursor Cloud command hooks", () => {

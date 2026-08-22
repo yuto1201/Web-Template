@@ -2,7 +2,12 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { discoverOccurrences, projectTokens, readTemplateState } from "./template-core.mjs";
+import {
+  discoverOccurrences,
+  projectTokens,
+  readTemplateState,
+  verifyCursorTemplateRetention,
+} from "./template-core.mjs";
 
 /** @param {string} command @param {string[]} args @param {string} cwd @param {string} label */
 function run(command, args, cwd, label) {
@@ -65,6 +70,7 @@ if (sourceState.status === "initialized") {
     const leakage = await discoverOccurrences(target, projectTokens(sourceState.project));
     const leakedFiles = [...new Set(Object.values(leakage).flatMap((files) => Object.keys(files)))];
     if (leakedFiles.length > 0) throw new Error(`Template source values leaked into clean-room output: ${leakedFiles.join(", ")}`);
+    const cursorGuardrails = await verifyCursorTemplateRetention(target);
 
     run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
     run("git", ["add", "-A"], target, "stage clean-room files for policy inspection");
@@ -75,6 +81,7 @@ if (sourceState.status === "initialized") {
     if (!readiness.includes('"status": "ready"') || !readiness.includes('"status": "needs-codex"')) {
       throw new Error("Clean-room readiness did not distinguish local readiness from pending live providers.");
     }
+    const providerActivation = "needs-cursor-or-codex";
     run(process.execPath, [npmCli, "run", "test:e2e"], target, "run clean-room browser smoke checks");
     const generatedPackage = JSON.parse(await readFile(path.join(target, "package.json"), "utf8"));
     process.stdout.write(`${JSON.stringify({
@@ -82,7 +89,10 @@ if (sourceState.status === "initialized") {
       status: "clean-room-verified",
       packageName: generatedPackage.name,
       sourceLeakage: 0,
+      sourceAccountCredentials: 0,
       idempotence: "passed",
+      cursorGuardrails,
+      providerActivation,
       workstation: "passed",
       checks: "passed",
       readiness: "passed",

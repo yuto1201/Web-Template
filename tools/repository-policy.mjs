@@ -31,6 +31,7 @@ const requiredFiles = [
   "docs/deployment.md",
   "docs/domain.md",
   "docs/activation.md",
+  "docs/onboarding-cursor-cloud.md",
   "docs/onboarding-macos.md",
   "docs/workflow.md",
   "tools/issue-workflow.mjs",
@@ -90,6 +91,26 @@ function collectTrackedFiles(root) {
 /** @param {string} content */
 export function containsPotentialSecret(content) {
   return secretPatterns.some((pattern) => pattern.test(content));
+}
+
+/** @param {{ authority: string, decisions: string }} input */
+export function validateCursorAuthorityDocumentation(input) {
+  const errors = [];
+  if (!/^\| `cursor-cloud` \| approved provider operator only after live owner-authenticated activation \|$/mu.test(input.authority)) {
+    errors.push("docs/authority.md must name cursor-cloud as an approved operator only after live owner-authenticated activation.");
+  }
+  if (!/^\| `claude-local` \| denied \|$/mu.test(input.authority)) {
+    errors.push("docs/authority.md must keep claude-local denied provider authority.");
+  }
+  const decision = /^## D-007:[^\n]*\n([\s\S]*?)(?=^## D-|(?![\s\S]))/mu.exec(input.decisions)?.[1] ?? "";
+  if (
+    !decision.includes("- Status: accepted") ||
+    !decision.includes("- Supersedes: D-003 only for an activated, owner-authenticated `cursor-cloud` execution surface.") ||
+    !decision.includes("`codex-local` authority and `claude-local` denial remain unchanged.")
+  ) {
+    errors.push("specs/decisions.md must accept a narrow D-003 supersession for activated owner-authenticated Cursor Cloud.");
+  }
+  return errors;
 }
 
 const requiredCursorHookEvents = [
@@ -315,6 +336,9 @@ export async function validateRepository(root = defaultRoot) {
   }
 
   const ownership = JSON.parse(await readFile(path.join(root, "config", "ownership.json"), "utf8"));
+  const authority = await readFile(path.join(root, "docs", "authority.md"), "utf8");
+  const decisions = await readFile(path.join(root, "specs", "decisions.md"), "utf8");
+  errors.push(...validateCursorAuthorityDocumentation({ authority, decisions }));
   const template = JSON.parse(await readFile(path.join(root, "config", "template.json"), "utf8"));
   const project = template.project ?? {};
   if (!equal(ownership.github, project.github)) {
