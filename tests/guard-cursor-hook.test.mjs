@@ -93,7 +93,7 @@ describe("Cursor Cloud hook guard", () => {
     })).toBe("deny");
   });
 
-  it("allows parent reads and Issue-scoped writes while denying escapes and protected surfaces", () => {
+  it("allows ordinary parent app and test writes while denying escapes and protected surfaces", () => {
     expect(decision({
       hook_event_name: "preToolUse",
       tool_name: "Read",
@@ -103,6 +103,11 @@ describe("Cursor Cloud hook guard", () => {
       hook_event_name: "preToolUse",
       tool_name: "Write",
       tool_input: { path: path.join(fixtureRoot, "src", "app.ts"), contents: "scoped" },
+    })).toBe("allow");
+    expect(decision({
+      hook_event_name: "preToolUse",
+      tool_name: "Edit",
+      tool_input: { path: path.join(fixtureRoot, "tests", "app.test.ts") },
     })).toBe("allow");
     expect(decision({
       hook_event_name: "preToolUse",
@@ -136,6 +141,44 @@ describe("Cursor Cloud hook guard", () => {
     })).toBe("allow");
   });
 
+  it.each([
+    "AGENTS.md",
+    "package.json",
+    "package-lock.json",
+    ".cursor/environment.json",
+    ".github/workflows/ci.yml",
+    ".claude/settings.json",
+    ".codex/agents/change-evaluator.toml",
+    "config/agents.json",
+    "config/execution.json",
+    "config/github-ruleset.json",
+    "config/ownership.json",
+    "config/review-contract.schema.json",
+    "config/workflow.json",
+    "docs/authority.md",
+    "docs/workflow.md",
+    "specs/cursor-cloud.md",
+    "tools/guard-claude-tool.mjs",
+    "tools/guard-cursor-hook.mjs",
+    "tools/github-review-gate.mjs",
+    "tools/issue-workflow.mjs",
+    "tools/repository-policy.mjs",
+    "tools/workflow-core.mjs",
+    ".artifacts/issues/29/deadbeef/review-packet.json",
+    ".artifacts/ops-results/issue-29.result.json",
+  ])("denies direct parent edits to protected surface %s before and after edit", (relativePath) => {
+    expect(decision({
+      hook_event_name: "preToolUse",
+      tool_name: "Write",
+      tool_input: { path: path.join(fixtureRoot, relativePath), contents: "rewrite" },
+    })).toBe("deny");
+    expect(decision({
+      hook_event_name: "afterFileEdit",
+      file_path: path.join(fixtureRoot, relativePath),
+      edits: [],
+    })).toBe("deny");
+  });
+
   it("denies credential and environment reads without returning the candidate value", () => {
     for (const candidate of [
       ".env.local",
@@ -165,6 +208,8 @@ describe("Cursor Cloud hook guard", () => {
       "npm test -- guard-cursor-hook",
       "npm run build",
       "npm run lint",
+      "npm run policy",
+      "npm run check:generated",
       "git status --short --branch",
       "git diff --check",
       "git log -3 --oneline",
@@ -178,6 +223,54 @@ describe("Cursor Cloud hook guard", () => {
         cwd: fixtureRoot,
         sandbox: false,
       }), command).toBe("allow");
+    }
+  });
+
+  it("rejects Git output, external execution, config, pager, and noncanonical argv", () => {
+    for (const command of [
+      "git diff --output review.patch",
+      "git diff --output=review.patch",
+      "git diff --output .cursor/hooks.json",
+      "git diff --output /tmp/review.patch",
+      "git diff --ext-diff",
+      "git diff --textconv",
+      "git --paginate status",
+      "git -c alias.inspect=status inspect",
+      "git --config-env=credential.helper=HELPER status",
+      "git status --output status.txt",
+      "git show HEAD:.env.local",
+      "git diff -- .cursor/hooks.json",
+    ]) {
+      expect(decision({
+        hook_event_name: "beforeShellExecution",
+        command,
+        cwd: fixtureRoot,
+        sandbox: false,
+      }), command).toBe("deny");
+    }
+  });
+
+  it("rejects npm passthrough, loaders, config, expansion, assignment, and noncanonical scripts", () => {
+    for (const command of [
+      "npm test -- --config malicious.mjs",
+      "npm test -- --config=malicious.mjs",
+      "npm test -- --loader malicious.mjs",
+      "npm test -- $TEST_SELECTOR",
+      "npm test -- SELECTOR=guard-cursor-hook",
+      "npm test -- ~/malicious.test.mjs",
+      "npm test -- /tmp/malicious.test.mjs",
+      "npm run lint -- --config malicious.mjs",
+      "npm run build -- --config malicious.mjs",
+      "npm run db:stop",
+      "npm run generate",
+      "npm run unknown-script",
+    ]) {
+      expect(decision({
+        hook_event_name: "beforeShellExecution",
+        command,
+        cwd: fixtureRoot,
+        sandbox: false,
+      }), command).toBe("deny");
     }
   });
 

@@ -34,6 +34,10 @@ const validAgentsConfig = {
 };
 
 const validExecutionPolicy = {
+  modelFamilies: {
+    openai: ["^gpt-5\\.6-(?:sol|terra|luna)$"],
+    anthropic: ["^claude-(?:opus|sonnet|fable)-5$"],
+  },
   cursorModels: {
     openai: "gpt-5.6-sol[effort=high]",
     anthropic: "claude-opus-5[effort=high]",
@@ -49,6 +53,13 @@ const validCursorAgents = [
   "supabase-auditor-openai.md",
 ];
 
+const validCursorAgentContents = Object.fromEntries(validCursorAgents.map((filename) => {
+  const name = filename.replace(/\.md$/u, "");
+  const family = name.endsWith("-openai") ? "openai" : "anthropic";
+  const model = family === "openai" ? "gpt-5.6-sol[effort=high]" : "claude-opus-5[effort=high]";
+  return [filename, `---\nname: ${name}\nmodel: ${model}\nreadonly: true\nis_background: false\n---\n\nCanonical contract.\n`];
+}));
+
 function cursorPolicyErrors(overrides = {}) {
   return validateCursorHookPolicy({
     hooksConfig: structuredClone(validHookConfig),
@@ -56,6 +67,7 @@ function cursorPolicyErrors(overrides = {}) {
     agentsConfig: structuredClone(validAgentsConfig),
     executionPolicy: structuredClone(validExecutionPolicy),
     cursorAgentFiles: [...validCursorAgents],
+    cursorAgentContents: structuredClone(validCursorAgentContents),
     ...overrides,
   });
 }
@@ -124,5 +136,51 @@ describe("repository policy", () => {
     expect(cursorPolicyErrors({
       packageJson: { scripts: { "cursor:hook-check": "echo $TOKEN | node tools/guard-cursor-hook.mjs" } },
     })).toContain("package.json must expose the deterministic Cursor hook check.");
+  });
+
+  it("rejects empty, missing, extra, and noncanonical Cursor role or family policy", () => {
+    for (const cursor of [
+      { families: [], roles: [] },
+      { families: ["openai"], roles: structuredClone(validAgentsConfig.cursor.roles) },
+      { families: ["openai", "anthropic", "cursor"], roles: structuredClone(validAgentsConfig.cursor.roles) },
+      { families: ["openai", "anthropic"], roles: [] },
+      { families: ["openai", "anthropic"], roles: [{ slug: "consultant" }, { slug: "change-evaluator" }] },
+      { families: ["openai", "anthropic"], roles: [...structuredClone(validAgentsConfig.cursor.roles), { slug: "general-purpose" }] },
+    ]) {
+      expect(cursorPolicyErrors({ agentsConfig: { cursor } })).toContain(
+        "Cursor agent roles and families must match the canonical nonempty sets.",
+      );
+    }
+    expect(cursorPolicyErrors({
+      agentsConfig: { cursor: { families: [], roles: [] } },
+      cursorAgentFiles: [],
+      cursorAgentContents: {},
+    })).toContain(".cursor/agents must contain exactly the generated Cursor agent set.");
+  });
+
+  it("rejects configured model family mismatch and generated frontmatter drift", () => {
+    const mismatchedModels = structuredClone(validExecutionPolicy);
+    mismatchedModels.cursorModels.openai = "claude-opus-5[effort=high]";
+    expect(cursorPolicyErrors({ executionPolicy: mismatchedModels })).toContain(
+      "Cursor configured models must match their canonical families.",
+    );
+
+    const writableAgent = structuredClone(validCursorAgentContents);
+    writableAgent["change-evaluator-openai.md"] = writableAgent["change-evaluator-openai.md"].replace(
+      "readonly: true",
+      "readonly: false",
+    );
+    expect(cursorPolicyErrors({ cursorAgentContents: writableAgent })).toContain(
+      ".cursor/agents content must preserve canonical name, model, and readonly frontmatter.",
+    );
+
+    const wrongModelAgent = structuredClone(validCursorAgentContents);
+    wrongModelAgent["consultant-anthropic.md"] = wrongModelAgent["consultant-anthropic.md"].replace(
+      "claude-opus-5[effort=high]",
+      "gpt-5.6-sol[effort=high]",
+    );
+    expect(cursorPolicyErrors({ cursorAgentContents: wrongModelAgent })).toContain(
+      ".cursor/agents content must preserve canonical name, model, and readonly frontmatter.",
+    );
   });
 });

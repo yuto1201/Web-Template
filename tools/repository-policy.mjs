@@ -96,6 +96,30 @@ const requiredCursorHookEvents = [
   "subagentStop",
   "afterFileEdit",
 ];
+const canonicalCursorFamilies = ["anthropic", "openai"];
+const canonicalCursorRoles = ["change-evaluator", "consultant", "supabase-auditor"];
+
+/** @param {string} configured */
+function configuredBaseModel(configured) {
+  const match = /^(.*)\[[^\[\]]+\]$/u.exec(configured);
+  return match ? match[1] : configured;
+}
+
+/** @param {string} content */
+function cursorAgentFrontmatter(content) {
+  if (!content.startsWith("---\n")) return null;
+  const end = content.indexOf("\n---\n", 4);
+  if (end < 0 || content.slice(end + 5).trim().length === 0) return null;
+  /** @type {Record<string, string>} */
+  const fields = {};
+  for (const line of content.slice(4, end).split("\n")) {
+    const match = /^(name|model|readonly):\s*(\S.*)$/u.exec(line);
+    if (!match) continue;
+    if (Object.hasOwn(fields, match[1])) return null;
+    fields[match[1]] = match[2];
+  }
+  return fields;
+}
 
 /**
  * @param {{
@@ -104,6 +128,7 @@ const requiredCursorHookEvents = [
  *   agentsConfig: unknown,
  *   executionPolicy: unknown,
  *   cursorAgentFiles: string[],
+ *   cursorAgentContents: Record<string, string>,
  * }} input
  */
 export function validateCursorHookPolicy(input) {
@@ -160,7 +185,7 @@ export function validateCursorHookPolicy(input) {
     ? /** @type {{ cursor?: { families?: unknown, roles?: unknown } }} */ (input.agentsConfig)
     : {};
   const executionPolicy = input.executionPolicy && typeof input.executionPolicy === "object"
-    ? /** @type {{ cursorModels?: Record<string, unknown> }} */ (input.executionPolicy)
+    ? /** @type {{ cursorModels?: Record<string, unknown>, modelFamilies?: Record<string, unknown> }} */ (input.executionPolicy)
     : {};
   const families = Array.isArray(agentsConfig.cursor?.families)
     ? agentsConfig.cursor.families.filter((family) => typeof family === "string")
@@ -170,10 +195,42 @@ export function validateCursorHookPolicy(input) {
       .map((role) => role && typeof role === "object" && "slug" in role ? role.slug : null)
       .filter((slug) => typeof slug === "string")
     : [];
-  const modelsValid = families.every((family) => typeof executionPolicy.cursorModels?.[family] === "string");
-  const expectedAgents = roles.flatMap((role) => families.map((family) => `${role}-${family}.md`)).toSorted();
+  if (
+    !equal(families.toSorted(), canonicalCursorFamilies) ||
+    families.length !== canonicalCursorFamilies.length ||
+    !equal(roles.toSorted(), canonicalCursorRoles) ||
+    roles.length !== canonicalCursorRoles.length
+  ) {
+    errors.push("Cursor agent roles and families must match the canonical nonempty sets.");
+  }
+  const modelsValid = canonicalCursorFamilies.every((family) => {
+    const configured = executionPolicy.cursorModels?.[family];
+    const patterns = executionPolicy.modelFamilies?.[family];
+    return typeof configured === "string" && Array.isArray(patterns) && patterns.length > 0 && patterns.every(
+      (source) => typeof source === "string",
+    ) && patterns.some((source) => new RegExp(source, "u").test(configuredBaseModel(configured)));
+  });
+  if (!modelsValid) errors.push("Cursor configured models must match their canonical families.");
+  const expectedAgents = canonicalCursorRoles.flatMap(
+    (role) => canonicalCursorFamilies.map((family) => `${role}-${family}.md`),
+  ).toSorted();
   if (!modelsValid || !equal(input.cursorAgentFiles.toSorted(), expectedAgents)) {
     errors.push(".cursor/agents must contain exactly the generated Cursor agent set.");
+  }
+  const contents = input.cursorAgentContents && typeof input.cursorAgentContents === "object"
+    ? input.cursorAgentContents
+    : {};
+  const contentValid = modelsValid && expectedAgents.length === 6 && expectedAgents.every((filename) => {
+    const content = contents[filename];
+    if (typeof content !== "string") return false;
+    const fields = cursorAgentFrontmatter(content);
+    const name = filename.replace(/\.md$/u, "");
+    const family = canonicalCursorFamilies.find((candidate) => name.endsWith(`-${candidate}`));
+    return fields?.name === name && fields.readonly === "true" && typeof family === "string" &&
+      fields.model === executionPolicy.cursorModels?.[family];
+  });
+  if (!contentValid) {
+    errors.push(".cursor/agents content must preserve canonical name, model, and readonly frontmatter.");
   }
   return errors;
 }
@@ -304,6 +361,10 @@ export async function validateRepository(root = defaultRoot) {
   const actualClaudeAgents = (await readdir(path.join(root, ".claude", "agents"))).sort();
   const actualCodexAgents = (await readdir(path.join(root, ".codex", "agents"))).sort();
   const actualCursorAgents = (await readdir(path.join(root, ".cursor", "agents"))).sort();
+  const actualCursorAgentContents = Object.fromEntries(await Promise.all(actualCursorAgents.map(async (filename) => [
+    filename,
+    await readFile(path.join(root, ".cursor", "agents", filename), "utf8"),
+  ])));
   if (actualClaudeAgents.join(",") !== expectedClaudeAgents.join(",")) {
     errors.push(".claude/agents must contain exactly the generated evaluator set.");
   }
@@ -322,6 +383,7 @@ export async function validateRepository(root = defaultRoot) {
     agentsConfig: agents,
     executionPolicy,
     cursorAgentFiles: actualCursorAgents,
+    cursorAgentContents: actualCursorAgentContents,
   }));
   if (nodeVersion !== nvmVersion || packageJson.engines?.node !== nodeVersion) {
     errors.push(".node-version, .nvmrc, and package.json engines.node must agree exactly.");

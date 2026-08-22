@@ -19,15 +19,64 @@ const passiveTools = new Set([
   "TodoWrite",
 ]);
 const protectedFiles = new Set([
+  "agents.md",
+  "claude.md",
   ".cursor/hooks.json",
+  "package-lock.json",
+  "package.json",
   "config/agents.json",
   "config/execution.json",
+  "config/github-ruleset.json",
+  "config/ownership.json",
+  "config/review-contract.schema.json",
+  "config/workflow.json",
+  "docs/authority.md",
+  "docs/workflow.md",
+  "specs/cursor-cloud.md",
+  "tools/guard-claude-tool.mjs",
   "tools/guard-cursor-hook.mjs",
+  "tools/github-review-gate.mjs",
+  "tools/issue-workflow.mjs",
+  "tools/repository-policy.mjs",
+  "tools/workflow-core.mjs",
 ]);
 const protectedPrefixes = [
-  ".cursor/agents/",
+  ".claude/",
+  ".codex/",
+  ".cursor/",
+  ".github/",
   ".artifacts/issues/",
   ".artifacts/ops-results/",
+];
+const safePackageScripts = new Set([
+  "audit:completion",
+  "audit:trace",
+  "auth:verify",
+  "build",
+  "build:ci",
+  "check",
+  "check:generated",
+  "check:links",
+  "cursor:hook-check",
+  "deployment:lint",
+  "domain:lint",
+  "lint",
+  "policy",
+  "scan:client",
+  "template:readiness",
+  "template:source-check",
+  "test:boundary",
+  "test:client-scan",
+  "test:e2e",
+  "typecheck",
+  "typegen",
+  "workstation:doctor",
+]);
+const focusedTestSelectors = [
+  ["guard-cursor-hook"],
+  ["repository-policy"],
+  ["generated-assets"],
+  ["guard-cursor-hook", "repository-policy", "generated-assets"],
 ];
 
 function allow() {
@@ -120,29 +169,92 @@ function evaluatePathTool(toolName, input, root, readonly) {
   return allow();
 }
 
+/** @param {string[]} left @param {string[]} right */
+function argvEqual(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/** @param {string} command */
+function parseCommandArgv(command) {
+  const trimmed = command.trim();
+  if (!trimmed || /[\0\r\n;&|`<>$(){}!#*?\[\]'"\\]/u.test(trimmed)) return null;
+  const argv = trimmed.split(/\s+/u);
+  for (const argument of argv) {
+    if (
+      argument.startsWith("~") ||
+      argument.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/u.test(argument) ||
+      argument.split(/[\\/]/u).includes("..")
+    ) {
+      return null;
+    }
+  }
+  return argv;
+}
+
+/** @param {string[]} argv */
+function isAllowedNpmArgv(argv) {
+  if (!new Set(["npm", "npm.cmd"]).has(argv[0])) return false;
+  if (argv.some((argument) => argument.includes("=") || argument.includes("$"))) return false;
+  if (argvEqual(argv, [argv[0], "test"])) return true;
+  if (argv[1] === "test" && argv[2] === "--") {
+    const selectors = argv.slice(3);
+    return focusedTestSelectors.some((allowed) => argvEqual(selectors, allowed));
+  }
+  return argv.length === 3 && argv[1] === "run" && safePackageScripts.has(argv[2]);
+}
+
+/** @param {string[]} argv */
+function isAllowedGitArgv(argv) {
+  if (argv[0] !== "git" || argv.some((argument) => argument.includes("="))) return false;
+  const exactCommands = [
+    ["git", "status"],
+    ["git", "status", "--short"],
+    ["git", "status", "--short", "--branch"],
+    ["git", "diff"],
+    ["git", "diff", "--check"],
+    ["git", "diff", "--cached"],
+    ["git", "diff", "--stat"],
+    ["git", "diff", "--name-only"],
+    ["git", "log"],
+    ["git", "show", "HEAD"],
+    ["git", "show", "--stat", "HEAD"],
+    ["git", "rev-parse", "HEAD"],
+    ["git", "rev-parse", "--show-toplevel"],
+    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+    ["git", "ls-files"],
+    ["git", "merge-base", "main", "HEAD"],
+    ["git", "merge-base", "origin/main", "HEAD"],
+    ["git", "branch", "--show-current"],
+  ];
+  if (exactCommands.some((allowed) => argvEqual(argv, allowed))) return true;
+  return argv.length === 4 && argv[1] === "log" && /^-[1-9][0-9]?$/u.test(argv[2]) && argv[3] === "--oneline";
+}
+
+/** @param {string[]} argv */
+function isAllowedReadCommandArgv(argv) {
+  if (argvEqual(argv, ["pwd"]) || argvEqual(argv, ["ls"]) || argvEqual(argv, ["ls", "-la"])) return true;
+  if (argv[0] !== "rg" || argv.length < 2) return false;
+  let index = argv[1] === "-n" ? 2 : 1;
+  if (index >= argv.length || argv[index].startsWith("-")) return false;
+  index += 1;
+  return argv.slice(index).every((candidate) => !isSensitivePath(candidate));
+}
+
+/** @param {string[]} argv */
+function isAllowedNodeArgv(argv) {
+  return [
+    ["node", "tools/guard-cursor-hook.mjs", "--check"],
+    ["node", "tools/repository-policy.mjs"],
+    ["node", "tools/generate-agent-wrappers.mjs", "--check"],
+  ].some((allowed) => argvEqual(argv, allowed));
+}
+
 /** @param {string} command */
 function isAllowedShellCommand(command) {
-  const trimmed = command.trim();
-  if (!trimmed || /[\0\r\n;&|`<>]|\$\(/u.test(trimmed)) return false;
-  if (/(?:^|\s)["']?(?:\/|[A-Za-z]:[\\/])/u.test(trimmed)) return false;
-  if (/(?:^|[\\/\s"'])\.\.(?:[\\/\s"']|$)/u.test(trimmed)) return false;
-  if (/^(?:env|printenv|set)(?:\s|$)/iu.test(trimmed) || /(?:Get-ChildItem|Get-Item)\s+Env:/iu.test(trimmed)) return false;
-  if (/(?:^|[\\/\s"'])\.(?:ssh|aws)(?:[\\/\s"']|$)/iu.test(trimmed)) return false;
-  if (/(?:^|[\\/\s"'])\.config[\\/](?:gh|supabase)(?:[\\/\s"']|$)/iu.test(trimmed)) return false;
-  if (/(?:^|[\\/\s"'])\.env(?:\.[^\\/\s"']+)?(?:[\\/\s"']|$)/iu.test(trimmed)) return false;
-  if (/\bgit\s+(?:rebase|filter-branch|filter-repo|reflog\s+expire)\b/iu.test(trimmed)) return false;
-  if (/\bgit\s+reset\b[^\r\n]*--hard\b/iu.test(trimmed)) return false;
-  if (/\bgit\s+(?:push\b[^\r\n]*(?:--force|-f\b)|clean\b[^\r\n]*-[^\s]*f|branch\s+-D\b|commit\b[^\r\n]*--amend)/iu.test(trimmed)) return false;
-  if (/\b(?:rm\s+-[^\s]*(?:r[^\s]*f|f[^\s]*r)|Remove-Item\b[^\r\n]*-(?:Recurse|Force)|rmdir\s+\/s\b|del\s+\/s\b)/iu.test(trimmed)) return false;
-
-  if (/^(?:npm|npm\.cmd)\s+test(?:\s|$)/u.test(trimmed)) return true;
-  if (/^(?:npm|npm\.cmd)\s+exec\s+--\s+vitest\s+run(?:\s|$)/u.test(trimmed)) return true;
-  if (/^(?:npx|npx\.cmd)\s+vitest\s+run(?:\s|$)/u.test(trimmed)) return true;
-  if (/^(?:npm|npm\.cmd)\s+run\s+(?:build|build:ci|lint|typegen|typecheck|check|check:[a-z0-9:-]+|audit:[a-z0-9:-]+|policy|template:[a-z0-9:-]+|deployment:lint|domain:lint|cursor:hook-check)(?:\s|$)/u.test(trimmed)) return true;
-  if (/^node\s+tools\/(?:guard-cursor-hook|repository-policy|generate-agent-wrappers|verify-[a-z0-9-]+)\.mjs(?:\s|$)/u.test(trimmed)) return true;
-  if (/^git\s+(?:status|diff|log|show|rev-parse|ls-files|merge-base|branch\s+--show-current)(?:\s|$)/u.test(trimmed)) return true;
-  if (/^(?:rg|ls|pwd)(?:\s|$)/u.test(trimmed)) return true;
-  return false;
+  const argv = parseCommandArgv(command);
+  if (!argv) return false;
+  return isAllowedNpmArgv(argv) || isAllowedGitArgv(argv) || isAllowedReadCommandArgv(argv) || isAllowedNodeArgv(argv);
 }
 
 /** @param {Record<string, unknown>} event @param {string} root */
