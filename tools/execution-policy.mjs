@@ -7,6 +7,17 @@ const familySchema = z.enum([...knownFamilies, "unknown"]);
 const riskSchema = z.enum(["normal", "high"]);
 const surfaceSchema = z.enum(["codex-local", "claude-local", "cursor-cloud"]);
 
+/** @param {string} left @param {string} right */
+function compareCodePoints(left, right) {
+  const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);
+  const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? 0);
+  const length = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < length; index += 1) {
+    if (leftPoints[index] !== rightPoints[index]) return leftPoints[index] - rightPoints[index];
+  }
+  return leftPoints.length - rightPoints.length;
+}
+
 /**
  * Temporary duplicate of workflow-core's operation list. Task 2 makes this
  * module canonical; the focused unit test prevents drift in the meantime.
@@ -147,7 +158,7 @@ export function normalizeModelIdentity(configured, observed, parameters, policy)
     observed: input.observed,
     family: classifyModelFamily(input.observed, policy),
     fallback: configuredBaseModel(input.configured) !== input.observed,
-    parameters: [...input.parameters].sort((left, right) => left.id.localeCompare(right.id) || left.value.localeCompare(right.value)),
+    parameters: [...input.parameters].sort((left, right) => compareCodePoints(left.id, right.id) || compareCodePoints(left.value, right.value)),
   };
 }
 
@@ -204,7 +215,7 @@ export function classifyRisk(input, policy) {
     if (parsedPolicy.highRiskOperations.includes(operation)) reasons.add(`operation:${operation}`);
   }
 
-  const sortedReasons = [...reasons].sort((left, right) => left.localeCompare(right));
+  const sortedReasons = [...reasons].sort(compareCodePoints);
   return { level: sortedReasons.length === 0 ? "normal" : "high", reasons: sortedReasons };
 }
 
@@ -237,5 +248,5 @@ export function validateReviewerFamilies(input) {
   for (const family of required) {
     if (!parsed.reviewerFamilies.includes(family)) throw new Error(`Reviewer family ${family} is required.`);
   }
-  return [...parsed.reviewerFamilies].sort((left, right) => left.localeCompare(right));
+  return [...parsed.reviewerFamilies].sort(compareCodePoints);
 }

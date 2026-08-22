@@ -36,6 +36,18 @@ describe("execution policy", () => {
     expect(normalizeModelIdentity("future-model", "future-model-v2", [], policy).family).toBe("unknown");
   });
 
+  it("orders canonical parameter output by Unicode code point, not locale", () => {
+    expect(normalizeModelIdentity(
+      "claude-opus-5",
+      "claude-opus-5",
+      [{ id: "ordering", value: "💡" }, { id: "ordering", value: "a" }],
+      policy,
+    ).parameters).toEqual([
+      { id: "ordering", value: "a" },
+      { id: "ordering", value: "💡" },
+    ]);
+  });
+
   it("accepts only the issue branch owned by the selected surface", () => {
     expect(validateBranchForSurface("cursor/29-cloud-mode", 29, "cursor-cloud", policy)).toBe("cursor/29-cloud-mode");
     expect(() => validateBranchForSurface("codex/29-cloud-mode", 29, "cursor-cloud", policy)).toThrow(/surface/u);
