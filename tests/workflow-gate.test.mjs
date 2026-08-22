@@ -8,6 +8,7 @@ import {
   prepareReviewArtifacts,
   readExternalOperationRequest,
   recordReviewResult,
+  renderPullRequestBody,
   resolveInside,
   runAuthoritativePremergeGate,
   runPremergeGate,
@@ -116,6 +117,146 @@ describe("current-Head pre-merge gate", () => {
     expect(() => runPremergeGate({ ...bundle, reviews: staleReviews })).toThrow(/does not match the packet/u);
   });
 
+  it("binds every review result to the exact verification and diff bytes", async () => {
+    for (const review of bundle.reviews) {
+      expect(review.verifyDigest).toBe(bundle.packet.verifyDigest);
+      expect(review.diffDigest).toBe(bundle.packet.diffDigest);
+    }
+
+    const alteredVerificationReviews = bundle.reviews.map((review) => ({
+      ...review,
+      verifyDigest: `sha256:${"8".repeat(64)}`,
+    }));
+    expect(() => runPremergeGate({ ...bundle, reviews: alteredVerificationReviews }))
+      .toThrow(/verification digest does not match the packet/u);
+    expect(() => renderPullRequestBody({ ...bundle, reviews: alteredVerificationReviews }))
+      .toThrow(/verification digest does not match the packet/u);
+    await expect(recordReviewResult(root, 42, alteredVerificationReviews[0]))
+      .rejects.toThrow(/verification digest does not match the packet/u);
+
+    const alteredDiffReviews = bundle.reviews.map((review) => ({
+      ...review,
+      diffDigest: `sha256:${"7".repeat(64)}`,
+    }));
+    expect(() => runPremergeGate({ ...bundle, reviews: alteredDiffReviews }))
+      .toThrow(/diff digest does not match the packet/u);
+  });
+
+  it("authoritatively gates every configured high-risk operation without calling providers", async () => {
+    const highRiskOperations = [
+      {
+        operation: "github.merge_pr",
+        target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+        environment: "production",
+        reasonCode: "reviewed-release",
+        inputs: { issue: 42, prNumber: 77, headSha: bundle.currentHeadSha, method: "squash" },
+      },
+      {
+        operation: "github.update_ruleset",
+        target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+        environment: "production",
+        reasonCode: "reviewed-release",
+        inputs: {
+          issue: 42,
+          rulesetName: "main exact-Head review",
+          targetBranch: "main",
+          requiredCheckName: "Exact Head review policy",
+          enforcement: "active",
+        },
+      },
+      {
+        operation: "supabase.apply_migrations",
+        target: { kind: "supabase.project", identifier: "config/ownership.json#supabase.projectRef" },
+        environment: "production",
+        reasonCode: "acceptance-evidence",
+        inputs: { projectRefSource: "config/ownership.json", migrations: ["supabase/migrations/20260822000000_issue_42.sql"] },
+      },
+      {
+        operation: "vercel.deploy_preview",
+        target: { kind: "vercel.project", identifier: "config/ownership.json#vercel.projectId" },
+        environment: "preview",
+        reasonCode: "acceptance-evidence",
+        inputs: { projectSource: "config/ownership.json", headSha: bundle.currentHeadSha },
+      },
+      {
+        operation: "vercel.deploy_production",
+        target: { kind: "vercel.project", identifier: "config/ownership.json#vercel.projectId" },
+        environment: "production",
+        reasonCode: "reviewed-release",
+        inputs: { projectSource: "config/ownership.json", headSha: bundle.currentHeadSha },
+      },
+      {
+        operation: "cloudflare.upsert_dns",
+        target: { kind: "cloudflare.zone", identifier: "config/ownership.json#cloudflare.zoneId" },
+        environment: "production",
+        reasonCode: "reviewed-release",
+        inputs: { zoneSource: "config/ownership.json", recordName: "preview.example.com", recordType: "CNAME", target: "cname.vercel-dns.com", proxied: false },
+      },
+    ];
+    const routineOperations = [
+      {
+        operation: "github.read_issue",
+        target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+        environment: "none",
+        reasonCode: "issue-contract",
+        inputs: { issue: 42 },
+      },
+      {
+        operation: "github.push_branch",
+        target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+        environment: "none",
+        reasonCode: "acceptance-evidence",
+        inputs: { branch: "cursor/42-workflow-fixture", headSha: bundle.currentHeadSha },
+      },
+    ];
+    const configuredHighRiskOperations = /** @type {{ highRiskOperations: string[] }} */ (
+      JSON.parse(await readFile(path.resolve("config/execution.json"), "utf8"))
+    ).highRiskOperations;
+    expect(highRiskOperations.map(({ operation }) => operation)).toEqual(configuredHighRiskOperations);
+    const changedContract = {
+      ...bundle.contract,
+      externalOperations: [...highRiskOperations, ...routineOperations].map(({ operation }) => operation),
+    };
+    changedContract.digest = digestValue(changedContract);
+    await writeFile(path.join(root, ".artifacts/issues/42/issue-contract.json"), `${JSON.stringify(changedContract, null, 2)}\n`, "utf8");
+    const ownershipPath = path.join(root, "config/ownership.json");
+    const ownership = /** @type {{
+      supabase: { projectRef: string | null },
+      vercel: { projectId: string | null },
+      cloudflare: { zoneId: string | null }
+    }} */ (
+      JSON.parse(await readFile(ownershipPath, "utf8"))
+    );
+    ownership.supabase.projectRef = "abcdefghijklmnopqrst";
+    ownership.vercel.projectId = "prj_cursor_fixture";
+    ownership.cloudflare.zoneId = "0".repeat(32);
+    await writeFile(ownershipPath, `${JSON.stringify(ownership, null, 2)}\n`, "utf8");
+
+    for (const [index, candidate] of highRiskOperations.entries()) {
+      const request = {
+        schemaVersion: 1,
+        requestId: `issue-42-${candidate.operation.replace(/[._]/gu, "-")}-${index + 1}`,
+        issue: 42,
+        ...candidate,
+      };
+      const requestPath = `.artifacts/ops-requests/${request.requestId}.json`;
+      await mkdir(path.join(root, ".artifacts/ops-requests"), { recursive: true });
+      await writeFile(path.join(root, requestPath), `${JSON.stringify(request, null, 2)}\n`, "utf8");
+      await expect(readExternalOperationRequest(root, requestPath)).rejects.toThrow(/Pre-merge gate|contract digest|risk/u);
+    }
+    for (const [index, candidate] of routineOperations.entries()) {
+      const request = {
+        schemaVersion: 1,
+        requestId: `issue-42-${candidate.operation.replace(/[._]/gu, "-")}-${index + 1}`,
+        issue: 42,
+        ...candidate,
+      };
+      const requestPath = `.artifacts/ops-requests/${request.requestId}.json`;
+      await writeFile(path.join(root, requestPath), `${JSON.stringify(request, null, 2)}\n`, "utf8");
+      await expect(readExternalOperationRequest(root, requestPath)).resolves.toMatchObject({ gate: null });
+    }
+  });
+
   it("requires each acceptance criterion exactly once and supported", () => {
     const duplicateVerification = {
       ...bundle.verification,
@@ -182,6 +323,12 @@ describe("current-Head pre-merge gate", () => {
   });
 
   it("binds digests and changed paths to the real repository diff", async () => {
+    const verifyPath = path.join(root, bundle.packet.verifyPath);
+    const originalVerificationBytes = await readFile(verifyPath, "utf8");
+    await writeFile(verifyPath, `${originalVerificationBytes}\n`, "utf8");
+    await expect(runAuthoritativePremergeGate(root, 42)).rejects.toThrow(/verification digest/u);
+    await writeFile(verifyPath, originalVerificationBytes, "utf8");
+
     const diffPath = path.join(root, bundle.packet.diffPath);
     await writeFile(diffPath, "tampered diff\n", "utf8");
     await expect(runAuthoritativePremergeGate(root, 42)).rejects.toThrow(/repository diff/u);

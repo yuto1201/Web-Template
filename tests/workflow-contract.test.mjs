@@ -15,6 +15,8 @@ import {
 
 const headSha = "2".repeat(40);
 const contractDigest = `sha256:${"3".repeat(64)}`;
+const verifyDigest = `sha256:${"4".repeat(64)}`;
+const diffDigest = `sha256:${"5".repeat(64)}`;
 
 /** @typedef {import("zod").infer<typeof schemas.modelIdentitySchema>} ModelIdentity */
 
@@ -55,6 +57,8 @@ function review(overrides = {}) {
     risk: { level: "high", reasons: ["path:.cursor/"] },
     headSha,
     verifySha: headSha,
+    verifyDigest,
+    diffDigest,
     contractDigest,
     verdict: "approved",
     contracts: ["change-evaluator"],
@@ -114,6 +118,54 @@ describe("workflow contracts", () => {
     expect(() => validateExternalOperationRequest(request, path.resolve("."), outOfScopeContract)).toThrow(/outside the frozen/u);
   });
 
+  it("rejects cross-Issue branch targets for every branch delivery operation", () => {
+    const operations = [
+      {
+        operation: "github.push_branch",
+        validBranch: "codex/5-right-issue",
+        environment: "none",
+        reasonCode: "acceptance-evidence",
+        inputs: { branch: "codex/6-wrong-issue", headSha },
+      },
+      {
+        operation: "github.create_pr",
+        validBranch: "cursor/5-right-issue",
+        environment: "none",
+        reasonCode: "reviewed-release",
+        inputs: { issue: 5, branch: "cursor/6-wrong-issue", baseBranch: "main", headSha },
+      },
+      {
+        operation: "github.delete_branch",
+        validBranch: "claude/5-right-issue",
+        environment: "production",
+        reasonCode: "verified-cleanup",
+        inputs: { branch: "claude/6-wrong-issue", mergedPrNumber: 15, headSha },
+      },
+    ];
+    const frozenContract = snapshotIssueContract({
+      ...contractInput(),
+      externalOperations: operations.map(({ operation }) => operation),
+    }, "2026-08-21T01:00:00+09:00");
+
+    for (const [index, candidate] of operations.entries()) {
+      const request = {
+        schemaVersion: 1,
+        requestId: `issue-5-${candidate.operation.replace(/[._]/gu, "-")}-${index + 1}`,
+        issue: 5,
+        operation: candidate.operation,
+        target: { kind: "github.repository", identifier: "config/ownership.json#github" },
+        environment: candidate.environment,
+        reasonCode: candidate.reasonCode,
+        inputs: candidate.inputs,
+      };
+      expect(() => validateExternalOperationRequest({
+        ...request,
+        inputs: { ...candidate.inputs, branch: candidate.validBranch },
+      }, path.resolve("."), frozenContract)).not.toThrow();
+      expect(() => validateExternalOperationRequest(request, path.resolve("."), frozenContract)).toThrow(/branch.*issue 5/u);
+    }
+  });
+
   it("allows only the fixed active exact-Head ruleset update", () => {
     const frozenContract = snapshotIssueContract({
       ...contractInput(),
@@ -160,6 +212,7 @@ describe("workflow contracts", () => {
   });
 
   it("blocks unavailable review and rejects unsafe approved model evidence", () => {
+    expect(validateReviewResult(review())).toMatchObject({ verifyDigest, diffDigest });
     expect(stateForReview(review({ verdict: "unavailable", unavailableReason: "timeout" }))).toBe("blocked:review");
     expect(() => validateReviewResult(review({ verdict: "unavailable" }))).toThrow(/fixed reason/u);
     expect(() => validateReviewResult(review({ verifySha: "9".repeat(40) }))).toThrow(/must match/u);

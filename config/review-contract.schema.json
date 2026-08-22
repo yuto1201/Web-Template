@@ -46,6 +46,8 @@
     "risk",
     "headSha",
     "verifySha",
+    "verifyDigest",
+    "diffDigest",
     "contractDigest",
     "verdict",
     "contracts",
@@ -62,6 +64,8 @@
     "risk": { "$ref": "#/$defs/risk" },
     "headSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "verifySha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "verifyDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "diffDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "contractDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "verdict": { "enum": ["approved", "changes-requested", "unavailable"] },
     "contracts": {

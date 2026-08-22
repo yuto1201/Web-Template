@@ -164,6 +164,8 @@ describe("GitHub exact-Head review gate", () => {
     expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<!--\n## Cross-model review\n-->"))).toThrow(/HTML comment/u);
     expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<details>\n## Cross-model review").replace("## Remaining work", "</details>\n\n## Remaining work"))).toThrow(/raw HTML/u);
     expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<div>\n## Cross-model review").replace("## Remaining work", "</div>\n\n## Remaining work"))).toThrow(/raw HTML/u);
+    expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<details/>\n## Cross-model review"))).toThrow(/raw HTML/u);
+    expect(() => parseReviewBody(reviewBody().replace("## Cross-model review", "<div class=\"hidden\"/>\n## Cross-model review"))).toThrow(/raw HTML/u);
     expect(() => parseReviewBody(reviewBody().replace("- Risk:", "<div>\n- Risk:").replace("## Remaining work", "</div>\n\n## Remaining work"))).toThrow(/raw HTML/u);
     expect(() => parseReviewBody(reviewBody().replace("Closes #29", "```text\nCloses #29\n```"))).toThrow(/fenced/u);
     expect(() => parseReviewBody(reviewBody()

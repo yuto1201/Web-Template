@@ -99,7 +99,7 @@ function assertReviewSectionVisible(body, headingIndex, section) {
       openContainers.pop();
     } else {
       const opening = /^<(details|div)\b/iu.exec(match[0])?.[1]?.toLowerCase();
-      if (opening && !/\/\s*>$/u.test(match[0])) openContainers.push(opening);
+      if (opening) openContainers.push(opening);
     }
   }
   assert(openContainers.length === 0, "Review evidence must not be inside a raw HTML container.");

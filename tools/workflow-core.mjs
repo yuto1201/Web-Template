@@ -309,6 +309,8 @@ const reviewResultObjectSchema = z.object({
   risk: riskSchema,
   headSha: shaSchema,
   verifySha: shaSchema,
+  verifyDigest: digestSchema,
+  diffDigest: digestSchema,
   contractDigest: digestSchema,
   verdict: z.enum(["approved", "changes-requested", "unavailable"]),
   contracts: z.array(contractNameSchema).min(1),
@@ -419,7 +421,17 @@ export function digestValue(value) {
   if (copy && typeof copy === "object" && !Array.isArray(copy)) {
     delete /** @type {Record<string, unknown>} */ (copy).digest;
   }
-  return `sha256:${createHash("sha256").update(canonicalJson(copy), "utf8").digest("hex")}`;
+  return digestUtf8(canonicalJson(copy));
+}
+
+/** @param {string} value */
+function digestUtf8(value) {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+/** @param {unknown} value */
+function serializeJson(value) {
+  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 /** @param {string[]} values @param {string} label */
@@ -486,12 +498,23 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
   if ("issue" in inputs && inputs.issue !== request.issue) {
     throw new Error("Operation request Issue does not match operation inputs.");
   }
+  validateOperationBranchIssue(request.operation, inputs, request.issue);
   return {
     ...request,
     inputs,
     resolvedTarget: resolveOwnershipTarget(root, definition.targetIdentifier),
     expectedEvidence: definition.evidence,
   };
+}
+
+const branchDeliveryOperations = new Set(["github.push_branch", "github.create_pr", "github.delete_branch"]);
+
+/** @param {string} operation @param {unknown} inputs @param {number} issue */
+function validateOperationBranchIssue(operation, inputs, issue) {
+  if (!branchDeliveryOperations.has(operation)) return;
+  const { branch } = z.object({ branch: branchSchema }).passthrough().parse(inputs);
+  const branchIssue = Number(/^[a-z]+\/([1-9][0-9]*)-/u.exec(branch)?.[1]);
+  if (branchIssue !== issue) throw new Error(`Operation branch does not belong to issue ${issue}.`);
 }
 
 /** @param {string} candidate */
@@ -525,7 +548,7 @@ export async function readExternalOperationRequest(root, requestPath) {
   resolveInside(root, actual, path.join(".artifacts", "ops-requests"));
   const request = validateExternalOperationRequest(JSON.parse(await readFile(actual, "utf8")), root);
   let gate = null;
-  if (["github.merge_pr", "vercel.deploy_production", "cloudflare.upsert_dns"].includes(request.operation)) {
+  if (executionPolicy.highRiskOperations.includes(request.operation)) {
     gate = await runAuthoritativePremergeGate(root, request.issue);
     if ("headSha" in request.inputs && request.inputs.headSha !== gate.headSha) {
       throw new Error("External operation Head SHA does not match the authoritative review gate.");
@@ -630,6 +653,8 @@ export function validateReviewAgainstPacket(reviewValue, packetValue, root, cont
   }
   if (review.headSha !== packet.headSha) throw new Error("Review headSha does not match the packet.");
   if (review.verifySha !== packet.verifySha) throw new Error("Review verifySha does not match the packet.");
+  if (review.verifyDigest !== packet.verifyDigest) throw new Error("Review verification digest does not match the packet.");
+  if (review.diffDigest !== packet.diffDigest) throw new Error("Review diff digest does not match the packet.");
   if (review.contractDigest !== packet.contractDigest) throw new Error("Review contractDigest does not match the packet.");
   if (canonicalJson(review.contracts.toSorted()) !== canonicalJson(packet.requiredContracts.toSorted())) {
     throw new Error("Review did not cover every required privileged-path contract.");
@@ -831,9 +856,9 @@ export async function prepareReviewArtifacts(root, value) {
     contractPath,
     contractDigest: contract.digest,
     verifyPath,
-    verifyDigest: digestValue(verification),
+    verifyDigest: digestUtf8(serializeJson(verification)),
     diffPath,
-    diffDigest: digestValue(repositoryDiff),
+    diffDigest: digestUtf8(repositoryDiff),
     changedPaths,
     requiredContracts: requiredReviewContracts(changedPaths),
     createdAt: evidence.completedAt,
@@ -874,9 +899,13 @@ export async function loadAuthoritativeGateInput(root, issue) {
   const issueRoot = `.artifacts/issues/${issue}`;
   const headRoot = `${issueRoot}/${currentHeadSha}`;
   const contract = await readArtifactJson(root, `${issueRoot}/issue-contract.json`);
-  const verification = await readArtifactJson(root, `${headRoot}/verify.json`);
   const packet = await readArtifactJson(root, `${headRoot}/review-packet.json`);
   const validatedPacket = validateReviewPacket(packet, root, contract);
+  const verifyPath = resolveInside(root, validatedPacket.verifyPath, headRoot);
+  const verifyActualPath = await realpath(verifyPath);
+  resolveInside(root, verifyActualPath, headRoot);
+  const verificationSource = await readFile(verifyActualPath, "utf8");
+  const verification = JSON.parse(verificationSource);
   const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
   validateBranchForSurface(currentBranch, issue, validatedPacket.executionSurface, executionPolicy);
   const reviews = await Promise.all(validatedPacket.requiredReviewerFamilies.map((family) =>
@@ -884,7 +913,7 @@ export async function loadAuthoritativeGateInput(root, issue) {
   const authoritativeBaseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
   if (validatedPacket.baseSha !== authoritativeBaseSha) throw new Error("Review packet base SHA does not match the authoritative base ref.");
 
-  const verifyDigest = digestValue(verification);
+  const verifyDigest = digestUtf8(verificationSource);
   if (validatedPacket.verifyDigest !== verifyDigest) throw new Error("Review packet verification digest mismatch.");
 
   const diffPath = resolveInside(root, validatedPacket.diffPath, headRoot);
@@ -893,7 +922,7 @@ export async function loadAuthoritativeGateInput(root, issue) {
   const recordedDiff = await readFile(diffActualPath, "utf8");
   const repositoryDiff = runGit(root, ["diff", "--no-ext-diff", "--no-renames", "--binary", authoritativeBaseSha, currentHeadSha, "--"]);
   if (recordedDiff !== repositoryDiff) throw new Error("Recorded review diff does not match the repository diff.");
-  if (validatedPacket.diffDigest !== digestValue(recordedDiff)) throw new Error("Review packet diff digest mismatch.");
+  if (validatedPacket.diffDigest !== digestUtf8(recordedDiff)) throw new Error("Review packet diff digest mismatch.");
 
   const repositoryChangedPaths = runGit(root, ["-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", "-z", authoritativeBaseSha, currentHeadSha, "--"])
     .split("\0")
@@ -1023,7 +1052,7 @@ export function collectAndValidateCleanupPlan(evidenceValue, root) {
 /** @param {string} outputPath @param {unknown} value */
 async function writeJson(outputPath, value) {
   await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeFile(outputPath, serializeJson(value), "utf8");
 }
 
 const fixtureSchema = z.object({
@@ -1111,6 +1140,8 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
     risk: packet.risk,
     headSha: packet.headSha,
     verifySha: packet.verifySha,
+    verifyDigest: packet.verifyDigest,
+    diffDigest: packet.diffDigest,
     contractDigest: contract.digest,
     verdict: "approved",
     contracts: packet.requiredContracts,
