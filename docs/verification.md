@@ -28,7 +28,7 @@ Normal risk needs one approved reviewer family different from the observed prima
 
 1. `npm run cursor:doctor -- --build` verifies repository and Build readiness without reading `.env`, enumerating environment values, contacting providers, or granting provider authority.
 2. Live onboarding observes actual parent/reviewer models; separate repository-read, file-denial, shell-denial, provider-tool-denial, and clean-completion probes for every reviewer; remote browser/computer-use; and every expected personal connector identity/target.
-3. `npm run cursor:doctor -- --activation-input .artifacts/cursor/<file>.json` validates strict redacted evidence against the current `cursor/<issue>-<slug>` branch and exact Head SHA, configured models, a timestamp no older than 24 hours or more than five minutes in the future, and the exact public GitHub, Supabase, Vercel, and Cloudflare identifiers in `config/ownership.json`. Missing configured targets such as a null Supabase project ref block activation.
+3. `npm run cursor:doctor -- --activation-input .artifacts/cursor/<bc-run-id>.json` requires the filename stem to equal evidence `run.id`, then validates strict redacted evidence against the current `cursor/<issue>-<slug>` branch and exact Head SHA, configured models, a timestamp no older than 24 hours or more than five minutes in the future, and the exact public GitHub, Supabase, Vercel, and Cloudflare identifiers in `config/ownership.json`. Missing configured targets such as a null Supabase project ref block activation.
 4. A real Cursor-authored PR must pass the trusted base-sourced exact-Head gate before provider writes are enabled.
 5. Every provider write records its frozen Issue operation, redacted result, and independently queried post-state.
 

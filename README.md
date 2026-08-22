@@ -80,7 +80,7 @@ npm run audit:completion -- --include-integration --require-all
 
 クリーンルームで別名アプリを生成し、依存関係の固定インストール、`npm run check`、readiness、desktop/mobile smoke まで実行する検証は `npm run template:verify` です。
 
-Cursor の repository/Build 準備だけを確認する場合は `npm run cursor:doctor -- --build`、live activation の redacted evidence を検査する場合は `npm run cursor:doctor -- --activation-input .artifacts/cursor/<file>.json` を使います。後者は現在の `cursor/<issue>-<slug>` branch、configured reviewer model、public ownership identifiers と一致しなければ fail closed です。
+Cursor の repository/Build 準備だけを確認する場合は `npm run cursor:doctor -- --build`、live activation の redacted evidence を検査する場合は `npm run cursor:doctor -- --activation-input .artifacts/cursor/<bc-run-id>.json` を使います。ファイル名は evidence 内の `run.id` と完全一致し、後者は現在の `cursor/<issue>-<slug>` branch、configured reviewer model、public ownership identifiers と一致しなければ fail closed です。
 
 ## リポジトリの正本
 

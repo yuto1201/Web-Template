@@ -591,11 +591,13 @@ describe("Cursor Cloud doctor", () => {
     const artifactDirectory = path.join(root, ".artifacts", "cursor");
     try {
       await mkdir(artifactDirectory, { recursive: true });
+      await writeFile(path.join(artifactDirectory, `${ready.run.id}.json`), `${JSON.stringify(ready)}\n`, "utf8");
       await writeFile(path.join(artifactDirectory, "activation.json"), `${JSON.stringify(ready)}\n`, "utf8");
       await writeFile(path.join(root, ".env.local"), "PROVIDER_TOKEN=must-not-be-read\n", "utf8");
       await symlink(path.join(root, ".env.local"), path.join(artifactDirectory, "linked.json"));
 
-      await expect(readActivationEvidence(root, ".artifacts/cursor/activation.json", executionPolicy, { referenceTime })).resolves.toEqual(ready);
+      await expect(readActivationEvidence(root, `.artifacts/cursor/${ready.run.id}.json`, executionPolicy, { referenceTime })).resolves.toEqual(ready);
+      await expect(readActivationEvidence(root, ".artifacts/cursor/activation.json", executionPolicy, { referenceTime })).rejects.toThrow(/run ID/iu);
       await expect(readActivationEvidence(root, ".env.local", executionPolicy)).rejects.toThrow(/redacted artifact directory/iu);
       await expect(readActivationEvidence(root, ".artifacts/cursor/linked.json", executionPolicy)).rejects.toThrow(/regular file/iu);
       await expect(readActivationEvidence(root, ".artifacts/cursor/../activation.json", executionPolicy)).rejects.toThrow(/redacted artifact directory/iu);

@@ -90,10 +90,10 @@ Issue #29 is the bootstrap change and is delivered through its existing Codex br
 
 ## 11. Validate redacted activation evidence and enable writes
 
-Write only observed, redacted activation facts to a regular JSON file directly under `.artifacts/cursor/`. Then run:
+Write only observed, redacted activation facts to `.artifacts/cursor/<bc-run-id>.json`, where the filename stem exactly equals the evidence `run.id`. Then run:
 
 ```powershell
-npm run cursor:doctor -- --activation-input .artifacts/cursor/<redacted-evidence>.json
+npm run cursor:doctor -- --activation-input .artifacts/cursor/<bc-run-id>.json
 ```
 
 The strict evidence binds the `cursor-cloud` surface, Cursor run shape, current exact Cursor repository, `cursor/<issue>-<slug>` branch and lowercase 40-character Head SHA, ready Build versions/capabilities, configured OpenAI/Anthropic observations, the five separate capability-probe outcomes for each reviewer, every observed provider identity/target from step 7, and RFC 3339 observation time. `verifiedAt` must be no older than 24 hours and no more than five minutes in the future relative to the doctor run. The command rejects symlinks, outside paths, unexpected properties, secret-shaped content, stale/wrong branch or Head, model drift, uninitialized ownership, and any identity/target mismatch. Its output omits run/model/timestamp evidence and prints only fixed statuses plus public configured identifiers.

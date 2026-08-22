@@ -339,7 +339,12 @@ export async function readActivationEvidence(root, input, executionPolicy, optio
   } catch {
     throw new SafeCliError("Cursor activation evidence must be valid JSON.");
   }
-  return validateActivationEvidence(value, executionPolicy, options);
+  const activation = validateActivationEvidence(value, executionPolicy, options);
+  const expected = `.artifacts/cursor/${activation.run.id}.json`;
+  if (normalized !== expected) {
+    throw new SafeCliError("Activation input filename must match the observed Cursor run ID.");
+  }
+  return activation;
 }
 
 async function chromiumAvailable() {

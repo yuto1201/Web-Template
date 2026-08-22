@@ -27,10 +27,10 @@
 
 ```powershell
 npm run cursor:doctor -- --build
-npm run cursor:doctor -- --activation-input .artifacts/cursor/<redacted-evidence>.json
+npm run cursor:doctor -- --activation-input .artifacts/cursor/<bc-run-id>.json
 ```
 
-`--build` は repository/toolchain readiness だけ、`--activation-input` は current `cursor/<issue>-<slug>` branch と exact Head SHA、configured reviewer model、reviewer ごとの repository-read/file/shell/provider-tool/completion probe、fresh な観測時刻、public ownership match の redacted evidence を検査します。GitHub owner/full repository、Supabase organization/project ref、Vercel scope/project ID、Cloudflare account ID/name・zone ID・domain は `config/ownership.json` と完全一致しなければなりません。template source の `supabase.projectRef` は意図的に `null` なので、実 project ref を初期化するまでは live activation が `blocked:ops` になります。後者が `Status: ready` になっても、各 provider write の frozen Issue operation と preflight/post-state は省略できません。
+`--build` は repository/toolchain readiness だけ、`--activation-input` は filename stem と evidence の `run.id` が一致すること、current `cursor/<issue>-<slug>` branch と exact Head SHA、configured reviewer model、reviewer ごとの repository-read/file/shell/provider-tool/completion probe、fresh な観測時刻、public ownership match の redacted evidence を検査します。GitHub owner/full repository、Supabase organization/project ref、Vercel scope/project ID、Cloudflare account ID/name・zone ID・domain は `config/ownership.json` と完全一致しなければなりません。template source の `supabase.projectRef` は意図的に `null` なので、実 project ref を初期化するまでは live activation が `blocked:ops` になります。後者が `Status: ready` になっても、各 provider write の frozen Issue operation と preflight/post-state は省略できません。
 
 ## 4. Codex または activation 済み Cursor がライブ接続を有効化する
 

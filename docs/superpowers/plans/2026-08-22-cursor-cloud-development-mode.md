@@ -786,7 +786,7 @@ From the committed Cursor environment on updated `main`, verify the Build and mo
 Using Cursor's personal connectors, collect only redacted owner/target/status fields for GitHub, Supabase, Vercel, and Cloudflare. Run:
 
 ```bash
-npm run cursor:doctor -- --activation-input .artifacts/cursor/activation.json
+npm run cursor:doctor -- --activation-input .artifacts/cursor/<bc-run-id>.json
 ```
 
 Expected: `status: ready`, both reviewer provider-tool probes are `denied`, all expected owners/targets match `config/ownership.json`, and no credential-shaped field is present. If connector authentication or capability is unavailable, leave Cursor activation blocked and keep local modes operational.
