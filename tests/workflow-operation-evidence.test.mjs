@@ -110,6 +110,18 @@ describe("external operation evidence", () => {
     ], { encoding: "utf8", windowsHide: true });
     expect(cli.status, cli.stderr).toBe(0);
     expect(JSON.parse(cli.stdout)).toMatchObject({ requestId: rawRequest.requestId, status: "succeeded" });
+    const unknownOption = spawnSync(process.execPath, [
+      path.resolve("tools/issue-workflow.mjs"),
+      "validate-request",
+      "--root",
+      root,
+      "--file",
+      `.artifacts/ops-requests/${rawRequest.requestId}.json`,
+      "--unexpected",
+      "true",
+    ], { encoding: "utf8", windowsHide: true });
+    expect(unknownOption.status).toBe(1);
+    expect(unknownOption.stderr).toMatch(/Unknown option --unexpected/u);
     const resultPath = path.join(root, ".artifacts", "ops-results", `${rawRequest.requestId}.result.json`);
     const outsideResult = path.join(root, "outside-result.json");
     await writeFile(outsideResult, `${JSON.stringify(result(validated))}\n`, "utf8");
@@ -134,7 +146,9 @@ describe("external operation evidence", () => {
       { ...valid, mutationDigest: digestValue("other") },
       { ...valid, postState: null },
       { ...valid, postState: { ...valid.postState, status: false } },
+      { ...valid, postState: { ...valid.postState, observedAt: valid.completedAt } },
       { ...valid, extra: true },
+      { ...valid, auth: "redacted" },
       { ...valid, outcome: { ...valid.outcome, summary: ["github", "pat", "abcdefghijklmnopqrstuvwxyz1234567890"].join("_") } },
     ];
     for (const mutation of mutations) expect(() => validateExternalOperationResult(mutation, validated)).toThrow();
@@ -162,13 +176,22 @@ describe("external operation evidence", () => {
   it("accepts Cursor only with fresh run-bound activation and exact provider ownership", async () => {
     const { root, contract } = await fixtureRoot();
     const runId = "bc-00000000-0000-0000-0000-000000000005";
-    const activationEvidenceRef = `.artifacts/cursor-activation/${runId}.json`;
-    await mkdir(path.join(root, ".artifacts", "cursor-activation"), { recursive: true });
-    await writeFile(path.join(root, activationEvidenceRef), `${JSON.stringify({
+    const activationEvidenceRef = `.artifacts/cursor/${runId}.json`;
+    /** @param {string[]} args */
+    const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true });
+    expect(git("init", "--initial-branch=main").status).toBe(0);
+    expect(git("config", "user.name", "Operation Fixture").status).toBe(0);
+    expect(git("config", "user.email", "operation@example.invalid").status).toBe(0);
+    expect(git("add", "config/ownership.json").status).toBe(0);
+    expect(git("commit", "-m", "fixture ownership").status).toBe(0);
+    expect(git("switch", "-c", "cursor/5-evidence").status).toBe(0);
+    const headSha = git("rev-parse", "HEAD").stdout.trim();
+    await mkdir(path.join(root, ".artifacts", "cursor"), { recursive: true });
+    const activation = {
       schemaVersion: 1,
       surface: "cursor-cloud",
       run: { id: runId, modelObserved: "composer-2.5" },
-      repository: { fullName: "yuto1201/Web-Template", branch: "cursor/5-evidence", headSha: "2".repeat(40) },
+      repository: { fullName: "yuto1201/Web-Template", branch: "cursor/5-evidence", headSha },
       build: { status: "ready", node: "24.13.0", npm: "11.6.2", docker: true, chromium: true },
       reviewers: {
         openai: { observed: "gpt-5.6-sol", repositoryReadProbe: "passed", fileProbe: "denied", shellProbe: "denied", providerToolProbe: "denied", completionProbe: "passed" },
@@ -181,7 +204,10 @@ describe("external operation evidence", () => {
         cloudflare: { accountId: "0".repeat(32), accountName: "fixture", zoneId: "1".repeat(32), domain: "fixture.example.com", status: "verified" },
       },
       verifiedAt: new Date().toISOString(),
-    }, null, 2)}\n`, "utf8");
+    };
+    /** @param {unknown} value */
+    const writeActivation = (value) => writeFile(path.join(root, activationEvidenceRef), `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await writeActivation(activation);
     const raw = request(contract);
     const cursorRequest = {
       ...raw,
@@ -191,5 +217,22 @@ describe("external operation evidence", () => {
       authority: { executionSurface: "cursor-cloud", runId },
       resolvedTarget: "yuto1201/Web-Template",
     });
+
+    await writeActivation({ ...activation, repository: { ...activation.repository, headSha: "9".repeat(40) } });
+    expect(() => validateExternalOperationRequest(cursorRequest, root, contract)).toThrow(/activation-head-mismatch/u);
+    await writeActivation({ ...activation, repository: { ...activation.repository, branch: "cursor/6-evidence" } });
+    expect(() => validateExternalOperationRequest(cursorRequest, root, contract)).toThrow(/activation-branch-mismatch/u);
+    await writeActivation({ ...activation, verifiedAt: "2026-01-01T00:00:00Z" });
+    expect(() => validateExternalOperationRequest(cursorRequest, root, contract)).toThrow(/fresh/u);
+    await writeActivation(activation);
+    expect(() => validateExternalOperationRequest({
+      ...cursorRequest,
+      authority: { ...cursorRequest.authority, activationEvidenceRef: ".artifacts/cursor/activation.json" },
+    }, root, contract)).toThrow(/canonical run-bound/u);
+
+    expect(git("switch", "-c", "cursor/6-evidence").status).toBe(0);
+    const issueSixActivation = { ...activation, repository: { ...activation.repository, branch: "cursor/6-evidence" } };
+    await writeActivation(issueSixActivation);
+    expect(() => validateExternalOperationRequest(cursorRequest, root, contract)).toThrow(/does not belong to issue 5/u);
   });
 });

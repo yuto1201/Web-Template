@@ -224,6 +224,8 @@ describe("Cursor Cloud hook guard", () => {
     "tools/cursor-cloud-doctor.mjs",
     "tools/workflow-core.mjs",
     ".artifacts/issues/29/deadbeef/review-packet.json",
+    ".artifacts/cursor/bc-00000000-0000-0000-0000-000000000029.json",
+    ".artifacts/ops-requests/issue-29-github-read-issue-1.json",
     ".artifacts/ops-results/issue-29.result.json",
   ])("denies direct parent edits to protected surface %s before and after edit", (relativePath) => {
     expect(decision({

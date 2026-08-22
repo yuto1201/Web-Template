@@ -245,6 +245,51 @@ export function validateActivationEvidence(value, executionPolicy, options = {})
   return result.data;
 }
 
+/**
+ * Shared pure binding contract used by both cursor:doctor and external-operation preflight.
+ * @param {ReturnType<typeof validateActivationEvidence>} activation
+ * @param {{ branch?: unknown, headSha?: unknown }} repository
+ * @param {CursorOwnership} ownership
+ * @returns {Array<[string, string, boolean]>}
+ */
+export function activationRepositoryBindingChecks(activation, repository, ownership) {
+  const currentBranch = repository.branch;
+  const currentBranchAvailable = typeof currentBranch === "string" && currentBranch.length > 0;
+  const currentBranchIsCursor = currentBranchAvailable && /^cursor\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(currentBranch);
+  const currentHead = repository.headSha;
+  const currentHeadAvailable = typeof currentHead === "string" && /^[0-9a-f]{40}$/u.test(currentHead);
+  const expectedGitHub = `${ownership.github?.owner ?? ""}/${ownership.github?.repository ?? ""}`;
+  const expectedSupabaseProject = ownership.supabase?.projectRef;
+  const expectedVercelScope = ownership.vercel?.scope;
+  const expectedVercelProject = ownership.vercel?.projectId;
+  const expectedCloudflareAccountId = ownership.cloudflare?.accountId;
+  const expectedCloudflareAccountName = ownership.cloudflare?.accountName;
+  const expectedCloudflareZoneId = ownership.cloudflare?.zoneId;
+  const expectedCloudflareDomains = ownership.cloudflare?.domains;
+  return [
+    ["current-branch", currentBranchAvailable ? "current-branch-not-cursor" : "current-branch-unavailable", currentBranchIsCursor],
+    ["activation-branch", "activation-branch-mismatch", currentBranchIsCursor && activation.repository.branch === currentBranch],
+    ["current-head", "current-head-unavailable", currentHeadAvailable],
+    ["activation-head", "activation-head-mismatch", currentHeadAvailable && activation.repository.headSha === currentHead],
+    ["github-owner", "github-owner-mismatch", activation.providers.github.owner === ownership.github?.owner],
+    ["github-target", "github-target-mismatch", activation.providers.github.fullName === expectedGitHub && activation.repository.fullName === expectedGitHub],
+    ["supabase-owner", "supabase-owner-mismatch", activation.providers.supabase.organizationName === ownership.supabase?.organizationName],
+    ["supabase-project-configured", "supabase-project-unconfigured", typeof expectedSupabaseProject === "string" && expectedSupabaseProject.length > 0],
+    ["supabase-project", "supabase-project-mismatch", activation.providers.supabase.projectRef === expectedSupabaseProject],
+    ["vercel-scope-configured", "vercel-scope-unconfigured", typeof expectedVercelScope === "string" && expectedVercelScope.length > 0],
+    ["vercel-scope", "vercel-scope-mismatch", activation.providers.vercel.scope === expectedVercelScope],
+    ["vercel-project-configured", "vercel-project-unconfigured", typeof expectedVercelProject === "string" && expectedVercelProject.length > 0],
+    ["vercel-project", "vercel-project-mismatch", activation.providers.vercel.projectId === expectedVercelProject],
+    ["cloudflare-account-id-configured", "cloudflare-account-id-unconfigured", typeof expectedCloudflareAccountId === "string" && expectedCloudflareAccountId.length > 0],
+    ["cloudflare-account-id", "cloudflare-account-id-mismatch", activation.providers.cloudflare.accountId === expectedCloudflareAccountId],
+    ["cloudflare-owner", "cloudflare-owner-mismatch", activation.providers.cloudflare.accountName === expectedCloudflareAccountName],
+    ["cloudflare-zone-configured", "cloudflare-zone-unconfigured", typeof expectedCloudflareZoneId === "string" && expectedCloudflareZoneId.length > 0],
+    ["cloudflare-zone", "cloudflare-zone-mismatch", activation.providers.cloudflare.zoneId === expectedCloudflareZoneId],
+    ["cloudflare-domain-configured", "cloudflare-domain-unconfigured", Array.isArray(expectedCloudflareDomains) && expectedCloudflareDomains.length > 0],
+    ["cloudflare-domain", "cloudflare-domain-mismatch", Array.isArray(expectedCloudflareDomains) && expectedCloudflareDomains.includes(activation.providers.cloudflare.domain)],
+  ];
+}
+
 /** @param {string} command @param {string[]} args @param {string} [cwd] */
 function commandOutput(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true });
@@ -442,66 +487,8 @@ export function evaluateCursorCloud(snapshot, options = {}) {
       activationFailure = error instanceof ActivationEvidenceError ? error.status : "blocked:ops";
     }
   }
-  if (options.activation !== undefined) {
-    const currentBranch = repository.branch;
-    const currentBranchAvailable = typeof currentBranch === "string" && currentBranch.length > 0;
-    const currentBranchIsCursor = currentBranchAvailable && /^cursor\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(currentBranch);
-    checks.push(check("current-branch", gate(
-      blockers,
-      currentBranchAvailable ? "current-branch-not-cursor" : "current-branch-unavailable",
-      currentBranchIsCursor,
-    )));
-    if (activation && currentBranchIsCursor) {
-      checks.push(check("activation-branch", gate(
-        blockers,
-        "activation-branch-mismatch",
-        activation.repository.branch === currentBranch,
-      )));
-    }
-    const currentHead = repository.headSha;
-    const currentHeadAvailable = typeof currentHead === "string" && /^[0-9a-f]{40}$/u.test(currentHead);
-    checks.push(check("current-head", gate(
-      blockers,
-      "current-head-unavailable",
-      currentHeadAvailable,
-    )));
-    if (activation && currentHeadAvailable) {
-      checks.push(check("activation-head", gate(
-        blockers,
-        "activation-head-mismatch",
-        activation.repository.headSha === currentHead,
-      )));
-    }
-  }
   if (activation) {
-    const expectedGitHub = `${snapshot.ownership?.github?.owner ?? ""}/${snapshot.ownership?.github?.repository ?? ""}`;
-    const expectedSupabaseProject = snapshot.ownership?.supabase?.projectRef;
-    const expectedVercelScope = snapshot.ownership?.vercel?.scope;
-    const expectedVercelProject = snapshot.ownership?.vercel?.projectId;
-    const expectedCloudflareAccountId = snapshot.ownership?.cloudflare?.accountId;
-    const expectedCloudflareAccountName = snapshot.ownership?.cloudflare?.accountName;
-    const expectedCloudflareZoneId = snapshot.ownership?.cloudflare?.zoneId;
-    const expectedCloudflareDomains = snapshot.ownership?.cloudflare?.domains;
-    /** @type {Array<[string, string, boolean]>} */
-    const ownershipChecks = [
-      ["github-owner", "github-owner-mismatch", activation.providers.github.owner === snapshot.ownership?.github?.owner],
-      ["github-target", "github-target-mismatch", activation.providers.github.fullName === expectedGitHub && activation.repository.fullName === expectedGitHub],
-      ["supabase-owner", "supabase-owner-mismatch", activation.providers.supabase.organizationName === snapshot.ownership?.supabase?.organizationName],
-      ["supabase-project-configured", "supabase-project-unconfigured", typeof expectedSupabaseProject === "string" && expectedSupabaseProject.length > 0],
-      ["supabase-project", "supabase-project-mismatch", activation.providers.supabase.projectRef === expectedSupabaseProject],
-      ["vercel-scope-configured", "vercel-scope-unconfigured", typeof expectedVercelScope === "string" && expectedVercelScope.length > 0],
-      ["vercel-scope", "vercel-scope-mismatch", activation.providers.vercel.scope === expectedVercelScope],
-      ["vercel-project-configured", "vercel-project-unconfigured", typeof expectedVercelProject === "string" && expectedVercelProject.length > 0],
-      ["vercel-project", "vercel-project-mismatch", activation.providers.vercel.projectId === expectedVercelProject],
-      ["cloudflare-account-id-configured", "cloudflare-account-id-unconfigured", typeof expectedCloudflareAccountId === "string" && expectedCloudflareAccountId.length > 0],
-      ["cloudflare-account-id", "cloudflare-account-id-mismatch", activation.providers.cloudflare.accountId === expectedCloudflareAccountId],
-      ["cloudflare-owner", "cloudflare-owner-mismatch", activation.providers.cloudflare.accountName === expectedCloudflareAccountName],
-      ["cloudflare-zone-configured", "cloudflare-zone-unconfigured", typeof expectedCloudflareZoneId === "string" && expectedCloudflareZoneId.length > 0],
-      ["cloudflare-zone", "cloudflare-zone-mismatch", activation.providers.cloudflare.zoneId === expectedCloudflareZoneId],
-      ["cloudflare-domain-configured", "cloudflare-domain-unconfigured", Array.isArray(expectedCloudflareDomains) && expectedCloudflareDomains.length > 0],
-      ["cloudflare-domain", "cloudflare-domain-mismatch", Array.isArray(expectedCloudflareDomains) && expectedCloudflareDomains.includes(activation.providers.cloudflare.domain)],
-    ];
-    for (const [id, blocker, passed] of ownershipChecks) {
+    for (const [id, blocker, passed] of activationRepositoryBindingChecks(activation, repository, snapshot.ownership ?? {})) {
       checks.push(check(id, gate(blockers, blocker, passed)));
     }
   }

@@ -92,6 +92,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   if (command === "validate-request") {
+    rejectUnknownOptions(options, ["root", "file"]);
     printJson(await readExternalOperationRequest(root, required(options, "file")));
     return;
   }

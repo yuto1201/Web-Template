@@ -14,7 +14,7 @@ import {
   validateBranchForSurface,
   validateReviewerFamilies,
 } from "./execution-policy.mjs";
-import { validateActivationEvidence } from "./cursor-cloud-doctor.mjs";
+import { activationRepositoryBindingChecks, validateActivationEvidence } from "./cursor-cloud-doctor.mjs";
 import { containsPotentialSecret } from "./repository-policy.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -562,31 +562,27 @@ function requireRegularFileWithoutSymlink(candidate, label) {
   if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error(`${label} must be a regular non-symlink file.`);
 }
 
-/** @param {string} root @param {string} reference @param {string} runId */
-function readCursorActivation(root, reference, runId) {
-  const expected = `.artifacts/cursor-activation/${runId}.json`;
+/** @param {string} root @param {string} reference @param {string} runId @param {number} issue */
+function readCursorActivation(root, reference, runId, issue) {
+  const expected = `.artifacts/cursor/${runId}.json`;
   if (reference !== expected) throw new Error("Cursor activation evidence must use its canonical run-bound artifact path.");
-  const resolved = resolveInside(root, reference, ".artifacts/cursor-activation");
+  const resolved = resolveInside(root, reference, ".artifacts/cursor");
   requireRegularFileWithoutSymlink(resolved, "Cursor activation evidence");
   const actual = realpathSync.native(resolved);
   if (actual !== resolved) throw new Error("Cursor activation evidence must not use a filesystem alias or symlink.");
   const activation = validateActivationEvidence(JSON.parse(readFileSync(actual, "utf8")), executionPolicy);
   if (activation.run.id !== runId) throw new Error("Cursor activation evidence run does not match the operation request.");
   const ownership = JSON.parse(readFileSync(path.join(root, "config", "ownership.json"), "utf8"));
-  const expectedRepository = `${ownership.github?.owner}/${ownership.github?.repository}`;
-  const ownershipMatches =
-    activation.providers.github.owner === ownership.github?.owner &&
-    activation.providers.github.fullName === expectedRepository &&
-    activation.repository.fullName === expectedRepository &&
-    activation.providers.supabase.organizationName === ownership.supabase?.organizationName &&
-    activation.providers.supabase.projectRef === ownership.supabase?.projectRef &&
-    activation.providers.vercel.scope === ownership.vercel?.scope &&
-    activation.providers.vercel.projectId === ownership.vercel?.projectId &&
-    activation.providers.cloudflare.accountId === ownership.cloudflare?.accountId &&
-    activation.providers.cloudflare.accountName === ownership.cloudflare?.accountName &&
-    activation.providers.cloudflare.zoneId === ownership.cloudflare?.zoneId &&
-    Array.isArray(ownership.cloudflare?.domains) && ownership.cloudflare.domains.includes(activation.providers.cloudflare.domain);
-  if (!ownershipMatches) throw new Error("Cursor activation evidence does not match configured provider ownership and targets.");
+  const repository = {
+    branch: runGit(root, ["branch", "--show-current"]).trim(),
+    headSha: runGit(root, ["rev-parse", "HEAD"]).trim(),
+  };
+  const failedBindings = activationRepositoryBindingChecks(activation, repository, ownership)
+    .filter(([, , passed]) => !passed)
+    .map(([, blocker]) => blocker);
+  if (failedBindings.length > 0) throw new Error(`Cursor activation repository binding failed: ${failedBindings.join(", ")}.`);
+  const branchIssue = Number(/^cursor\/([1-9][0-9]*)-/u.exec(activation.repository.branch)?.[1]);
+  if (branchIssue !== issue) throw new Error(`Cursor activation branch does not belong to issue ${issue}.`);
   return activation;
 }
 
@@ -595,7 +591,7 @@ function containsSecretShapedEvidence(value) {
   if (Array.isArray(value)) return value.some(containsSecretShapedEvidence);
   if (!value || typeof value !== "object") return typeof value === "string" && containsPotentialSecret(value);
   return Object.entries(value).some(([key, child]) => (
-    /(?:token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|authorization)/iu.test(key) ||
+    /(?:auth|token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|authorization)/iu.test(key) ||
     containsSecretShapedEvidence(child)
   ));
 }
@@ -622,7 +618,7 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
   }
   if (request.authority.executionSurface === "cursor-cloud") {
     if (!request.authority.activationEvidenceRef) throw new Error("Cursor Cloud operation requires activation evidence.");
-    const activation = readCursorActivation(root, request.authority.activationEvidenceRef, request.authority.runId);
+    const activation = readCursorActivation(root, request.authority.activationEvidenceRef, request.authority.runId, request.issue);
     const activationOwner = provider === "github"
       ? activation.providers.github.owner
       : provider === "supabase"
@@ -755,7 +751,7 @@ export function validateExternalOperationResult(value, request) {
     if (result.postState.collectorRunId === result.runId) throw new Error("Post-state evidence must be collected by an independent run.");
     const expectedTargetDigest = digestValue(result.resolvedTarget);
     if (result.postState.targetDigest !== expectedTargetDigest) throw new Error("Post-state evidence target digest does not match the resolved target.");
-    if (Date.parse(result.postState.observedAt) < Date.parse(result.completedAt)) {
+    if (Date.parse(result.postState.observedAt) <= Date.parse(result.completedAt)) {
       throw new Error("Post-state evidence must be observed after operation completion.");
     }
   }
@@ -1398,7 +1394,7 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   let operationAuthority = {};
   if (fixture.executionSurface === "cursor-cloud") {
     const runId = "bc-00000000-0000-0000-0000-000000000042";
-    const activationEvidenceRef = `.artifacts/cursor-activation/${runId}.json`;
+    const activationEvidenceRef = `.artifacts/cursor/${runId}.json`;
     await writeJson(path.join(root, activationEvidenceRef), {
       schemaVersion: 1,
       surface: "cursor-cloud",
