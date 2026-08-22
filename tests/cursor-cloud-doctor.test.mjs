@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -270,6 +270,42 @@ describe("Cursor Cloud doctor", () => {
       expect(snapshot.executionPolicy.cursorModels).toEqual(executionPolicy.cursorModels);
     } finally {
       delete process.env.CURSOR_DOCTOR_TEST_SECRET;
+    }
+  });
+
+  it("collects the target root branch instead of the ambient repository branch", async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), "cursor-cloud-branch-root-"));
+    const sourceRoot = path.resolve(".");
+    const targetRoot = path.join(temporary, "target");
+    const ambientRoot = path.join(temporary, "ambient");
+    const originalCwd = process.cwd();
+    const excluded = new Set([".git", ".next", ".artifacts", "node_modules", "playwright-report", "test-results"]);
+    try {
+      await cp(sourceRoot, targetRoot, {
+        recursive: true,
+        filter(source) {
+          const relative = path.relative(sourceRoot, source);
+          return relative === "" || !excluded.has(relative.split(path.sep)[0]);
+        },
+      });
+      await mkdir(ambientRoot);
+      expect(spawnSync("git", ["init", "--initial-branch=cursor/777-target"], {
+        cwd: targetRoot,
+        encoding: "utf8",
+      }).status).toBe(0);
+      expect(spawnSync("git", ["init", "--initial-branch=cursor/888-ambient"], {
+        cwd: ambientRoot,
+        encoding: "utf8",
+      }).status).toBe(0);
+
+      process.chdir(ambientRoot);
+      const snapshot = await collectCursorCloudSnapshot(targetRoot);
+
+      expect(snapshot.repository.branch).toBe("cursor/777-target");
+      expect(snapshot.repository.branch).not.toBe("cursor/888-ambient");
+    } finally {
+      process.chdir(originalCwd);
+      await rm(temporary, { recursive: true, force: true });
     }
   });
 

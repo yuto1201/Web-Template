@@ -180,9 +180,9 @@ export function validateActivationEvidence(value, executionPolicy) {
   return result.data;
 }
 
-/** @param {string} command @param {string[]} args */
-function commandOutput(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true });
+/** @param {string} command @param {string[]} args @param {string} [cwd] */
+function commandOutput(command, args, cwd) {
+  const result = spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true });
   if (result.error || result.status !== 0) return null;
   const output = `${result.stdout ?? ""}`.trim();
   return output || null;
@@ -264,7 +264,7 @@ export async function collectCursorCloudSnapshot(root = defaultRoot) {
       packageNodeVersion: packageJson.engines?.node ?? null,
       packageNpmVersion: packageJson.engines?.npm ?? null,
       packageManager: packageJson.packageManager ?? null,
-      branch: commandOutput("git", ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+      branch: commandOutput("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], root),
       environment: JSON.parse(environmentText),
       dockerfile,
     },
