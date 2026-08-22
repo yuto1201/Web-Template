@@ -7,6 +7,7 @@ import {
   digestValue,
   prepareReviewArtifacts,
   readExternalOperationRequest,
+  recordReviewResult,
   resolveInside,
   runAuthoritativePremergeGate,
   runPremergeGate,
@@ -65,6 +66,15 @@ describe("current-Head pre-merge gate", () => {
     expect(() => runPremergeGate({ ...bundle, reviews: [bundle.reviews[0]] })).toThrow(/openai/u);
     expect(() => runPremergeGate({ ...bundle, reviews: [bundle.reviews[0], bundle.reviews[0]] })).toThrow(/unique/u);
     expect(runPremergeGate(bundle).ok).toBe(true);
+  });
+
+  it("does not report merge approval after recording only one required high-risk family", async () => {
+    await rm(path.join(root, `.artifacts/issues/42/${bundle.currentHeadSha}/reviews/openai.json`));
+
+    const recorded = await recordReviewResult(root, 42, bundle.reviews[0]);
+
+    expect(recorded.nextState).toBe("review-requested");
+    await expect(runAuthoritativePremergeGate(root, 42)).rejects.toThrow();
   });
 
   it("fails closed when verification or review is stale", () => {

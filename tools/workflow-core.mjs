@@ -849,7 +849,8 @@ export async function recordReviewResult(root, issue, value) {
   const review = validateReviewAgainstPacket(value, packet, root, contract);
   const reviewPath = `${headRoot}/reviews/${review.reviewerModel.family}.json`;
   await writeJson(path.join(root, reviewPath), review);
-  return { review, reviewPath, nextState: stateForReview(review) };
+  const nextState = review.verdict === "approved" ? "review-requested" : stateForReview(review);
+  return { review, reviewPath, nextState };
 }
 
 /**
