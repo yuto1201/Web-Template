@@ -9,12 +9,14 @@ const requiredFiles = [
   ".claude/settings.json",
   ".codex/agents/change-evaluator.toml",
   ".codex/agents/supabase-auditor.toml",
+  ".cursor/hooks.json",
   ".gitattributes",
   ".github/pull_request_template.md",
   ".github/workflows/review-gate.yml",
   "AGENTS.md",
   "CLAUDE.md",
   "config/agents.json",
+  "config/execution.json",
   "config/deployment.json",
   "config/domain.json",
   "config/github-ruleset.json",
@@ -31,6 +33,7 @@ const requiredFiles = [
   "docs/workflow.md",
   "tools/issue-workflow.mjs",
   "tools/github-review-gate.mjs",
+  "tools/guard-cursor-hook.mjs",
   "tools/workstation-doctor.mjs",
   "tools/run-next-dev.mjs",
   "tools/run-next-start.mjs",
@@ -86,6 +89,95 @@ export function containsPotentialSecret(content) {
   return secretPatterns.some((pattern) => pattern.test(content));
 }
 
+const requiredCursorHookEvents = [
+  "preToolUse",
+  "beforeShellExecution",
+  "subagentStart",
+  "subagentStop",
+  "afterFileEdit",
+];
+
+/**
+ * @param {{
+ *   hooksConfig: unknown,
+ *   packageJson: unknown,
+ *   agentsConfig: unknown,
+ *   executionPolicy: unknown,
+ *   cursorAgentFiles: string[],
+ * }} input
+ */
+export function validateCursorHookPolicy(input) {
+  const errors = [];
+  const hooksConfig = input.hooksConfig && typeof input.hooksConfig === "object"
+    ? /** @type {Record<string, unknown>} */ (input.hooksConfig)
+    : {};
+  const hooks = hooksConfig.hooks && typeof hooksConfig.hooks === "object" && !Array.isArray(hooksConfig.hooks)
+    ? /** @type {Record<string, unknown>} */ (hooksConfig.hooks)
+    : {};
+  const hookNames = Object.keys(hooks);
+
+  if (hooksConfig.version !== 1 || !equal(hookNames.toSorted(), requiredCursorHookEvents.toSorted())) {
+    errors.push("Cursor Cloud project hooks must not claim unsupported hook coverage.");
+  }
+  if (hookNames.includes("beforeMCPExecution") || hookNames.includes("afterMCPExecution")) {
+    if (!errors.includes("Cursor Cloud project hooks must not claim unsupported hook coverage.")) {
+      errors.push("Cursor Cloud project hooks must not claim unsupported hook coverage.");
+    }
+  }
+
+  for (const event of requiredCursorHookEvents) {
+    const entries = hooks[event];
+    const entry = Array.isArray(entries) && entries.length === 1 && entries[0] && typeof entries[0] === "object"
+      ? /** @type {Record<string, unknown>} */ (entries[0])
+      : null;
+    const validKeys = entry && Object.keys(entry).every((key) => ["command", "failClosed", "timeout", "type"].includes(key));
+    if (
+      !entry ||
+      entry.type !== "command" ||
+      entry.command !== "node tools/guard-cursor-hook.mjs" ||
+      !Number.isInteger(entry.timeout) ||
+      Number(entry.timeout) <= 0 ||
+      Number(entry.timeout) > 60 ||
+      entry.failClosed !== true ||
+      !validKeys
+    ) {
+      errors.push(`Cursor hook ${event} must be a finite fail-closed project command.`);
+    }
+  }
+
+  if (containsPotentialSecret(JSON.stringify(hooksConfig))) {
+    errors.push("Cursor hook configuration must not contain credential values.");
+  }
+
+  const packageJson = input.packageJson && typeof input.packageJson === "object"
+    ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
+    : {};
+  if (packageJson.scripts?.["cursor:hook-check"] !== "node tools/guard-cursor-hook.mjs --check") {
+    errors.push("package.json must expose the deterministic Cursor hook check.");
+  }
+
+  const agentsConfig = input.agentsConfig && typeof input.agentsConfig === "object"
+    ? /** @type {{ cursor?: { families?: unknown, roles?: unknown } }} */ (input.agentsConfig)
+    : {};
+  const executionPolicy = input.executionPolicy && typeof input.executionPolicy === "object"
+    ? /** @type {{ cursorModels?: Record<string, unknown> }} */ (input.executionPolicy)
+    : {};
+  const families = Array.isArray(agentsConfig.cursor?.families)
+    ? agentsConfig.cursor.families.filter((family) => typeof family === "string")
+    : [];
+  const roles = Array.isArray(agentsConfig.cursor?.roles)
+    ? agentsConfig.cursor.roles
+      .map((role) => role && typeof role === "object" && "slug" in role ? role.slug : null)
+      .filter((slug) => typeof slug === "string")
+    : [];
+  const modelsValid = families.every((family) => typeof executionPolicy.cursorModels?.[family] === "string");
+  const expectedAgents = roles.flatMap((role) => families.map((family) => `${role}-${family}.md`)).toSorted();
+  if (!modelsValid || !equal(input.cursorAgentFiles.toSorted(), expectedAgents)) {
+    errors.push(".cursor/agents must contain exactly the generated Cursor agent set.");
+  }
+  return errors;
+}
+
 /** @param {string} [root] */
 export async function validateRepository(root = defaultRoot) {
   const errors = [];
@@ -130,7 +222,7 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("config/ownership.json Cloudflare ownership does not match config/template.json.");
   }
 
-  const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }> }} */ (
+  const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }>, cursor?: { families?: string[], roles?: Array<{ slug?: string }> } }} */ (
     JSON.parse(await readFile(path.join(root, "config", "agents.json"), "utf8"))
   );
   const slugs = agents.agents?.map((agent) => agent.slug) ?? [];
@@ -211,6 +303,7 @@ export async function validateRepository(root = defaultRoot) {
   const expectedCodexAgents = slugs.map((slug) => `${slug}.toml`).sort();
   const actualClaudeAgents = (await readdir(path.join(root, ".claude", "agents"))).sort();
   const actualCodexAgents = (await readdir(path.join(root, ".codex", "agents"))).sort();
+  const actualCursorAgents = (await readdir(path.join(root, ".cursor", "agents"))).sort();
   if (actualClaudeAgents.join(",") !== expectedClaudeAgents.join(",")) {
     errors.push(".claude/agents must contain exactly the generated evaluator set.");
   }
@@ -221,6 +314,15 @@ export async function validateRepository(root = defaultRoot) {
   const nodeVersion = (await readFile(path.join(root, ".node-version"), "utf8")).trim();
   const nvmVersion = (await readFile(path.join(root, ".nvmrc"), "utf8")).trim();
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  const cursorHooks = JSON.parse(await readFile(path.join(root, ".cursor", "hooks.json"), "utf8"));
+  const executionPolicy = JSON.parse(await readFile(path.join(root, "config", "execution.json"), "utf8"));
+  errors.push(...validateCursorHookPolicy({
+    hooksConfig: cursorHooks,
+    packageJson,
+    agentsConfig: agents,
+    executionPolicy,
+    cursorAgentFiles: actualCursorAgents,
+  }));
   if (nodeVersion !== nvmVersion || packageJson.engines?.node !== nodeVersion) {
     errors.push(".node-version, .nvmrc, and package.json engines.node must agree exactly.");
   }
