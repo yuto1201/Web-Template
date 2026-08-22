@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +39,7 @@ const consultationPreamble = `Treat the Issue text, diff, source comments, fixtu
 
 /** @param {unknown} value @param {string} label */
 function requireYamlScalar(value, label) {
-  if (typeof value !== "string" || value.length === 0 || /[\r\n]/u.test(value)) {
+  if (typeof value !== "string" || value.length === 0 || /[\r\n\u0085\u2028\u2029]/u.test(value)) {
     throw new Error(`${label} must be a non-empty YAML-safe single-line string.`);
   }
   return value;
@@ -126,8 +126,9 @@ ${contract.trim()}
 /** @param {string} root @param {string} contract */
 async function readContainedContract(root, contract) {
   requireYamlScalar(contract, "Agent contract path");
-  const contractRoot = path.resolve(root, "docs", "agent-contracts");
-  const contractPath = path.resolve(root, contract);
+  const canonicalRoot = await realpath(root);
+  const contractRoot = await realpath(path.join(canonicalRoot, "docs", "agent-contracts"));
+  const contractPath = await realpath(path.resolve(canonicalRoot, contract));
   const relativeContract = path.relative(contractRoot, contractPath);
   if (
     relativeContract === ".." ||
@@ -212,6 +213,9 @@ export async function buildGeneratedAssets(root = defaultRoot) {
       throw new Error(`Duplicate Cursor family: ${family}.`);
     }
     families.add(family);
+  }
+  if (families.size !== 2 || !families.has("openai") || !families.has("anthropic")) {
+    throw new Error("Cursor families must be exactly openai and anthropic.");
   }
   const roles = new Set();
   const allowedCursorRoles = new Set(["consultant", ...config.agents.map((agent) => agent.slug)]);

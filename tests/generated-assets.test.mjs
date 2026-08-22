@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildGeneratedAssets } from "../tools/generate-agent-wrappers.mjs";
 import { reviewResultKeys } from "../tools/workflow-core.mjs";
 
@@ -16,6 +17,43 @@ const cursorModels = {
   openai: "gpt-5.6-sol[effort=high]",
   anthropic: "claude-opus-5[effort=high]",
 };
+
+const cursorAgentPaths = [
+  ".cursor/agents/change-evaluator-anthropic.md",
+  ".cursor/agents/change-evaluator-openai.md",
+  ".cursor/agents/consultant-anthropic.md",
+  ".cursor/agents/consultant-openai.md",
+  ".cursor/agents/supabase-auditor-anthropic.md",
+  ".cursor/agents/supabase-auditor-openai.md",
+];
+
+const fixtureRoots = [];
+
+async function createGeneratorFixture(mutateConfig = () => {}) {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), "web-template-agent-assets-"));
+  fixtureRoots.push(fixtureRoot);
+  const config = JSON.parse(await readFile(path.join(root, "config", "agents.json"), "utf8"));
+  mutateConfig(config);
+  const files = [
+    "config/execution.json",
+    "config/review-contract.schema.json",
+    "docs/agent-contracts/change-evaluator.md",
+    "docs/agent-contracts/consultant.md",
+    "docs/agent-contracts/supabase-auditor.md",
+  ];
+  await Promise.all(files.map(async (relativePath) => {
+    const destination = path.join(fixtureRoot, relativePath);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, await readFile(path.join(root, relativePath), "utf8"), "utf8");
+  }));
+  await mkdir(path.join(fixtureRoot, "config"), { recursive: true });
+  await writeFile(path.join(fixtureRoot, "config", "agents.json"), `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  return fixtureRoot;
+}
+
+afterEach(async () => {
+  await Promise.all(fixtureRoots.splice(0).map((fixtureRoot) => rm(fixtureRoot, { force: true, recursive: true })));
+});
 
 function cursorAgentBody(content) {
   return content.slice(content.indexOf("\n---\n") + "\n---\n".length);
@@ -80,5 +118,48 @@ describe("generated agent assets", () => {
       const canonicalContract = (await readFile(path.join(root, contract), "utf8")).trim();
       expect(variants[0]).toContain(canonicalContract);
     }
+  });
+
+  it("builds exactly the six planned Cursor agent paths", async () => {
+    const assets = await buildGeneratedAssets(root);
+    expect([...assets.keys()].filter((relativePath) => relativePath.startsWith(".cursor/agents/")).sort()).toEqual(cursorAgentPaths);
+  });
+
+  it("rejects a missing Cursor family even when stale files supply the planned paths", async () => {
+    const fixtureRoot = await createGeneratorFixture((config) => {
+      config.cursor.families = ["openai"];
+    });
+    await Promise.all(cursorAgentPaths.map(async (relativePath) => {
+      const stalePath = path.join(fixtureRoot, relativePath);
+      await mkdir(path.dirname(stalePath), { recursive: true });
+      await writeFile(stalePath, "stale", "utf8");
+    }));
+    await expect(buildGeneratedAssets(fixtureRoot)).rejects.toThrow("Cursor families must be exactly openai and anthropic.");
+  });
+
+  it.each(["\u0085", "\u2028", "\u2029"])("rejects YAML-breaking Unicode line separator %j", async (lineSeparator) => {
+    const fixtureRoot = await createGeneratorFixture((config) => {
+      config.cursor.roles[0].description = `unsafe${lineSeparator}description`;
+    });
+    await expect(buildGeneratedAssets(fixtureRoot)).rejects.toThrow("YAML-safe single-line string");
+  });
+
+  it("rejects a contract symlink that resolves outside the canonical contract directory", async (context) => {
+    const fixtureRoot = await createGeneratorFixture((config) => {
+      config.agents[0].contract = "docs/agent-contracts/escaped-contract.md";
+    });
+    const outsideContract = path.join(fixtureRoot, "outside-contract.md");
+    const escapedContract = path.join(fixtureRoot, "docs", "agent-contracts", "escaped-contract.md");
+    await writeFile(outsideContract, "outside", "utf8");
+    try {
+      await symlink(outsideContract, escapedContract, "file");
+    } catch (error) {
+      if (process.platform === "win32" && ["EACCES", "ENOSYS", "EPERM"].includes(error?.code)) {
+        context.skip("This Windows environment cannot create a file symlink.");
+        return;
+      }
+      throw error;
+    }
+    await expect(buildGeneratedAssets(fixtureRoot)).rejects.toThrow("Agent contract must stay inside docs/agent-contracts");
   });
 });
