@@ -95,7 +95,7 @@ function sourceProject() {
     observations: {
       github: {
         displayName: "Source Display Name",
-        createdAt: "2019-05-14T06:31:57Z",
+        createdAt: "2018-04-13T05:30:56Z",
         publicRepositories: 9,
         observedAt: "2026-08-30T00:00:00+09:00",
       },

@@ -297,8 +297,7 @@
     "githubCreatedAt": {
       "config/ownership.json": 1,
       "config/template.json": 1,
-      "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 1,
-      "tests/template-initializer.test.mjs": 1
+      "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 1
     },
     "githubRepository": {
       "README.md": 1,
