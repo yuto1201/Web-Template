@@ -36,10 +36,10 @@ describe("repository policy", () => {
       .replace(/^- Primary observed model:.*$/mu, "- Primary observed model: gpt-5.6-sol")
       .replace(/^- Primary family:.*$/mu, "- Primary family: openai")
       .replace(/^- Primary fallback:.*$/mu, "- Primary fallback: false")
-      .replace(/^- Risk:.*$/mu, "- Risk: normal")
-      .replace(/^- Risk reasons:.*$/mu, "- Risk reasons: none")
+      .replace(/^- Risk:.*$/mu, "- Risk: low")
+      .replace(/^- Risk reasons:.*$/mu, "- Risk reasons: path:README.md")
       .replace(/^- Reviewed SHA:.*$/mu, `- Reviewed SHA: \`${headSha}\``)
-      .replace(/^- Reviewer anthropic:.*$/mu, "- Reviewer anthropic: claude-opus-5[effort=high] | claude-opus-5 | anthropic | false | approved | change-evaluator")
+      .replace(/^- Reviewer anthropic:.*\n/mu, "")
       .replace(/^- Reviewer openai:.*\n/mu, "");
 
     expect(() => evaluateGitHubReviewGate({

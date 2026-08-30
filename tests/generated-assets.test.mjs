@@ -122,6 +122,7 @@ describe("generated agent assets", () => {
     expect(schema.required).toEqual(reviewResultKeys);
     expect(schema.required).toEqual(expect.arrayContaining(["verifyDigest", "diffDigest"]));
     expect(schema.properties.verdict.enum).toEqual(["approved", "changes-requested", "unavailable"]);
+    expect(schema.$defs.risk.properties.level.enum).toEqual(["low", "normal", "high"]);
   });
 
   it("emits read-only Cursor agents with canonical role contracts", async () => {

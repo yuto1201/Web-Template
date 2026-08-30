@@ -87,7 +87,7 @@ const exactRuleSchema = z.object({
   path: canonicalPathSchema,
 }).strict();
 
-const executionPolicySchema = z.object({
+const commonExecutionPolicyShape = {
   schemaVersion: z.literal(1),
   surfaces: z.object({
     "codex-local": z.object({ branchPrefix: z.literal("codex"), providerOperator: z.literal(true) }).strict(),
@@ -104,17 +104,20 @@ const executionPolicySchema = z.object({
     openai: z.string().min(1),
     anthropic: z.string().min(1),
   }).strict(),
-  lowRiskPathRules: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
   highRiskPathRules: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
-  verificationPathRules: z.object({
-    databaseAuth: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
-    browser: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
-    macos: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
-    template: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
-  }).strict(),
   routineDeliveryOperations: z.array(operationSchema).min(1),
   highRiskOperations: z.array(operationSchema).min(1),
-}).strict().superRefine((value, context) => {
+};
+
+const verificationPathRulesSchema = z.object({
+  databaseAuth: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+  browser: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+  macos: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+  template: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+}).strict();
+
+/** @param {any} value @param {z.RefinementCtx} context */
+function refineExecutionPolicy(value, context) {
   for (const [key, label] of /** @type {const} */ ([
     ["lowRiskPathRules", "Low-risk"],
     ["highRiskPathRules", "High-risk"],
@@ -125,7 +128,7 @@ const executionPolicySchema = z.object({
     }
   }
   for (const [key, rules] of Object.entries(value.verificationPathRules)) {
-    const ruleKeys = rules.map((rule) => `${rule.type}:${rule.path}`);
+    const ruleKeys = /** @type {Array<{type:string,path:string}>} */ (rules).map((rule) => `${rule.type}:${rule.path}`);
     if (new Set(ruleKeys).size !== ruleKeys.length) {
       context.addIssue({ code: "custom", path: ["verificationPathRules", key], message: `${key} verification path rules must be unique.` });
     }
@@ -139,7 +142,26 @@ const executionPolicySchema = z.object({
   if (value.routineDeliveryOperations.some((operation) => value.highRiskOperations.includes(operation))) {
     context.addIssue({ code: "custom", message: "Routine and high-risk operations must not overlap." });
   }
-});
+}
+
+const runtimeExecutionPolicySchema = z.object({
+  ...commonExecutionPolicyShape,
+  lowRiskPathRules: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+  verificationPathRules: verificationPathRulesSchema,
+}).strict().superRefine(refineExecutionPolicy);
+
+export const executionPolicySchema = z.object({
+  ...commonExecutionPolicyShape,
+  lowRiskPathRules: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+  verificationPathRules: z.object({
+    databaseAuth: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+    browser: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+    macos: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+    template: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+  }).strict(),
+}).strict().superRefine(refineExecutionPolicy);
+
+const legacyExecutionPolicySchema = z.object(commonExecutionPolicyShape).strict();
 
 const modelIdentityInputSchema = z.object({
   configured: z.string().min(1),
@@ -148,8 +170,25 @@ const modelIdentityInputSchema = z.object({
 }).strict();
 
 /**
- * @typedef {z.infer<typeof executionPolicySchema>} ExecutionPolicy
+ * @typedef {z.infer<typeof runtimeExecutionPolicySchema>} ExecutionPolicy
  */
+
+/**
+ * Parse policy from a protected branch. The pre-migration schema is accepted
+ * conservatively: it has no low-risk paths and cannot reduce verification.
+ * @param {unknown} value
+ * @returns {ExecutionPolicy}
+ */
+export function parseProtectedExecutionPolicy(value) {
+  const current = executionPolicySchema.safeParse(value);
+  if (current.success) return current.data;
+  const legacy = legacyExecutionPolicySchema.parse(value);
+  return runtimeExecutionPolicySchema.parse({
+    ...legacy,
+    lowRiskPathRules: [],
+    verificationPathRules: { databaseAuth: [], browser: [], macos: [], template: [] },
+  });
+}
 
 /** @param {string} root @returns {Promise<ExecutionPolicy>} */
 export async function loadExecutionPolicy(root) {
@@ -179,7 +218,7 @@ function classifyModelFamily(observed, policy) {
  */
 export function normalizeModelIdentity(configured, observed, parameters, policy) {
   const input = modelIdentityInputSchema.parse({ configured, observed, parameters });
-  executionPolicySchema.parse(policy);
+  runtimeExecutionPolicySchema.parse(policy);
   return {
     configured: input.configured,
     observed: input.observed,
@@ -199,7 +238,7 @@ export function validateBranchForSurface(branch, issue, surface, policy) {
   const parsedSurface = surfaceSchema.parse(surface);
   const parsedIssue = z.number().int().positive().parse(issue);
   const parsedBranch = z.string().parse(branch);
-  const parsedPolicy = executionPolicySchema.parse(policy);
+  const parsedPolicy = runtimeExecutionPolicySchema.parse(policy);
   const prefix = parsedPolicy.surfaces[parsedSurface].branchPrefix;
   const issuePrefix = `${prefix}/${parsedIssue}-`;
 
@@ -226,7 +265,7 @@ const riskInputSchema = z.object({
 /** @param {{ changedPaths: string[], externalOperations: string[] }} input @param {ExecutionPolicy} policy */
 export function classifyRisk(input, policy) {
   const parsedInput = riskInputSchema.parse(input);
-  const parsedPolicy = executionPolicySchema.parse(policy);
+  const parsedPolicy = runtimeExecutionPolicySchema.parse(policy);
   const highReasons = new Set();
 
   for (const operation of parsedInput.externalOperations) {
@@ -264,7 +303,7 @@ function matchesAnyPathRule(changedPaths, rules) {
 /** @param {{ changedPaths: string[], externalOperations: string[] }} input @param {ExecutionPolicy} policy */
 export function deriveVerificationPlan(input, policy) {
   const parsedInput = riskInputSchema.parse(input);
-  const parsedPolicy = executionPolicySchema.parse(policy);
+  const parsedPolicy = runtimeExecutionPolicySchema.parse(policy);
   const risk = classifyRisk(parsedInput, parsedPolicy);
   if (risk.level === "high") {
     return { risk, repository: "full", databaseAuth: true, browser: true, macos: true, template: true };

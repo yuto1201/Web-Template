@@ -88,7 +88,14 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["level", "reasons"],
-      "properties": { "level": { "enum": ["normal", "high"] }, "reasons": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } } }
+      "properties": { "level": { "enum": ["low", "normal", "high"] }, "reasons": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } } },
+      "allOf": [
+        {
+          "if": { "properties": { "level": { "const": "normal" } }, "required": ["level"] },
+          "then": { "properties": { "reasons": { "maxItems": 0 } } },
+          "else": { "properties": { "reasons": { "minItems": 1 } } }
+        }
+      ]
     }
   }
 }

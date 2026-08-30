@@ -224,6 +224,13 @@ function review(overrides = {}) {
 }
 
 describe("workflow contracts", () => {
+  it("accepts canonical low risk and rejects inconsistent risk reasons", () => {
+    expect(schemas.verificationSchema.shape.risk.parse({ level: "low", reasons: ["path:README.md"] }))
+      .toEqual({ level: "low", reasons: ["path:README.md"] });
+    expect(() => schemas.verificationSchema.shape.risk.parse({ level: "low", reasons: [] })).toThrow(/reason/u);
+    expect(() => schemas.verificationSchema.shape.risk.parse({ level: "normal", reasons: ["path:README.md"] })).toThrow(/reason/u);
+  });
+
   it("takes a deterministic Issue snapshot and rejects a changed digest", () => {
     const first = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", protectedAuthority);
     const second = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", protectedAuthority);

@@ -14,6 +14,8 @@ Closes #
 
 - AC-1: pending
 
+For trusted low risk, omit every `Reviewer` line. For normal or high risk, keep exactly the reviewer families required by the derived policy.
+
 ## Cross-model review
 
 - Execution surface: codex-local, claude-local, or cursor-cloud
@@ -22,7 +24,7 @@ Closes #
 - Primary observed model: exact observed model ID
 - Primary family: openai, anthropic, cursor, or xai
 - Primary fallback: false
-- Risk: normal or high
+- Risk: low, normal, or high
 - Risk reasons: none, or the canonical comma-separated derived reasons
 - Reviewed SHA: `current-head-sha`
 - Reviewer anthropic: exact configured model ID | exact observed model ID | anthropic | false | approved | change-evaluator, and any privileged-path auditors

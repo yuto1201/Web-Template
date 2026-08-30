@@ -8,6 +8,7 @@ import {
   loadExecutionPolicy,
   normalizeModelIdentity,
   operationModelFamily,
+  parseProtectedExecutionPolicy,
   requiredReviewerFamilies,
   validateBranchForSurface,
   validateReviewerFamilies,
@@ -92,6 +93,16 @@ describe("execution policy", () => {
       reasons: [],
     });
     expect(() => classifyRisk({ changedPaths: [], externalOperations: [] }, policy)).toThrow(/changed path/iu);
+  });
+
+  it("treats the pre-migration protected policy as never low risk", () => {
+    const legacyPolicy = structuredClone(policy);
+    delete legacyPolicy.lowRiskPathRules;
+    delete legacyPolicy.verificationPathRules;
+    const parsed = parseProtectedExecutionPolicy(legacyPolicy);
+    expect(parsed.lowRiskPathRules).toEqual([]);
+    expect(classifyRisk({ changedPaths: ["README.md"], externalOperations: [] }, parsed))
+      .toEqual({ level: "normal", reasons: [] });
   });
 
   it.each([
