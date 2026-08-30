@@ -261,6 +261,22 @@ const operationDefinitions = /** @type {Record<string, {
   },
 });
 
+const operationPurposeDefinitions = /** @type {Record<string, (constraints: Record<string, unknown>) => string>} */ ({
+  "github.read_issue": ({ issue }) => `Read the frozen Issue ${issue}.`,
+  "github.push_branch": ({ branch }) => `Push the exact verified branch ${branch}.`,
+  "github.create_pr": ({ issue }) => `Create the exact reviewed pull request for Issue ${issue}.`,
+  "github.merge_pr": ({ issue }) => `Merge the exact reviewed pull request for Issue ${issue}.`,
+  "github.delete_branch": ({ branch }) => `Delete the exact merged branch ${branch}.`,
+  "github.update_ruleset": ({ issue }) => `Update the exact protected-branch ruleset for Issue ${issue}.`,
+  "supabase.inspect_project": () => "Inspect the configured Supabase project.",
+  "supabase.apply_migrations": () => "Apply the exact frozen Supabase migrations.",
+  "vercel.inspect_project": () => "Inspect the configured Vercel project.",
+  "vercel.deploy_preview": () => "Deploy the exact reviewed Vercel preview.",
+  "vercel.deploy_production": () => "Deploy the exact reviewed Vercel production release.",
+  "cloudflare.inspect_zone": () => "Inspect the configured Cloudflare zone.",
+  "cloudflare.upsert_dns": () => "Upsert the exact reviewed Cloudflare DNS record.",
+});
+
 const externalRequestBaseSchema = z.object({
   schemaVersion: z.literal(1),
   requestId: z.string().regex(/^issue-[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*-[1-9][0-9]*$/u),
@@ -305,6 +321,11 @@ const externalAuthorizationSchema = externalAuthorizationBaseSchema.transform((a
     for (const issue of constraints.error.issues) {
       context.addIssue({ ...issue, path: ["constraints", ...issue.path] });
     }
+    return z.NEVER;
+  }
+  const expectedPurpose = operationPurposeDefinitions[authorization.operation](constraints.data);
+  if (authorization.purpose !== expectedPurpose) {
+    context.addIssue({ code: "custom", path: ["purpose"], message: `Operation ${authorization.operation} requires purpose: ${expectedPurpose}` });
     return z.NEVER;
   }
   if (failures.some(([valid]) => !valid)) return z.NEVER;
@@ -543,8 +564,26 @@ function resolveOwnershipTarget(authority, service) {
  * @param {string} baseRef
  */
 export function loadProtectedAuthority(root, baseRef) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(baseRef)) throw new Error("Protected authority base ref is invalid.");
-  const commitSha = runGit(root, ["rev-parse", "--verify", `${baseRef}^{commit}`]).trim();
+  if (typeof baseRef !== "string") throw new Error("Protected authority requires a protected branch ref.");
+  if (baseRef.startsWith("refs/") && !baseRef.startsWith("refs/heads/")) {
+    throw new Error("Protected authority requires a protected branch ref.");
+  }
+  const branchName = baseRef.startsWith("refs/heads/") ? baseRef.slice("refs/heads/".length) : baseRef;
+  let checkedBranch;
+  try {
+    checkedBranch = runGit(root, ["check-ref-format", "--branch", branchName]).trim();
+  } catch {
+    throw new Error("Protected authority requires a protected branch ref.");
+  }
+  if (checkedBranch !== branchName) throw new Error("Protected authority requires a protected branch ref.");
+  const canonicalRef = `refs/heads/${branchName}`;
+  const commitSha = runGit(root, ["rev-parse", "--verify", `${canonicalRef}^{commit}`]).trim();
+  shaSchema.parse(commitSha);
+  return loadAuthorityAtCommit(root, commitSha);
+}
+
+/** @param {string} root @param {string} commitSha */
+function loadAuthorityAtCommit(root, commitSha) {
   shaSchema.parse(commitSha);
   const serialized = runGit(root, ["show", `${commitSha}:config/ownership.json`]);
   let value;
@@ -565,6 +604,10 @@ export function resolveExternalAuthorization(contractValue, requestValue) {
   const authorization = contract.externalAuthorizations.find(({ operation }) => operation === request.operation);
   if (!authorization) throw new Error(`Operation ${request.operation} is outside the frozen Issue contract.`);
   const definition = operationDefinitions[request.operation];
+  const expectedPurpose = operationPurposeDefinitions[request.operation](authorization.constraints);
+  if (authorization.purpose !== expectedPurpose) {
+    throw new Error(`Operation ${request.operation} has an invalid frozen purpose.`);
+  }
   if (request.target.kind !== definition.targetKind) {
     throw new Error(`Operation ${request.operation} requires target kind ${definition.targetKind}.`);
   }
@@ -609,7 +652,7 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
   }
   const protectedAuthority = contract.authority.commitSha === currentProtectedAuthority.commitSha
     ? currentProtectedAuthority
-    : loadProtectedAuthority(root, contract.authority.commitSha);
+    : loadAuthorityAtCommit(root, contract.authority.commitSha);
   if (protectedAuthority.commitSha !== contract.authority.commitSha || protectedAuthority.digest !== contract.authority.digest) {
     throw new Error("Operation request protected authority snapshot does not match the frozen Issue contract.");
   }

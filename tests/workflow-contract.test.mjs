@@ -168,6 +168,26 @@ describe("workflow contracts", () => {
     )).toThrow(/must not contain duplicates/u);
   });
 
+  it("rejects a purpose that is not the exact operation and Issue purpose", () => {
+    const wrongPurpose = {
+      ...externalAuthorization(),
+      purpose: "Merge any pull request selected by the caller.",
+    };
+    expect(() => snapshotIssueContract(
+      { ...contractInput(), externalAuthorizations: [wrongPurpose] },
+      "2026-08-21T01:00:00+09:00",
+      protectedAuthority,
+    )).toThrow(/purpose/u);
+
+    const frozenContract = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", protectedAuthority);
+    const changedContract = {
+      ...frozenContract,
+      externalAuthorizations: [wrongPurpose],
+    };
+    changedContract.digest = digestValue(changedContract);
+    expect(() => resolveExternalAuthorization(changedContract, mergeRequest())).toThrow(/purpose/u);
+  });
+
   it("loads authority only from the protected ref and freezes its commit and digest", async () => {
     const mainAuthority = structuredClone(authority);
     mainAuthority.resourceTargets.github.repository = "target-a";
@@ -180,6 +200,20 @@ describe("workflow contracts", () => {
     expect(snapshot.authority.resourceTargets.github.repository).toBe("target-a");
     expect(snapshot.authority.resourceTargets.github.repository).not.toBe("target-b");
     expect(snapshot.digest).toBe(authorityDigest(mainAuthority));
+  });
+
+  it("resolves a short protected branch name canonically when a tag has the same name", async () => {
+    const mainAuthority = structuredClone(authority);
+    mainAuthority.resourceTargets.github.repository = "protected-target";
+    const tagAuthority = structuredClone(mainAuthority);
+    tagAuthority.resourceTargets.github.repository = "tag-target";
+    const { root, mainSha } = await gitAuthorityFixture(mainAuthority, tagAuthority);
+    runGit(root, ["tag", "main"]);
+
+    expect(loadProtectedAuthority(root, "main").commitSha).toBe(mainSha);
+    expect(loadProtectedAuthority(root, "main").authority.resourceTargets.github.repository).toBe("protected-target");
+    expect(loadProtectedAuthority(root, "refs/heads/main").commitSha).toBe(mainSha);
+    expect(() => loadProtectedAuthority(root, "refs/tags/main")).toThrow(/protected branch ref/u);
   });
 
   it("rejects branch-local retargeting while resolving an external request", async () => {
