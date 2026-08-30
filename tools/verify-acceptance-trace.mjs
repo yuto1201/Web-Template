@@ -6,6 +6,7 @@ try {
   const trace = JSON.parse(await readFile(path.join(root, "config", "acceptance.json"), "utf8"));
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   if (trace.schemaVersion !== 1 || !Array.isArray(trace.issues)) throw new Error("config/acceptance.json is malformed.");
+  /** @type {number[]} */
   const issueNumbers = trace.issues.map(/** @param {Record<string, any>} entry */ (entry) => entry.issue);
   if (issueNumbers.some((issue) => !Number.isSafeInteger(issue) || issue <= 0)) {
     throw new Error("Acceptance trace Issue IDs must be positive integers.");

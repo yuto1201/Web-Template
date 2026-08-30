@@ -8,12 +8,12 @@ Claude と Codex が implementer / external-operator として同じ account-bou
 
 1. GitHub の **Use this template** から新しいリポジトリを作成して clone します。
 2. `template-init.example.json` を `.template-init.json` にコピーし、アプリ名、slug、生成先 GitHub、ローカルポート、予定する公開 URL と Cloudflare zone を編集します。
-3. 初期化し、同じ入力で再実行できることを確認します。
+3. 依存関係を取得してから初期化し、同じ入力で再実行できることを確認します。
 
 ```powershell
-npm run template:init -- --config .template-init.json
-npm run template:init -- --config .template-init.json
 npm ci
+npm run template:init -- --config .template-init.json
+npm run template:init -- --config .template-init.json
 npx playwright install chromium
 npm run readiness
 npm run check

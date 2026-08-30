@@ -40,17 +40,50 @@ if (sourceState.status === "initialized") {
   const target = await mkdtemp(path.join(temporaryParent, "web-starter-clean-room-"));
   try {
     await copyProject(source, target);
+    run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
     const config = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       appName: "Clean Room App",
       slug: "clean-room-app",
-      github: { owner: "example-owner", repository: "clean-room-app" },
       localPorts: { app: 4310, supabaseBase: 56320 },
       publicUrls: { production: "https://clean-room-app.example.invalid" },
-      ownership: {
-        supabase: { organizationName: null, projectRef: null },
-        vercel: { scope: null, projectId: null },
-        cloudflare: { accountId: null, accountName: null, zoneId: null, zoneName: "example.invalid" },
+      accounts: {
+        github: { login: "example-owner", userId: null, nodeId: null },
+        supabase: { organizationName: null, organizationId: null },
+        vercel: { teamName: null, teamSlug: null, teamId: null, requiredPlan: null },
+        cloudflare: {
+          accountId: null,
+          accountName: null,
+          loginEmailHint: null,
+          loginEmailSha256: null,
+          requiredRole: null,
+          allowedZonePlans: null,
+        },
+        linear: {
+          workspaceName: null,
+          workspaceSlug: null,
+          workspaceUrl: null,
+          workspaceId: null,
+          userName: null,
+          userEmailHint: null,
+          userEmailSha256: null,
+          userId: null,
+          requiredRole: null,
+        },
+      },
+      servicePolicies: {
+        github: { mode: "repository-active" },
+        supabase: { mode: "repository-active" },
+        vercel: { mode: "repository-active" },
+        cloudflare: { mode: "repository-active" },
+        linear: { mode: "explicit-user-purpose-only" },
+      },
+      resourceTargets: {
+        github: { owner: "example-owner", repository: "clean-room-app", repositoryId: null, repositoryNodeId: null },
+        supabase: { projectRef: null },
+        vercel: { projectId: null },
+        cloudflare: { zoneId: null, domains: ["clean-room-app.example.invalid"] },
+        linear: { teamKey: null, teamId: null },
       },
     };
     const inputDirectory = path.join(target, ".artifacts");
@@ -68,7 +101,6 @@ if (sourceState.status === "initialized") {
 
     run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
     run("git", ["add", "-A"], target, "stage clean-room files for policy inspection");
-    run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
     run(process.execPath, [npmCli, "run", "workstation:doctor"], target, "verify clean-room workstation contract");
     run(process.execPath, [npmCli, "run", "check"], target, "run clean-room repository checks");
     const readiness = run(process.execPath, [npmCli, "run", "readiness"], target, "verify clean-room readiness distinction");

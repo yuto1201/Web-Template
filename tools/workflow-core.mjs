@@ -37,6 +37,9 @@ const relativeFileSchema = z.string().min(1).superRefine((value, context) => {
   }
 });
 
+/** @typedef {"github.read_issue" | "github.push_branch" | "github.create_pr" | "github.merge_pr" | "github.delete_branch" | "github.update_ruleset" | "supabase.inspect_project" | "supabase.apply_migrations" | "vercel.inspect_project" | "vercel.deploy_preview" | "vercel.deploy_production" | "cloudflare.inspect_zone" | "cloudflare.upsert_dns"} Operation */
+
+/** @type {Operation[]} */
 export const operationNames = [
   "github.read_issue",
   "github.push_branch",
@@ -70,14 +73,14 @@ const targetSources = {
   cloudflare: "resourceTargets.cloudflare",
 };
 
-const operationDefinitions = /** @type {Record<string, {
+const operationDefinitions = /** @type {Record<Operation, {
   service: "github" | "supabase" | "vercel" | "cloudflare",
   targetKind: string,
   targetIdentifier: string,
   environments: string[],
   reasonCodes: string[],
-  inputs: import("zod").ZodType,
-  constraints: import("zod").ZodType,
+  inputs: import("zod").ZodObject<any>,
+  constraints: import("zod").ZodObject<any>,
   requiresExactHead: boolean,
   evidence: string[]
 }>} */ ({
@@ -390,6 +393,7 @@ const operationResultSchema = receiptBindingSchema.extend({
   outcome: z.unknown(),
 }).strict();
 
+/** @type {Record<Operation, import("zod").ZodObject<any>>} */
 const operationSuccessEvidenceSchemas = {
   "github.read_issue": z.object({ issue: z.number().int().positive(), state: z.enum(["OPEN", "CLOSED"]), updatedAt: timestampSchema }).strict(),
   "github.push_branch": z.object({ branch: branchSchema, headSha: shaSchema }).strict(),
@@ -469,6 +473,7 @@ const operationSuccessEvidenceSchemas = {
   }).strict(),
 };
 
+/** @type {Record<Operation, Array<[string, string, string]>>} */
 const operationResultInputBindings = {
   "github.read_issue": [["issue", "issue", "Issue"]],
   "github.push_branch": [["branch", "branch", "branch"], ["headSha", "headSha", "Head SHA"]],
@@ -485,6 +490,7 @@ const operationResultInputBindings = {
   "cloudflare.upsert_dns": [["zoneSource", "zoneSource", "Cloudflare zone source"], ["recordName", "recordName", "DNS record name"], ["recordType", "recordType", "DNS record type"], ["target", "target", "DNS target"], ["proxied", "proxied", "DNS proxy mode"]],
 };
 
+/** @type {Partial<Record<Operation, [string, string]>>} */
 const operationTargetDigestBindings = {
   "supabase.inspect_project": ["projectRefDigest", "Supabase project reference"],
   "supabase.apply_migrations": ["projectRefDigest", "Supabase project reference"],
@@ -707,11 +713,10 @@ export function validateIssueContract(value) {
 
 /** @param {ReturnType<typeof parseAuthority>} authority @param {"github" | "supabase" | "vercel" | "cloudflare"} service */
 function resolveOwnershipTarget(authority, service) {
-  const target = authority.resourceTargets[service];
-  if (service === "github") return `${target.owner}/${target.repository}`;
-  if (service === "supabase" && target.projectRef) return target.projectRef;
-  if (service === "vercel") return target.projectId;
-  if (service === "cloudflare") return target.zoneId;
+  if (service === "github") return `${authority.resourceTargets.github.owner}/${authority.resourceTargets.github.repository}`;
+  if (service === "supabase" && authority.resourceTargets.supabase.projectRef) return authority.resourceTargets.supabase.projectRef;
+  if (service === "vercel") return authority.resourceTargets.vercel.projectId;
+  if (service === "cloudflare") return authority.resourceTargets.cloudflare.zoneId;
   throw new Error(`Protected authority target ${service} is not configured.`);
 }
 
@@ -920,6 +925,7 @@ function expectedReceiptBinding(context) {
 
 /** @param {Record<string, any>} actual @param {ReturnType<typeof expectedReceiptBinding>} expected @param {string} actualSurface */
 function assertReceiptBinding(actual, expected, actualSurface) {
+  /** @type {Record<string, string>} */
   const labels = {
     requestId: "request ID",
     service: "service",
@@ -1040,7 +1046,7 @@ export function claimOperationExecution(receiptIdValue, contextValue) {
   return claim;
 }
 
-/** @param {string} operation */
+/** @param {Operation} operation */
 function operationOutcomeSchema(operation) {
   const successEvidenceSchema = operationSuccessEvidenceSchemas[operation];
   const terminalEvidenceBase = {
@@ -1076,7 +1082,7 @@ function operationOutcomeSchema(operation) {
   ]);
 }
 
-/** @param {string} operation @param {Record<string, any>} evidence @param {Record<string, any>} inputs @param {string} targetRef @param {unknown} postTarget */
+/** @param {Operation} operation @param {Record<string, any>} evidence @param {Record<string, any>} inputs @param {string} targetRef @param {unknown} postTarget */
 function validateOperationSuccessEvidence(operation, evidence, inputs, targetRef, postTarget) {
   const checks = operationResultInputBindings[operation].map(([inputField, evidenceField, label]) => [
     canonicalJson(evidence[evidenceField]),
@@ -1086,7 +1092,7 @@ function validateOperationSuccessEvidence(operation, evidence, inputs, targetRef
   const targetBinding = operationTargetDigestBindings[operation];
   if (targetBinding) checks.push([evidence[targetBinding[0]], digestValue(targetRef), targetBinding[1]]);
   if (operation === "cloudflare.inspect_zone" && postTarget && typeof postTarget === "object") {
-    checks.push([evidence.zonePlan, postTarget.zonePlan, "Cloudflare zone plan"]);
+    checks.push([evidence.zonePlan, /** @type {Record<string, any>} */ (postTarget).zonePlan, "Cloudflare zone plan"]);
   }
   for (const [actual, expected, label] of checks) {
     if (actual !== expected) throw new Error(`Operation result ${label} does not match the frozen mutation request.`);

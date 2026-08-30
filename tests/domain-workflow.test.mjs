@@ -1,27 +1,37 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
-import {
+import { fileURLToPath } from "node:url";
+import { afterAll, describe, expect, it } from "vitest";
+import { providerPlaceholders } from "../tools/template-core.mjs";
+import { activeProviderAuthority, providerCoreModule } from "./helpers/provider-module.mjs";
+
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const canonicalAuthority = activeProviderAuthority(repositoryRoot);
+const activeFixture = await providerCoreModule({
+  authority: canonicalAuthority,
+  core: "domain-core.mjs",
+  configuration: "domain.json",
+  prefix: "domain-active-",
+});
+const {
   createDomainPlan,
   validateDomainApplyPreflight,
   validateDomainPolicy,
   validateDomainRollbackPreflight,
   verifyDnsChange,
   verifyDomainRelease,
-} from "../tools/domain-core.mjs";
-import { readAuthority } from "../tools/authority-core.mjs";
-import { providerPlaceholders } from "../tools/template-core.mjs";
-
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const canonicalAuthority = readAuthority(repositoryRoot);
+} = activeFixture.module;
 const workflowPath = path.join(repositoryRoot, "tools", "domain-workflow.mjs");
 const planTime = new Date("2026-08-21T07:31:00.000Z");
 const unrelatedRecords = [
   { id: "a".repeat(32), type: "CNAME", name: "app.yutodev.com", modifiedOn: "2026-05-19T15:43:41.711Z" },
   { id: "b".repeat(32), type: "AAAA", name: "test.yutodev.com", modifiedOn: "2026-04-27T05:40:28.511Z" },
 ];
+
+afterAll(async () => {
+  await rm(activeFixture.root, { recursive: true, force: true });
+});
 
 /** @returns {any} */
 function liveInput() {
@@ -79,23 +89,18 @@ function changedSnapshot(plan, overrides = {}) {
 }
 
 async function placeholderModule() {
-  await mkdir(path.resolve(".artifacts"), { recursive: true });
-  const root = await mkdtemp(path.join(path.resolve(".artifacts"), "domain-placeholder-"));
-  await mkdir(path.join(root, "config"));
-  await mkdir(path.join(root, "tools"));
-  await copyFile(path.resolve("config/domain.json"), path.join(root, "config", "domain.json"));
-  await copyFile(path.resolve("tools/authority-core.mjs"), path.join(root, "tools", "authority-core.mjs"));
-  await copyFile(path.resolve("tools/domain-core.mjs"), path.join(root, "tools", "domain-core.mjs"));
-  await copyFile(path.resolve("tools/template-core.mjs"), path.join(root, "tools", "template-core.mjs"));
   const placeholderAuthority = structuredClone(canonicalAuthority);
   placeholderAuthority.accounts.vercel.teamId = providerPlaceholders.vercelScope;
   placeholderAuthority.resourceTargets.vercel.projectId = providerPlaceholders.vercelProjectId;
   placeholderAuthority.accounts.cloudflare.accountId = providerPlaceholders.cloudflareAccountId;
   placeholderAuthority.accounts.cloudflare.accountName = providerPlaceholders.cloudflareAccountName;
   placeholderAuthority.resourceTargets.cloudflare.zoneId = providerPlaceholders.cloudflareZoneId;
-  await writeFile(path.join(root, "config", "ownership.json"), JSON.stringify(placeholderAuthority), "utf8");
-  const moduleUrl = `${pathToFileURL(path.join(root, "tools", "domain-core.mjs")).href}?placeholder=${Date.now()}`;
-  return { root, module: await import(moduleUrl) };
+  return providerCoreModule({
+    authority: placeholderAuthority,
+    core: "domain-core.mjs",
+    configuration: "domain.json",
+    prefix: "domain-placeholder-",
+  });
 }
 
 describe("Cloudflare domain workflow", () => {
@@ -171,7 +176,7 @@ describe("Cloudflare domain workflow", () => {
       recordId: null,
       request: {
         method: "POST",
-        path: "/zones/df938e9c196edf952ff26e95f02edf49/dns_records",
+        path: `/zones/${canonicalAuthority.resourceTargets.cloudflare.zoneId}/dns_records`,
         body: plan.desiredRecord,
       },
     });

@@ -180,7 +180,7 @@ const serviceUseSchema = z.object({
   explicitUserPurpose: z.string().nullable(),
 }).strict();
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {unknown} */
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === "object") {
@@ -216,12 +216,28 @@ export function authorityDigest(value) {
 
 /** @param {ReturnType<typeof parseAuthority>} authority @param {"github" | "supabase" | "vercel" | "cloudflare" | "linear"} service */
 function references(authority, service) {
-  const account = authority.accounts[service];
-  const target = authority.resourceTargets[service];
-  if (service === "github") return { accountRef: `github:${account.userId}:${account.nodeId}`, targetRef: `github:${target.repositoryId}:${target.repositoryNodeId}` };
-  if (service === "supabase") return { accountRef: `supabase:${account.organizationId}`, targetRef: target.projectRef ? `supabase:${target.projectRef}` : null };
-  if (service === "vercel") return { accountRef: `vercel:${account.teamId}`, targetRef: `vercel:${target.projectId}` };
-  if (service === "cloudflare") return { accountRef: `cloudflare:${account.accountId}`, targetRef: `cloudflare:${target.zoneId}` };
+  if (service === "github") {
+    const account = authority.accounts.github;
+    const target = authority.resourceTargets.github;
+    return { accountRef: `github:${account.userId}:${account.nodeId}`, targetRef: `github:${target.repositoryId}:${target.repositoryNodeId}` };
+  }
+  if (service === "supabase") {
+    const account = authority.accounts.supabase;
+    const target = authority.resourceTargets.supabase;
+    return { accountRef: `supabase:${account.organizationId}`, targetRef: target.projectRef ? `supabase:${target.projectRef}` : null };
+  }
+  if (service === "vercel") {
+    const account = authority.accounts.vercel;
+    const target = authority.resourceTargets.vercel;
+    return { accountRef: `vercel:${account.teamId}`, targetRef: `vercel:${target.projectId}` };
+  }
+  if (service === "cloudflare") {
+    const account = authority.accounts.cloudflare;
+    const target = authority.resourceTargets.cloudflare;
+    return { accountRef: `cloudflare:${account.accountId}`, targetRef: `cloudflare:${target.zoneId}` };
+  }
+  const account = authority.accounts.linear;
+  const target = authority.resourceTargets.linear;
   return {
     accountRef: account.workspaceId && account.userId ? `linear:${account.workspaceId}:${account.userId}` : "linear:incomplete",
     targetRef: target.teamId ? `linear:${target.teamId}` : null,
@@ -235,11 +251,12 @@ function requireEqual(actual, expected, message) {
 
 /** @param {ReturnType<typeof parseAuthority>} authority @param {"github" | "supabase" | "vercel" | "cloudflare" | "linear"} service @param {unknown} accountValue @param {unknown} targetValue */
 function evaluateIdentity(authority, service, accountValue, targetValue) {
-  const configuredAccount = authority.accounts[service];
-  const configuredTarget = authority.resourceTargets[service];
+  /** @type {string[]} */
   const warnings = [];
 
   if (service === "github") {
+    const configuredAccount = authority.accounts.github;
+    const configuredTarget = authority.resourceTargets.github;
     const account = githubObservationAccountSchema.parse(accountValue);
     const target = githubObservationTargetSchema.parse(targetValue);
     requireEqual(account.login, configuredAccount.login, "GitHub account identity mismatch.");
@@ -249,7 +266,9 @@ function evaluateIdentity(authority, service, accountValue, targetValue) {
     requireEqual(target.repositoryNodeId, configuredTarget.repositoryNodeId, "GitHub target identity mismatch.");
     if (target.owner !== undefined) requireEqual(target.owner, configuredTarget.owner, "GitHub target identity mismatch.");
     if (target.repository !== undefined) requireEqual(target.repository, configuredTarget.repository, "GitHub target identity mismatch.");
-    for (const [key, label] of [["displayName", "display name"], ["createdAt", "creation date"], ["publicRepositories", "public repository count"], ["observedAt", "observation timestamp"]]) {
+    /** @type {Array<["displayName" | "createdAt" | "publicRepositories" | "observedAt", string]>} */
+    const observationFields = [["displayName", "display name"], ["createdAt", "creation date"], ["publicRepositories", "public repository count"], ["observedAt", "observation timestamp"]];
+    for (const [key, label] of observationFields) {
       if (account[key] !== undefined && account[key] !== authority.observations.github[key]) {
         warnings.push(`GitHub ${label} differs from the configured observation.`);
       }
@@ -258,6 +277,8 @@ function evaluateIdentity(authority, service, accountValue, targetValue) {
   }
 
   if (service === "supabase") {
+    const configuredAccount = authority.accounts.supabase;
+    const configuredTarget = authority.resourceTargets.supabase;
     const account = supabaseObservationAccountSchema.parse(accountValue);
     const target = supabaseObservationTargetSchema.parse(targetValue);
     requireEqual(account.organizationName, configuredAccount.organizationName, "Supabase account identity mismatch.");
@@ -267,6 +288,8 @@ function evaluateIdentity(authority, service, accountValue, targetValue) {
   }
 
   if (service === "vercel") {
+    const configuredAccount = authority.accounts.vercel;
+    const configuredTarget = authority.resourceTargets.vercel;
     const account = vercelObservationAccountSchema.parse(accountValue);
     const target = vercelObservationTargetSchema.parse(targetValue);
     requireEqual(account.teamName, configuredAccount.teamName, "Vercel account identity mismatch.");
@@ -278,6 +301,8 @@ function evaluateIdentity(authority, service, accountValue, targetValue) {
   }
 
   if (service === "cloudflare") {
+    const configuredAccount = authority.accounts.cloudflare;
+    const configuredTarget = authority.resourceTargets.cloudflare;
     const account = cloudflareObservationAccountSchema.parse(accountValue);
     const target = cloudflareObservationTargetSchema.parse(targetValue);
     requireEqual(account.accountName, configuredAccount.accountName, "Cloudflare account identity mismatch.");
@@ -290,6 +315,8 @@ function evaluateIdentity(authority, service, accountValue, targetValue) {
     return { ...references(authority, service), warnings };
   }
 
+  const configuredAccount = authority.accounts.linear;
+  const configuredTarget = authority.resourceTargets.linear;
   const account = linearObservationAccountSchema.parse(accountValue);
   const target = linearObservationTargetSchema.parse(targetValue);
   requireEqual(account.workspaceName, configuredAccount.workspaceName, "Linear account identity mismatch.");

@@ -69,16 +69,16 @@ function exactKeys(value, allowed, label) {
   assert(extras.length === 0, `${label} contains unsupported keys: ${extras.join(", ")}.`);
 }
 
-/** @param {unknown} value @param {string} label @param {RegExp} pattern */
+/** @param {unknown} value @param {string} label @param {RegExp} pattern @returns {string} */
 function string(value, label, pattern) {
   assert(typeof value === "string" && pattern.test(value), `${label} is invalid.`);
-  return value;
+  return /** @type {string} */ (value);
 }
 
-/** @param {unknown} value @param {string} label */
+/** @param {unknown} value @param {string} label @returns {string | null} */
 function nullableString(value, label) {
   assert(value === null || typeof value === "string", `${label} must be a string or null.`);
-  return value;
+  return /** @type {string | null} */ (value);
 }
 
 /** @param {unknown} value @param {string} label */
@@ -99,7 +99,7 @@ function port(value, label) {
   return Number(value);
 }
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {string} */
 function normalizeHttpsOrigin(value) {
   assert(typeof value === "string", "publicUrls.production must be an HTTPS origin.");
   const url = new URL(/** @type {string} */ (value));
@@ -176,7 +176,7 @@ export function normalizeInitializationConfig(value) {
   const cloudflareLoginEmailSha256 = nullableString(cloudflareAccount.loginEmailSha256, "accounts.cloudflare.loginEmailSha256");
   const cloudflareRequiredRole = nullableString(cloudflareAccount.requiredRole, "accounts.cloudflare.requiredRole");
   assert(cloudflareAccount.allowedZonePlans === null || Array.isArray(cloudflareAccount.allowedZonePlans), "accounts.cloudflare.allowedZonePlans must be an array or null.");
-  const cloudflareAllowedZonePlans = cloudflareAccount.allowedZonePlans;
+  const cloudflareAllowedZonePlans = /** @type {string[] | null} */ (cloudflareAccount.allowedZonePlans);
   if (cloudflareAccountId !== null) string(cloudflareAccountId, "accounts.cloudflare.accountId", /^[0-9a-f]{32}$/u);
   if (cloudflareAccountName !== null) string(cloudflareAccountName, "accounts.cloudflare.accountName", /^(?=.{1,128}$)[^\r\n"\\]+$/u);
   if (cloudflareLoginEmailSha256 !== null) string(cloudflareLoginEmailSha256, "accounts.cloudflare.loginEmailSha256", /^[0-9a-f]{64}$/u);

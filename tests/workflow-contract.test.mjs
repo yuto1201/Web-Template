@@ -82,6 +82,7 @@ function githubObservation() {
   };
 }
 
+/** @param {Record<string, any>} contract @param {Record<string, any>} request @param {Record<string, any>} [overrides] */
 function preflightReceipt(contract, request, overrides = {}) {
   const observation = githubObservation();
   return {
@@ -105,6 +106,7 @@ function preflightReceipt(contract, request, overrides = {}) {
   };
 }
 
+/** @param {Record<string, any>} receipt @param {Record<string, any>} [overrides] */
 function operationResult(receipt, overrides = {}) {
   const observation = githubObservation();
   const evidence = {
@@ -147,12 +149,14 @@ function operationResult(receipt, overrides = {}) {
   };
 }
 
+/** @param {string} root @param {string[]} args */
 function runGit(root, args) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true });
   if (result.status !== 0) throw new Error(result.stderr || result.stdout);
   return result.stdout.trim();
 }
 
+/** @param {Record<string, any>} mainAuthority @param {Record<string, any>} candidateAuthority */
 async function gitAuthorityFixture(mainAuthority, candidateAuthority) {
   const root = await mkdtemp(path.join(os.tmpdir(), "web-template-authority-"));
   await mkdir(path.join(root, "config"), { recursive: true });
@@ -439,7 +443,7 @@ describe("workflow contracts", () => {
 
     const malformed = operationResult(receipt);
     malformed.postflight.observedAt = "2026-08-30T02:00:30Z";
-    malformed.outcome.evidence.force = true;
+    /** @type {Record<string, any>} */ (malformed.outcome.evidence).force = true;
     expect(() => validateOperationResult(malformed, {
       ...context,
       now: "2026-08-30T02:00:45Z",
@@ -565,6 +569,7 @@ describe("workflow contracts", () => {
         evidence: { zoneSource: "config/ownership.json", recordId: "dns_record_1", zoneIdDigest: targetDigest, recordName: "www.example.com", recordType: "CNAME", target: "example.vercel-dns.com", proxied: false },
       },
     ];
+    /** @param {string} field @param {unknown} value */
     const alternate = (field, value) => {
       if (field === "branch") return "codex/33-account-bound-authority-other";
       if (field === "headSha") return "9".repeat(40);

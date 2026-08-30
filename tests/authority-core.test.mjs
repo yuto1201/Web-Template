@@ -13,14 +13,17 @@ import {
 const root = process.cwd();
 const canonicalAuthority = JSON.parse(readFileSync(path.join(root, "config", "ownership.json"), "utf8"));
 
+/** @template T @param {T} value @returns {T} */
 function copy(value) {
-  return JSON.parse(JSON.stringify(value));
+  return /** @type {T} */ (JSON.parse(JSON.stringify(value)));
 }
 
+/** @param {string} value */
 function fingerprint(value) {
   return createHash("sha256").update(value.trim().toLowerCase(), "utf8").digest("hex");
 }
 
+/** @param {Record<string, any>} [overrides] @returns {Record<string, any>} */
 function githubObservation(overrides = {}) {
   return {
     service: "github",
@@ -29,6 +32,7 @@ function githubObservation(overrides = {}) {
   };
 }
 
+/** @param {Record<string, any>} [overrides] @returns {Record<string, any>} */
 function vercelObservation(overrides = {}) {
   return {
     service: "vercel",
@@ -37,6 +41,7 @@ function vercelObservation(overrides = {}) {
   };
 }
 
+/** @param {Record<string, any>} [overrides] @returns {Record<string, any>} */
 function cloudflareObservation(overrides = {}) {
   return {
     service: "cloudflare",
@@ -51,6 +56,7 @@ function cloudflareObservation(overrides = {}) {
   };
 }
 
+/** @param {Record<string, any>} authority @param {Record<string, any>} [overrides] @returns {Record<string, any>} */
 function linearObservation(authority, overrides = {}) {
   return {
     service: "linear",

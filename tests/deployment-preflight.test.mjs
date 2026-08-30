@@ -1,17 +1,22 @@
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  canonicalVercelOwnership,
-  DeploymentCheckpointError,
-  validateDeploymentPreflight,
-} from "../tools/deployment-core.mjs";
-import { readAuthority } from "../tools/authority-core.mjs";
+import { afterAll, describe, expect, it } from "vitest";
 import { providerPlaceholders } from "../tools/template-core.mjs";
+import { activeProviderAuthority, providerCoreModule } from "./helpers/provider-module.mjs";
 
-const canonicalAuthority = readAuthority();
+const canonicalAuthority = activeProviderAuthority();
+const activeFixture = await providerCoreModule({
+  authority: canonicalAuthority,
+  core: "deployment-core.mjs",
+  configuration: "deployment.json",
+  prefix: "deployment-active-",
+});
+const { canonicalVercelOwnership, DeploymentCheckpointError, validateDeploymentPreflight } = activeFixture.module;
+
+afterAll(async () => {
+  await rm(activeFixture.root, { recursive: true, force: true });
+});
 
 const requiredKeys = [
   "APP_ORIGIN",
@@ -47,20 +52,15 @@ async function fixture({ link = true } = {}) {
 }
 
 async function placeholderModule() {
-  await mkdir(path.resolve(".artifacts"), { recursive: true });
-  const root = await mkdtemp(path.join(path.resolve(".artifacts"), "deployment-placeholder-"));
-  await mkdir(path.join(root, "config"));
-  await mkdir(path.join(root, "tools"));
-  await copyFile(path.resolve("config/deployment.json"), path.join(root, "config", "deployment.json"));
-  await copyFile(path.resolve("tools/authority-core.mjs"), path.join(root, "tools", "authority-core.mjs"));
-  await copyFile(path.resolve("tools/deployment-core.mjs"), path.join(root, "tools", "deployment-core.mjs"));
-  await copyFile(path.resolve("tools/template-core.mjs"), path.join(root, "tools", "template-core.mjs"));
   const placeholderAuthority = structuredClone(canonicalAuthority);
   placeholderAuthority.accounts.vercel.teamId = providerPlaceholders.vercelScope;
   placeholderAuthority.resourceTargets.vercel.projectId = providerPlaceholders.vercelProjectId;
-  await writeFile(path.join(root, "config", "ownership.json"), JSON.stringify(placeholderAuthority), "utf8");
-  const moduleUrl = `${pathToFileURL(path.join(root, "tools", "deployment-core.mjs")).href}?placeholder=${Date.now()}`;
-  return { root, module: await import(moduleUrl) };
+  return providerCoreModule({
+    authority: placeholderAuthority,
+    core: "deployment-core.mjs",
+    configuration: "deployment.json",
+    prefix: "deployment-placeholder-",
+  });
 }
 
 describe("Vercel deployment preflight", () => {

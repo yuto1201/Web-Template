@@ -136,6 +136,7 @@ async function initializedVerifierFixture() {
   return root;
 }
 
+/** @returns {Record<string, any>} */
 function configuration() {
   return {
     schemaVersion: 2,

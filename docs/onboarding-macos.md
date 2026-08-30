@@ -53,7 +53,7 @@ npm run test:e2e
 
 Replace only the values in `.env.local` that are required for the selected local or hosted target. `workstation:doctor` checks only whether the file exists; it never reads or prints its contents.
 
-For a generated application, run template initialization before `npm ci`, exactly as described in the root README. For this golden source repository, do not rerun initialization.
+For a generated application, run `npm ci` before template initialization so the canonical authority parser is available, exactly as described in the root README. For this golden source repository, do not rerun initialization.
 
 ## 4. Re-establish account boundaries
 

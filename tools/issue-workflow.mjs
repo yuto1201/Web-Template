@@ -256,12 +256,13 @@ async function readReceiptContext(root, options) {
 
 /** @param {string} root @param {unknown} preflight @param {Record<string, any>} baseContext */
 async function restoreValidatedPreflight(root, preflight, baseContext) {
-  if (!preflight || typeof preflight !== "object" || typeof preflight.receiptId !== "string") {
+  const preflightReceipt = /** @type {Record<string, any>} */ (preflight);
+  if (!preflight || typeof preflight !== "object" || typeof preflightReceipt.receiptId !== "string") {
     throw new Error("Execution requires a valid preflight receipt.");
   }
   let validatedState;
   try {
-    validatedState = await readStateJson(root, "receipts", validatedReceiptStateFileName(preflight.receiptId));
+    validatedState = await readStateJson(root, "receipts", validatedReceiptStateFileName(preflightReceipt.receiptId));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       throw new Error("Execution requires a validated preflight receipt.");

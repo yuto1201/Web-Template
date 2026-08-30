@@ -1,15 +1,20 @@
-import { describe, expect, it } from "vitest";
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import {
-  validateReleaseEvidence,
-  validateRemoteSchemaOrder,
-} from "../tools/deployment-core.mjs";
-import { readAuthority } from "../tools/authority-core.mjs";
+import { afterAll, describe, expect, it } from "vitest";
+import { rm } from "node:fs/promises";
 import { providerPlaceholders } from "../tools/template-core.mjs";
+import { activeProviderAuthority, providerCoreModule } from "./helpers/provider-module.mjs";
 
-const canonicalAuthority = readAuthority();
+const canonicalAuthority = activeProviderAuthority();
+const activeFixture = await providerCoreModule({
+  authority: canonicalAuthority,
+  core: "deployment-core.mjs",
+  configuration: "deployment.json",
+  prefix: "release-active-",
+});
+const { validateReleaseEvidence, validateRemoteSchemaOrder } = activeFixture.module;
+
+afterAll(async () => {
+  await rm(activeFixture.root, { recursive: true, force: true });
+});
 
 const commitSha = "a".repeat(40);
 const verificationTime = new Date("2026-08-21T02:10:00+09:00");
@@ -35,20 +40,15 @@ function evidence(overrides = {}) {
 }
 
 async function placeholderModule() {
-  await mkdir(path.resolve(".artifacts"), { recursive: true });
-  const root = await mkdtemp(path.join(path.resolve(".artifacts"), "release-placeholder-"));
-  await mkdir(path.join(root, "config"));
-  await mkdir(path.join(root, "tools"));
-  await copyFile(path.resolve("config/deployment.json"), path.join(root, "config", "deployment.json"));
-  await copyFile(path.resolve("tools/authority-core.mjs"), path.join(root, "tools", "authority-core.mjs"));
-  await copyFile(path.resolve("tools/deployment-core.mjs"), path.join(root, "tools", "deployment-core.mjs"));
-  await copyFile(path.resolve("tools/template-core.mjs"), path.join(root, "tools", "template-core.mjs"));
   const placeholderAuthority = structuredClone(canonicalAuthority);
   placeholderAuthority.accounts.vercel.teamId = providerPlaceholders.vercelScope;
   placeholderAuthority.resourceTargets.vercel.projectId = providerPlaceholders.vercelProjectId;
-  await writeFile(path.join(root, "config", "ownership.json"), JSON.stringify(placeholderAuthority), "utf8");
-  const moduleUrl = `${pathToFileURL(path.join(root, "tools", "deployment-core.mjs")).href}?placeholder=${Date.now()}`;
-  return { root, module: await import(moduleUrl) };
+  return providerCoreModule({
+    authority: placeholderAuthority,
+    core: "deployment-core.mjs",
+    configuration: "deployment.json",
+    prefix: "release-placeholder-",
+  });
 }
 
 describe("Vercel release evidence", () => {

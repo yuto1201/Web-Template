@@ -167,10 +167,10 @@ export function operatorParityErrors({
 }) {
   const errors = [];
   const permissions = claudeSettings.permissions && typeof claudeSettings.permissions === "object"
-    ? claudeSettings.permissions
+    ? /** @type {Record<string, unknown>} */ (claudeSettings.permissions)
     : {};
   const hooks = claudeSettings.hooks && typeof claudeSettings.hooks === "object"
-    ? claudeSettings.hooks
+    ? /** @type {Record<string, unknown>} */ (claudeSettings.hooks)
     : {};
   if (Array.isArray(permissions.deny) && permissions.deny.length > 0) {
     errors.push("Claude project settings must not contain model-specific deny rules.");
@@ -180,12 +180,13 @@ export function operatorParityErrors({
   }
 
   const generatedClaude = generatedAssets.get("CLAUDE.md");
+  /** @type {Map<string, string>} */
   const sources = new Map([
     [".claude/settings.json", JSON.stringify(claudeSettings)],
     ["tools/generate-agent-wrappers.mjs", generatorSource],
-    ...(typeof generatedClaude === "string" ? [["CLAUDE.md", generatedClaude]] : []),
-    ...canonicalSurfaces,
   ]);
+  if (typeof generatedClaude === "string") sources.set("CLAUDE.md", generatedClaude);
+  for (const [relativePath, content] of canonicalSurfaces) sources.set(relativePath, content);
   for (const [relativePath, content] of sources) {
     const asymmetry = detectActorAsymmetry(content);
     if (asymmetry) {
@@ -270,7 +271,9 @@ export async function validateRepository(root = defaultRoot) {
   if (templateAuthority && !equal(ownership.authorization, templateAuthority.authorization)) {
     errors.push("config/ownership.json authorization does not match config/template.json.");
   }
-  for (const service of ["github", "supabase", "vercel", "cloudflare", "linear"]) {
+  /** @type {Array<"github" | "supabase" | "vercel" | "cloudflare" | "linear">} */
+  const authorityServices = ["github", "supabase", "vercel", "cloudflare", "linear"];
+  for (const service of authorityServices) {
     if (templateAuthority && !equal(ownership.accounts[service], templateAuthority.accounts[service])) {
       errors.push(`config/ownership.json ${service} account does not match config/template.json.`);
     }

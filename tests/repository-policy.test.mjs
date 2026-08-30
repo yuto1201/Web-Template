@@ -70,6 +70,16 @@ describe("repository policy", () => {
     expect(onboarding).toMatch(/High-risk writes[^.]*additionally[^.]*exact-Head/iu);
   });
 
+  it("installs dependencies before account-bound template initialization", async () => {
+    const readme = await readFile(path.resolve("README.md"), "utf8");
+    const activation = await readFile(path.resolve("docs/activation.md"), "utf8");
+    const onboarding = await readFile(path.resolve("docs/onboarding-macos.md"), "utf8");
+
+    expect(readme.indexOf("npm ci")).toBeLessThan(readme.indexOf("npm run template:init"));
+    expect(activation.indexOf("`npm ci`")).toBeLessThan(activation.indexOf("`npm run template:init"));
+    expect(onboarding).toMatch(/run `npm ci` before template initialization/iu);
+  });
+
   it("migrates normative policy to account-bound operator parity", async () => {
     const normativePaths = [
       "AGENTS.md",
@@ -89,10 +99,10 @@ describe("repository policy", () => {
       "specs/acceptance.md",
       "specs/completion-audit.md",
     ];
-    const contents = new Map(await Promise.all(normativePaths.map(async (relative) => [
+    const contents = new Map(await Promise.all(normativePaths.map(async (relative) => /** @type {[string, string]} */ ([
       relative,
       await readFile(path.resolve(relative), "utf8"),
-    ])));
+    ]))));
     const obsoleteClaims = [
       "Codex is the only actor",
       "Codex-only external operations",
@@ -134,11 +144,11 @@ describe("repository policy", () => {
 
   it("keeps acceptance Issues sorted, unique, and traces Issue #33", async () => {
     const trace = JSON.parse(await readFile(path.resolve("config/acceptance.json"), "utf8"));
-    const issues = trace.issues.map((entry) => entry.issue);
+    const issues = trace.issues.map(/** @param {Record<string, any>} entry */ (entry) => entry.issue);
 
     expect(issues).toEqual([...new Set(issues)].toSorted((left, right) => left - right));
     expect(issues).toContain(33);
-    expect(trace.issues.find((entry) => entry.issue === 33)).toMatchObject({
+    expect(trace.issues.find(/** @param {Record<string, any>} entry */ (entry) => entry.issue === 33)).toMatchObject({
       evidence: expect.arrayContaining([
         "specs/account-bound-authority.md",
         "tools/authority-core.mjs",
@@ -151,7 +161,11 @@ describe("repository policy", () => {
   it("keeps required policy, ownership, agent, and secret boundaries valid", async () => {
     const authority = JSON.parse(await readFile(path.resolve("config/ownership.json"), "utf8"));
     const template = JSON.parse(await readFile(path.resolve("config/template.json"), "utf8"));
-    expect(template.project.observations.github.observedAt).not.toBe(authority.observations.github.observedAt);
+    if (template.status === "template-source") {
+      expect(template.project.observations.github.observedAt).not.toBe(authority.observations.github.observedAt);
+    } else {
+      expect(template.status).toBe("initialized");
+    }
     await expect(validateRepository(path.resolve("."))).resolves.toEqual([]);
   });
 

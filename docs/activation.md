@@ -5,11 +5,12 @@
 ## 1. GitHub Template から生成する
 
 1. GitHub の **Use this template** から新しいリポジトリを作成する。
-2. `template-init.example.json` を `.template-init.json` にコピーする。
-3. アプリ名、slug、GitHub owner/repository、衝突しないローカルポート、予定する HTTPS ホスト名と Cloudflare zone を設定する。
-4. `npm run template:init -- --config .template-init.json` を実行する。
-5. 同じコマンドをもう一度実行し、`idempotent` を確認する。
-6. `npm ci`、`npm run readiness`、`npm run check` を実行する。
+2. `npm ci` で canonical authority parser を含む依存関係を取得する。
+3. `template-init.example.json` を `.template-init.json` にコピーする。
+4. アプリ名、slug、GitHub owner/repository、衝突しないローカルポート、予定する HTTPS ホスト名と Cloudflare zone を設定する。
+5. `npm run template:init -- --config .template-init.json` を実行する。
+6. 同じコマンドをもう一度実行し、`idempotent` を確認する。
+7. `npm run readiness`、`npm run check` を実行する。
 
 初期化ツールは `config/template.json` に記録されたレビュー済み出現箇所だけを書き換えます。対象値が先に編集されていた場合は、部分的に上書きせず失敗します。異なる設定での再初期化も拒否します。
 

@@ -7,6 +7,7 @@ import { digestValue, readExternalOperationRequest } from "../tools/workflow-cor
 
 const repositoryRoot = path.resolve(".");
 
+/** @param {string} root @param {string[]} args */
 function runWorkflow(root, args) {
   return spawnSync(process.execPath, [
     path.join(repositoryRoot, "tools", "issue-workflow.mjs"),
@@ -16,6 +17,7 @@ function runWorkflow(root, args) {
   ], { cwd: repositoryRoot, encoding: "utf8", windowsHide: true });
 }
 
+/** @param {string} prefix */
 async function prepareReceiptFixture(prefix) {
   const root = await mkdtemp(path.join(os.tmpdir(), prefix));
   const simulation = runWorkflow(root, [
