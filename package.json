@@ -27,6 +27,7 @@
     "domain:lint": "node tools/domain-workflow.mjs lint",
     "build": "next build",
     "build:ci": "node tools/build-ci.mjs",
+    "ci:change-plan": "node tools/ci-change-plan.mjs",
     "start": "node tools/run-next-start.mjs",
     "generate": "node tools/generate-agent-wrappers.mjs",
     "workflow": "node tools/issue-workflow.mjs",
