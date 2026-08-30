@@ -68,9 +68,14 @@ const jointActorSpanPatterns = [
   /\b(?:claude(?:\s*(?:,\s*)?and\s+|\s*[&/+]\s*)codex|codex(?:\s*(?:,\s*)?and\s+|\s*[&/+]\s*)claude)\b/giu,
   /\b(?:claude\s*\(\s*and\s+codex|codex\s*\(\s*and\s+claude)\b\s*\)/giu,
 ];
+const reviewerActorSource = String.raw`(?:claude|codex)(?:['’]s)?\s+(?:reviewers?|evaluators?|auditors?)`;
+const reviewerRestrictionSource = String.raw`(?:cannot|can['’]t|may\s+not|must\s+not|mustn['’]t|shall\s+not)`;
+const reviewerRoleStatementPatterns = [
+  new RegExp(String.raw`\b${reviewerActorSource}\s+(?:(?:remain(?:s)?|is|are)|must\s+remain)\s+read[- ]only\b`, "giu"),
+  new RegExp(String.raw`\b${reviewerActorSource}\s+${reviewerRestrictionSource}\s+(?:approve|deploy|edit|merge|modify|mutate|run|self[- ]approve|use|write)\b(?:\s+(?!(?:although|but|whereas|while)\b)[A-Za-z0-9'’_-]+){0,6}`, "giu"),
+  new RegExp(String.raw`\b${reviewerActorSource}\s+may\s+only\s+(?:audit|evaluate|review)\b(?:\s+(?!(?:although|but|whereas|while)\b)[A-Za-z0-9'’_-]+){0,6}`, "giu"),
+];
 const reviewerActorSpanPattern = /\b(?:claude|codex)(?:['’]s)?\s+(?:reviewers?|evaluators?|auditors?)\b/giu;
-const reviewIndependencePattern = /\b(?:approv(?:e|al|es|ed|ing)|audit(?:or|ors|ed|ing)?|cross[- ]model|evaluat(?:e|or|ors|ed|ing|ion)|review(?:er|ers|ed|ing|s)?)\b/iu;
-const operatorSurfacePattern = /\b(?:authenticated|cloudflare|command|deploy(?:ment|ments|ed|ing)?|dns|external\s+(?:operation|operations|service|services)|github|mcp|provider|shell|supabase|tool|tools|vercel)\b/iu;
 const actorRestrictionPattern = /\b(?:alone|barred|belongs?\s+to|cannot|can(?:['’]t)|delegat(?:e|es|ed|ing|ion|ions)|den(?:y|ies|ied)|disallow(?:ed|s)?|exclusive|exclusively|forbid(?:den|s)?|hand[- ]?off|limited\s+to|may\s+not|must\s+not|mustn(?:['’]t)|not\s+allowed|only|owned|owner|ownership|owns|prohibit(?:ed|s|ion)?|remains?\s+(?:an?\s+)?(?:claude|codex)\s+(?:operation|operator|work)|reserved|restricted|shall\s+not|sole|stays?\s+with)\b/iu;
 const canonicalOperatorParityPattern = /\bclaude\b[^.!?。！？\n]{0,160}\bhas\s+the\s+same\s+account-bound\s+authority\s+as\s+codex\b/iu;
 
@@ -88,13 +93,21 @@ function removeJointActorSpans(clause) {
 }
 
 /** @param {string} clause */
+function removeReviewerRoleStatements(clause) {
+  return reviewerRoleStatementPatterns.reduce(
+    (result, pattern) => result.replace(pattern, " read-only-reviewer-policy "),
+    clause,
+  );
+}
+
+/** @param {string} clause */
 function removeReviewerActorSpans(clause) {
   return clause.replace(reviewerActorSpanPattern, " read-only-reviewer-role ");
 }
 
 /** @param {string} clause */
 function removeNonOperatorActorSpans(clause) {
-  return removeReviewerActorSpans(removeJointActorSpans(clause));
+  return removeReviewerActorSpans(removeReviewerRoleStatements(removeJointActorSpans(clause)));
 }
 
 /** @param {string} clause */
@@ -111,9 +124,6 @@ export function detectActorAsymmetry(content) {
   for (const clause of segmentPolicyClauses(content)) {
     const standalonePolicy = removeNonOperatorActorSpans(clause);
     if (!hasStandaloneActorRestriction(standalonePolicy)) {
-      continue;
-    }
-    if (reviewIndependencePattern.test(standalonePolicy) && !operatorSurfacePattern.test(standalonePolicy)) {
       continue;
     }
     return `Actor-specific operator delegation, ownership, or restriction remains: ${clause.trim()}`;

@@ -84,6 +84,15 @@ describe("repository policy", () => {
     "Codex (and Claude) may operate (although Claude cannot deploy production).",
     "Claude and Codex share receipts, and Codex and Claude share targets, while Claude cannot deploy.",
     "Claude reviewer remains read-only, while Codex cannot deploy production.",
+    "Claude reviewer remains read-only, while Codex cannot merge pull requests.",
+    "Codex reviewer remains read-only, while Claude cannot merge pull requests.",
+    "Codex auditor remains read-only, although Claude may not modify repository files.",
+    "Claude auditor remains read-only, although Codex may not modify repository files.",
+    "CLAUDE reviewer remains read-only, while codex cannot edit repository files!",
+    "Codex evaluator remains read-only (although Claude cannot use the shell).",
+    "Claude evaluator remains read-only, while Codex cannot use external tools.",
+    "Claude reviewer remains read-only, Codex auditor remains read-only, while Claude cannot merge pull requests.",
+    "Codex reviewer remains read-only, Claude auditor remains read-only, while Codex may not modify repository files.",
   ])("detects actor-asymmetric operator restriction: %s", (content) => {
     expect(detectActorAsymmetry(content)).toMatch(/actor-specific/iu);
   });
@@ -100,6 +109,12 @@ describe("repository policy", () => {
     "Claude (and Codex) must not switch authenticated accounts automatically.",
     "Codex (and Claude) must not switch authenticated accounts automatically.",
     "Claude reviewer remains read-only.",
+    "Codex auditor remains read-only.",
+    "Claude reviewer and Codex auditor remain read-only.",
+    "Claude reviewer must not self-approve changes.",
+    "Codex auditor cannot approve Codex-authored changes.",
+    "Claude reviewer may only review Codex-authored changes.",
+    "Codex evaluator may only evaluate Claude-authored implementations.",
   ])("allows shared authority and read-only independent review policy: %s", (content) => {
     expect(detectActorAsymmetry(content)).toBeNull();
   });
