@@ -33,11 +33,16 @@ Closes #
 - Account ref: protected-main authority reference
 - Service mode: `repository-active` or `explicit-user-purpose-only`
 - Exact target ref: protected-main authority reference
-- Redacted receipt ID: receipt identifier only; no provider credentials
+- Redacted preflight receipt ID: `receipt-...`
+- Redacted execution claim reference: `<mutation-digest>.claim.json`
+- Redacted finalized result receipt ID: `receipt-...`
+- Redacted finalized marker reference: `<mutation-digest>.finalized.json`
 - Authority digest: `sha256:...`
 - Issue contract digest: `sha256:...`
 - Request digest: `sha256:...`
 - Mutation digest: `sha256:...`
+- Execution claim digest: `sha256:...`
+- Finalized result digest: `sha256:...`
 - Exact-Head gate SHA: `current-head-sha`, when required
 - Destructive or rollback scope: none, or the exact reviewed recovery boundary
 
