@@ -17,8 +17,10 @@ describe("repository policy", () => {
     const headSha = "a".repeat(40);
     const completedBody = template
       .replace("Closes #", "Closes #33")
-      .replace(/^- Primary:.*$/mu, "- Primary: codex")
-      .replace(/^- Reviewer:.*$/mu, "- Reviewer: claude")
+      .replace(/^- Primary operator:.*$/mu, "- Primary operator: codex")
+      .replace(/^- Reviewer operator:.*$/mu, "- Reviewer operator: claude")
+      .replace(/^- Primary model family:.*$/mu, "- Primary model family: gpt")
+      .replace(/^- Reviewer model family:.*$/mu, "- Reviewer model family: claude")
       .replace(/^- Reviewed SHA:.*$/mu, `- Reviewed SHA: \`${headSha}\``)
       .replace(/^- Verdict:.*$/mu, "- Verdict: approved")
       .replace(/^- Contracts:.*$/mu, "- Contracts: change-evaluator");

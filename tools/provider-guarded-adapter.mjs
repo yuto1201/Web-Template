@@ -76,16 +76,30 @@ async function claimWriteOnce(root, key, value) {
 }
 
 /** @param {string} operation @param {Record<string, any>} request @param {unknown} observationValue */
-function validateLiveOperationObservation(operation, request, observationValue) {
+export function validateLiveOperationObservation(operation, request, observationValue) {
   if (!observationValue || typeof observationValue !== "object" || Array.isArray(observationValue)) {
     throw new Error("Provider operation observation is required.");
   }
   const observation = /** @type {Record<string, any>} */ (observationValue);
-  if (operation === "github.merge_pr") {
-    if (observation.repository !== request.resolvedTarget) throw new Error("Live GitHub repository does not match the frozen target.");
-    if (observation.prNumber !== request.inputs.prNumber) throw new Error("Live PR number does not match the frozen mutation.");
-    if (observation.headSha !== request.inputs.headSha) throw new Error("Live PR Head does not match the frozen Head immediately before mutation.");
-    if (observation.method !== request.inputs.method) throw new Error("Live merge method does not match the frozen mutation.");
+  /** @type {Record<string, string[]>} */
+  const liveBindings = {
+    "github.push_branch": ["repository", "branch", "headSha"],
+    "github.create_pr": ["repository", "branch", "baseBranch", "headSha"],
+    "github.merge_pr": ["repository", "prNumber", "headSha", "method"],
+    "github.delete_branch": ["repository", "branch", "mergedPrNumber", "headSha"],
+    "supabase.apply_migrations": ["projectRef", "migrations"],
+    "vercel.deploy_preview": ["projectId", "environment", "headSha", "configuration"],
+    "vercel.deploy_production": ["projectId", "environment", "headSha", "configuration"],
+    "cloudflare.upsert_dns": ["zoneId", "hostname", "recordType", "target", "proxied", "routingSource"],
+  };
+  for (const key of liveBindings[operation] ?? []) {
+    if (digestValue(observation[key]) !== digestValue(request.inputs[key])) {
+      const label = key === "headSha" ? "Head" : key === "migrations" ? "migration content digest" : key;
+      throw new Error(`Live ${label} does not match the frozen mutation immediately before execution.`);
+    }
+  }
+  if (operation.startsWith("github.") && observation.repository !== request.resolvedTarget) {
+    throw new Error("Live GitHub repository does not match the frozen target.");
   }
   return structuredClone(observation);
 }

@@ -24,7 +24,13 @@
         "accountRef": "accounts.github",
         "targetRef": "resourceTargets.github",
         "environment": "production",
-        "constraints": { "issue": 42, "method": "squash" },
+        "constraints": {
+          "issue": 42,
+          "repository": "yuto1201/Web-Template",
+          "prNumber": 77,
+          "headSha": "0000000000000000000000000000000000000000",
+          "method": "squash"
+        },
         "requiresExactHead": true
       }
     ]

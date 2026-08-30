@@ -318,8 +318,8 @@ export async function validateRepository(root = defaultRoot) {
   const states = /** @type {string[]} */ (Array.isArray(workflow.states) ? workflow.states : []);
   const stateSet = new Set(states);
   if (stateSet.size !== states.length) errors.push("config/workflow.json states must be unique.");
-  if (workflow.reviewerMap?.codex !== "claude" || workflow.reviewerMap?.claude !== "codex") {
-    errors.push("config/workflow.json must map each primary model to the opposite reviewer.");
+  if (workflow.reviewerModelFamilyMap?.gpt !== "claude" || workflow.reviewerModelFamilyMap?.claude !== "gpt") {
+    errors.push("config/workflow.json must map each primary model family to the opposite reviewer family.");
   }
   if (workflow.baseRef !== "main") errors.push("config/workflow.json must derive review scope from main.");
   const reviewGate = workflow.githubReviewGate;

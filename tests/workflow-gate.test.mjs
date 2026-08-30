@@ -26,7 +26,6 @@ describe("current-Head pre-merge gate", () => {
   it("centrally classifies repository-derived high-risk operations", () => {
     for (const operation of [
       "github.merge_pr",
-      "github.update_ruleset",
       "supabase.apply_migrations",
       "vercel.deploy_preview",
       "vercel.deploy_production",
@@ -35,6 +34,7 @@ describe("current-Head pre-merge gate", () => {
       expect(requiresAuthoritativeHead(operation), operation).toBe(true);
     }
     expect(requiresAuthoritativeHead("github.read_issue")).toBe(false);
+    expect(() => requiresAuthoritativeHead("github.update_ruleset")).toThrow(/unsupported|invalid/iu);
   });
 
   /** @type {string} */
@@ -128,7 +128,7 @@ describe("current-Head pre-merge gate", () => {
     const request = await readJson(requestPath);
     await writeFile(requestPath, `${JSON.stringify({ ...request, inputs: { ...request.inputs, headSha: "9".repeat(40) } }, null, 2)}\n`, "utf8");
     await expect(readExternalOperationRequest(root, ".artifacts/ops-requests/issue-42-github-merge-pr-1.json"))
-      .rejects.toThrow(/authoritative review gate/u);
+      .rejects.toThrow(/authoritative review gate|frozen constraint headSha/u);
   });
 
   it("includes the privileged source path when Git detects a rename", async () => {

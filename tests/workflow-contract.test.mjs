@@ -22,10 +22,12 @@ import {
   validateOperationResult,
   validatePreflightReceipt,
   validateReviewResult,
+  schemas,
 } from "../tools/workflow-core.mjs";
 
 const headSha = "2".repeat(40);
 const contractDigest = `sha256:${"3".repeat(64)}`;
+const repository = "yuto1201/Web-Template";
 const authority = JSON.parse(await readFile(path.resolve("config/ownership.json"), "utf8"));
 const protectedAuthority = {
   commitSha: "1".repeat(40),
@@ -33,7 +35,7 @@ const protectedAuthority = {
   digest: authorityDigest(authority),
 };
 
-function externalAuthorization(issue = 5) {
+function externalAuthorization(issue = 5, repositoryValue = repository) {
   return {
     service: "github",
     operation: "github.merge_pr",
@@ -42,7 +44,7 @@ function externalAuthorization(issue = 5) {
     accountRef: "accounts.github",
     targetRef: "resourceTargets.github",
     environment: "production",
-    constraints: { issue, method: "squash" },
+    constraints: { issue, repository: repositoryValue, prNumber: 15, headSha, method: "squash" },
     requiresExactHead: true,
   };
 }
@@ -51,7 +53,7 @@ function contractInput() {
   return {
     schemaVersion: 2,
     issue: 5,
-    repository: "yuto1201/Web-Template",
+    repository,
     goal: "Automate the Issue workflow.",
     acceptanceCriteria: [{ id: "AC-1", text: "Gate exact evidence." }],
     dependencies: [4],
@@ -71,7 +73,13 @@ function mergeRequest(issue = 5) {
     operatorLabel: "codex",
     executionRole: "external-operator",
     executionSurface: "github-cli",
-    inputs: { issue, prNumber: 15, headSha, method: "squash" },
+    intent: `Merge pull request 15 for Issue ${issue} at its exact reviewed Head.`,
+    reversibility: "compensating-change",
+    recovery: {
+      strategy: "separate-reviewed-operation",
+      instructions: "Inspect the merged repository state; any revert requires a later reviewed authorization.",
+    },
+    inputs: { issue, repository, prNumber: 15, headSha, method: "squash" },
   };
 }
 
@@ -111,6 +119,7 @@ function operationResult(receipt, overrides = {}) {
   const observation = githubObservation();
   const evidence = {
     issue: 5,
+    repository,
     prNumber: 15,
     headSha,
     method: "squash",
@@ -227,6 +236,11 @@ describe("workflow contracts", () => {
     expect(() => validate({ ...request, requestId: "issue-99-github-merge-pr-1" })).toThrow(/does not match/u);
     expect(() => validate({ ...request, environment: "preview" })).toThrow(/environment/u);
     expect(() => validate({ ...request, target: { ...request.target, identifier: "resourceTargets.vercel" } })).toThrow(/target reference|identifier/u);
+    for (const requiredField of ["intent", "reversibility", "recovery"]) {
+      const missing = { ...request };
+      delete missing[requiredField];
+      expect(() => validate(missing), requiredField).toThrow();
+    }
 
     const outOfScopeContract = snapshotIssueContract({ ...contractInput(), externalAuthorizations: [] }, "2026-08-21T01:00:00+09:00", snapshot);
     expect(() => validateExternalOperationRequest(request, root, outOfScopeContract)).toThrow(/outside the frozen/u);
@@ -265,6 +279,24 @@ describe("workflow contracts", () => {
       now: "2026-08-30T01:01:00Z",
       receiptState,
     })).toThrow(/reused|already been validated/u);
+  });
+
+  it("rejects raw email fields in persisted receipt and result schemas", async () => {
+    const { root } = await gitAuthorityFixture(authority, authority);
+    const contract = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", loadProtectedAuthority(root, "main"));
+    const request = mergeRequest();
+    const receipt = preflightReceipt(contract, request, {
+      accountObservation: { ...githubObservation().account, loginEmail: "operator@example.invalid" },
+    });
+    expect(() => schemas.preflightReceiptSchema.parse(receipt)).toThrow(/email|unrecognized/iu);
+    const result = operationResult(preflightReceipt(contract, request), {
+      postflight: {
+        accountObservation: { ...githubObservation().account, userEmail: "operator@example.invalid" },
+        targetObservation: githubObservation().target,
+        observedAt: "2026-08-30T01:01:30Z",
+      },
+    });
+    expect(() => schemas.operationResultSchema.parse(result)).toThrow(/email|unrecognized/iu);
   });
 
   it("rejects stale, mismatched, malformed, or caller-forged preflight receipts", async () => {
@@ -502,83 +534,96 @@ describe("workflow contracts", () => {
     const targetDigest = digestValue(targetRef);
     const sha = "2".repeat(40);
     const timestamp = "2026-08-30T01:01:30Z";
-    const migration = "supabase/migrations/20260830010101_create_receipts.sql";
+    const migration = {
+      name: "supabase/migrations/20260830010101_create_receipts.sql",
+      contentDigest: `sha256:${"4".repeat(64)}`,
+    };
+    const configuration = {
+      source: "config/deployment.json",
+      contentDigest: `sha256:${"5".repeat(64)}`,
+    };
+    const routingSource = {
+      provider: "vercel",
+      projectId: "prj_fixture",
+      recommendationDigest: `sha256:${"6".repeat(64)}`,
+    };
     const cases = [
       {
         operation: "github.read_issue",
-        inputs: { issue: 5 },
-        evidence: { issue: 5, state: "OPEN", updatedAt: timestamp },
+        inputs: { repository, issue: 5 },
+        evidence: { repository, issue: 5, state: "OPEN", updatedAt: timestamp },
       },
       {
         operation: "github.push_branch",
-        inputs: { branch: "codex/33-account-bound-authority", headSha: sha },
-        evidence: { branch: "codex/33-account-bound-authority", headSha: sha },
+        inputs: { repository, branch: "codex/33-account-bound-authority", headSha: sha },
+        evidence: { repository, branch: "codex/33-account-bound-authority", headSha: sha },
       },
       {
         operation: "github.create_pr",
-        inputs: { issue: 5, branch: "codex/33-account-bound-authority", baseBranch: "main", headSha: sha },
-        evidence: { issue: 5, branch: "codex/33-account-bound-authority", baseBranch: "main", headSha: sha, prNumber: 34, state: "OPEN" },
+        inputs: { issue: 5, repository, branch: "codex/33-account-bound-authority", baseBranch: "main", headSha: sha },
+        evidence: { issue: 5, repository, branch: "codex/33-account-bound-authority", baseBranch: "main", headSha: sha, prNumber: 34, state: "OPEN" },
       },
       {
         operation: "github.merge_pr",
-        inputs: { issue: 5, prNumber: 34, headSha: sha, method: "squash" },
-        evidence: { issue: 5, prNumber: 34, headSha: sha, method: "squash", mergeCommitSha: "7".repeat(40), issueClosed: true },
+        inputs: { issue: 5, repository, prNumber: 34, headSha: sha, method: "squash" },
+        evidence: { issue: 5, repository, prNumber: 34, headSha: sha, method: "squash", mergeCommitSha: "7".repeat(40), issueClosed: true },
       },
       {
         operation: "github.delete_branch",
-        inputs: { branch: "codex/33-account-bound-authority", mergedPrNumber: 34, headSha: sha },
-        evidence: { branch: "codex/33-account-bound-authority", mergedPrNumber: 34, headSha: sha, deleted: true },
-      },
-      {
-        operation: "github.update_ruleset",
-        inputs: { issue: 5, rulesetName: "main exact-Head review", targetBranch: "main", requiredCheckName: "Exact Head review policy", enforcement: "active" },
-        evidence: { issue: 5, rulesetName: "main exact-Head review", targetBranch: "main", requiredCheckName: "Exact Head review policy", enforcement: "active", rulesetId: 9 },
+        inputs: { repository, branch: "codex/33-account-bound-authority", mergedPrNumber: 34, headSha: sha },
+        evidence: { repository, branch: "codex/33-account-bound-authority", mergedPrNumber: 34, headSha: sha, deleted: true },
       },
       {
         operation: "supabase.inspect_project",
-        inputs: { projectRefSource: "config/ownership.json" },
-        evidence: { projectRefSource: "config/ownership.json", projectRefDigest: targetDigest, status: "reachable" },
+        inputs: { projectRef: "abcdefghijklmnopqrst" },
+        evidence: { projectRef: "abcdefghijklmnopqrst", projectRefDigest: targetDigest, status: "reachable" },
       },
       {
         operation: "supabase.apply_migrations",
-        inputs: { projectRefSource: "config/ownership.json", migrations: [migration] },
-        evidence: { projectRefSource: "config/ownership.json", projectRefDigest: targetDigest, appliedMigrations: [migration] },
+        inputs: { projectRef: "abcdefghijklmnopqrst", migrations: [migration] },
+        evidence: { projectRef: "abcdefghijklmnopqrst", projectRefDigest: targetDigest, appliedMigrations: [migration] },
       },
       {
         operation: "vercel.inspect_project",
-        inputs: { projectSource: "config/ownership.json" },
-        evidence: { projectSource: "config/ownership.json", projectIdDigest: targetDigest, status: "reachable" },
+        inputs: { projectId: "prj_fixture" },
+        evidence: { projectId: "prj_fixture", projectIdDigest: targetDigest, status: "reachable" },
       },
       {
         operation: "vercel.deploy_preview",
-        inputs: { projectSource: "config/ownership.json", headSha: sha },
-        evidence: { projectSource: "config/ownership.json", deploymentId: "dpl_preview", projectIdDigest: targetDigest, headSha: sha, environment: "preview" },
+        inputs: { projectId: "prj_fixture", environment: "preview", headSha: sha, configuration },
+        evidence: { projectId: "prj_fixture", deploymentId: "dpl_preview", projectIdDigest: targetDigest, headSha: sha, environment: "preview", configuration },
       },
       {
         operation: "vercel.deploy_production",
-        inputs: { projectSource: "config/ownership.json", headSha: sha },
-        evidence: { projectSource: "config/ownership.json", deploymentId: "dpl_production", projectIdDigest: targetDigest, headSha: sha, environment: "production" },
+        inputs: { projectId: "prj_fixture", environment: "production", headSha: sha, configuration },
+        evidence: { projectId: "prj_fixture", deploymentId: "dpl_production", projectIdDigest: targetDigest, headSha: sha, environment: "production", configuration },
       },
       {
         operation: "cloudflare.inspect_zone",
-        inputs: { zoneSource: "config/ownership.json" },
-        evidence: { zoneSource: "config/ownership.json", zoneIdDigest: targetDigest, zonePlan: "Free", recordSetDigest: `sha256:${"8".repeat(64)}` },
+        inputs: { zoneId: "4".repeat(32) },
+        evidence: { zoneId: "4".repeat(32), zoneIdDigest: targetDigest, zonePlan: "Free", recordSetDigest: `sha256:${"8".repeat(64)}` },
         postTarget: { zonePlan: "Free" },
       },
       {
         operation: "cloudflare.upsert_dns",
-        inputs: { zoneSource: "config/ownership.json", recordName: "www.example.com", recordType: "CNAME", target: "example.vercel-dns.com", proxied: false },
-        evidence: { zoneSource: "config/ownership.json", recordId: "dns_record_1", zoneIdDigest: targetDigest, recordName: "www.example.com", recordType: "CNAME", target: "example.vercel-dns.com", proxied: false },
+        inputs: { zoneId: "4".repeat(32), hostname: "fixture.example.com", recordType: "CNAME", target: "example.vercel-dns.com", proxied: false, routingSource },
+        evidence: { zoneId: "4".repeat(32), recordId: "dns_record_1", zoneIdDigest: targetDigest, hostname: "fixture.example.com", recordType: "CNAME", target: "example.vercel-dns.com", proxied: false, routingSource },
       },
     ];
     /** @param {string} field @param {unknown} value */
     const alternate = (field, value) => {
       if (field === "branch") return "codex/33-account-bound-authority-other";
+      if (field === "repository") return "yuto1201/Other-Template";
+      if (field === "projectRef") return "z".repeat(20);
+      if (field === "projectId") return "prj_other";
+      if (field === "zoneId") return "f".repeat(32);
       if (field === "headSha") return "9".repeat(40);
       if (field === "recordType") return "AAAA";
-      if (field === "recordName") return "api.example.com";
+      if (field === "hostname") return "api.example.com";
       if (field === "target") return "other.vercel-dns.com";
-      if (field === "migrations") return [migration, "supabase/migrations/20260830010102_other.sql"];
+      if (field === "migrations") return [{ ...migration, contentDigest: `sha256:${"9".repeat(64)}` }];
+      if (field === "configuration") return { ...configuration, contentDigest: `sha256:${"9".repeat(64)}` };
+      if (field === "routingSource") return { ...routingSource, recommendationDigest: `sha256:${"9".repeat(64)}` };
       if (typeof value === "number") return value + 1;
       if (typeof value === "boolean") return !value;
       return `${value}-other`;
@@ -676,6 +721,11 @@ describe("workflow contracts", () => {
     )).toThrow(/must not contain duplicates/u);
   });
 
+  it("keeps unimplemented high-risk operations outside the executable registry", () => {
+    expect(operationNames).not.toContain("github.update_ruleset");
+    expect(() => validateOperationResultEvidence("github.update_ruleset", {}, {})).toThrow(/unsupported|invalid/iu);
+  });
+
   it("rejects a purpose that is not the exact operation and Issue purpose", () => {
     const wrongPurpose = {
       ...externalAuthorization(),
@@ -731,18 +781,28 @@ describe("workflow contracts", () => {
     candidateAuthority.resourceTargets.github.repository = "target-b";
     const { root } = await gitAuthorityFixture(mainAuthority, candidateAuthority);
     const snapshot = loadProtectedAuthority(root, "main");
-    const input = { ...contractInput(), repository: "yuto1201/target-a" };
+    const input = {
+      ...contractInput(),
+      repository: "yuto1201/target-a",
+      externalAuthorizations: [externalAuthorization(5, "yuto1201/target-a")],
+    };
     const contract = snapshotIssueContract(input, "2026-08-21T01:00:00+09:00", snapshot);
 
-    expect(validateExternalOperationRequest(mergeRequest(), root, contract).resolvedTarget).toBe("yuto1201/target-a");
+    const targetARequest = { ...mergeRequest(), inputs: { ...mergeRequest().inputs, repository: "yuto1201/target-a" } };
+    expect(validateExternalOperationRequest(targetARequest, root, contract).resolvedTarget).toBe("yuto1201/target-a");
 
     const candidateSnapshot = loadProtectedAuthority(root, "codex/33-account-bound-authority");
     const candidateContract = snapshotIssueContract(
-      { ...contractInput(), repository: "yuto1201/target-b" },
+      {
+        ...contractInput(),
+        repository: "yuto1201/target-b",
+        externalAuthorizations: [externalAuthorization(5, "yuto1201/target-b")],
+      },
       "2026-08-21T01:00:00+09:00",
       candidateSnapshot,
     );
-    expect(() => validateExternalOperationRequest(mergeRequest(), root, candidateContract)).toThrow(/protected.*base|protected.*ref/u);
+    const targetBRequest = { ...mergeRequest(), inputs: { ...mergeRequest().inputs, repository: "yuto1201/target-b" } };
+    expect(() => validateExternalOperationRequest(targetBRequest, root, candidateContract)).toThrow(/protected.*base|protected.*ref/u);
   });
 
   it("keeps Issue 33 v1 delivery outside candidate v2 runtime without an Issue-number exception", async () => {

@@ -37,7 +37,7 @@ const relativeFileSchema = z.string().min(1).superRefine((value, context) => {
   }
 });
 
-/** @typedef {"github.read_issue" | "github.push_branch" | "github.create_pr" | "github.merge_pr" | "github.delete_branch" | "github.update_ruleset" | "supabase.inspect_project" | "supabase.apply_migrations" | "vercel.inspect_project" | "vercel.deploy_preview" | "vercel.deploy_production" | "cloudflare.inspect_zone" | "cloudflare.upsert_dns"} Operation */
+/** @typedef {"github.read_issue" | "github.push_branch" | "github.create_pr" | "github.merge_pr" | "github.delete_branch" | "supabase.inspect_project" | "supabase.apply_migrations" | "vercel.inspect_project" | "vercel.deploy_preview" | "vercel.deploy_production" | "cloudflare.inspect_zone" | "cloudflare.upsert_dns"} Operation */
 
 /** @type {Operation[]} */
 export const operationNames = [
@@ -46,7 +46,6 @@ export const operationNames = [
   "github.create_pr",
   "github.merge_pr",
   "github.delete_branch",
-  "github.update_ruleset",
   "supabase.inspect_project",
   "supabase.apply_migrations",
   "vercel.inspect_project",
@@ -56,10 +55,39 @@ export const operationNames = [
   "cloudflare.upsert_dns",
 ];
 
+export const unsupportedOperationNames = [
+  "github.update_ruleset",
+  "supabase.update_auth_policy",
+  "vercel.update_configuration",
+  "vercel.rollback_deployment",
+  "cloudflare.rollback_dns",
+];
+
 const operationSchema = z.enum(operationNames);
 const branchSchema = z.string().regex(/^(?:codex|claude)\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const worktreeSchema = z.string().regex(/^\.worktrees\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const repositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
+const projectRefSchema = z.string().regex(/^[a-z0-9]{20}$/u);
+const vercelProjectIdSchema = z.string().regex(/^prj_[A-Za-z0-9]+$/u);
+const cloudflareZoneIdSchema = z.string().regex(/^[0-9a-f]{32}$/u);
+const migrationBindingSchema = z.object({
+  name: relativeFileSchema.regex(/^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/u),
+  contentDigest: digestSchema,
+}).strict();
+const migrationBindingsSchema = z.array(migrationBindingSchema).min(1).superRefine((migrations, context) => {
+  if (new Set(migrations.map(({ name }) => name)).size !== migrations.length) {
+    context.addIssue({ code: "custom", message: "Migration names must be unique and remain in reviewed order." });
+  }
+});
+const vercelConfigurationBindingSchema = z.object({
+  source: z.literal("config/deployment.json"),
+  contentDigest: digestSchema,
+}).strict();
+const cloudflareRoutingSourceSchema = z.object({
+  provider: z.literal("vercel"),
+  projectId: vercelProjectIdSchema,
+  recommendationDigest: digestSchema,
+}).strict();
 const serviceSchema = z.enum(["github", "supabase", "vercel", "cloudflare", "linear"]);
 const operatorLabelSchema = z.enum(["codex", "claude"]);
 const externalOperatorRoleSchema = z.enum(["implementer", "external-operator"]);
@@ -90,8 +118,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.github,
     environments: ["none"],
     reasonCodes: ["issue-contract"],
-    inputs: z.object({ issue: z.number().int().positive() }).strict(),
-    constraints: z.object({ issue: z.number().int().positive() }).strict(),
+    inputs: z.object({ repository: repositorySchema, issue: z.number().int().positive() }).strict(),
+    constraints: z.object({ repository: repositorySchema, issue: z.number().int().positive() }).strict(),
     requiresExactHead: false,
     evidence: ["authenticated GitHub login", "repository", "sanitized Issue snapshot"],
   },
@@ -101,8 +129,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.github,
     environments: ["none"],
     reasonCodes: ["acceptance-evidence"],
-    inputs: z.object({ branch: branchSchema, headSha: shaSchema }).strict(),
-    constraints: z.object({ branch: branchSchema }).strict(),
+    inputs: z.object({ repository: repositorySchema, branch: branchSchema, headSha: shaSchema }).strict(),
+    constraints: z.object({ repository: repositorySchema, branch: branchSchema, headSha: shaSchema }).strict(),
     requiresExactHead: false,
     evidence: ["authenticated GitHub login", "repository", "pushed branch Head SHA"],
   },
@@ -114,14 +142,17 @@ const operationDefinitions = /** @type {Record<Operation, {
     reasonCodes: ["reviewed-release"],
     inputs: z.object({
       issue: z.number().int().positive(),
+      repository: repositorySchema,
       branch: branchSchema,
       baseBranch: z.literal("main"),
       headSha: shaSchema,
     }).strict(),
     constraints: z.object({
       issue: z.number().int().positive(),
+      repository: repositorySchema,
       branch: branchSchema,
       baseBranch: z.literal("main"),
+      headSha: shaSchema,
     }).strict(),
     requiresExactHead: false,
     evidence: ["authenticated GitHub login", "draft PR URL", "PR Head SHA"],
@@ -132,8 +163,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.github,
     environments: ["production"],
     reasonCodes: ["reviewed-release"],
-    inputs: z.object({ issue: z.number().int().positive(), prNumber: z.number().int().positive(), headSha: shaSchema, method: z.literal("squash") }).strict(),
-    constraints: z.object({ issue: z.number().int().positive(), method: z.literal("squash") }).strict(),
+    inputs: z.object({ issue: z.number().int().positive(), repository: repositorySchema, prNumber: z.number().int().positive(), headSha: shaSchema, method: z.literal("squash") }).strict(),
+    constraints: z.object({ issue: z.number().int().positive(), repository: repositorySchema, prNumber: z.number().int().positive(), headSha: shaSchema, method: z.literal("squash") }).strict(),
     requiresExactHead: true,
     evidence: ["authenticated GitHub login", "matched PR Head SHA", "squash merge commit", "closed Issue"],
   },
@@ -143,33 +174,10 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.github,
     environments: ["production"],
     reasonCodes: ["verified-cleanup"],
-    inputs: z.object({ branch: branchSchema, mergedPrNumber: z.number().int().positive(), headSha: shaSchema }).strict(),
-    constraints: z.object({ branch: branchSchema }).strict(),
+    inputs: z.object({ repository: repositorySchema, branch: branchSchema, mergedPrNumber: z.number().int().positive(), headSha: shaSchema }).strict(),
+    constraints: z.object({ repository: repositorySchema, branch: branchSchema, mergedPrNumber: z.number().int().positive(), headSha: shaSchema }).strict(),
     requiresExactHead: false,
     evidence: ["merged PR identity", "deleted exact remote branch"],
-  },
-  "github.update_ruleset": {
-    service: "github",
-    targetKind: "github.repository",
-    targetIdentifier: targetSources.github,
-    environments: ["production"],
-    reasonCodes: ["reviewed-release"],
-    inputs: z.object({
-      issue: z.number().int().positive(),
-      rulesetName: z.literal("main exact-Head review"),
-      targetBranch: z.literal("main"),
-      requiredCheckName: z.literal("Exact Head review policy"),
-      enforcement: z.literal("active"),
-    }).strict(),
-    constraints: z.object({
-      issue: z.number().int().positive(),
-      rulesetName: z.literal("main exact-Head review"),
-      targetBranch: z.literal("main"),
-      requiredCheckName: z.literal("Exact Head review policy"),
-      enforcement: z.literal("active"),
-    }).strict(),
-    requiresExactHead: true,
-    evidence: ["authenticated GitHub owner", "ruleset ID", "active enforcement", "required exact-Head check"],
   },
   "supabase.inspect_project": {
     service: "supabase",
@@ -177,8 +185,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.supabase,
     environments: ["production"],
     reasonCodes: ["issue-contract"],
-    inputs: z.object({ projectRefSource: z.literal("config/ownership.json") }).strict(),
-    constraints: z.object({ projectRefSource: z.literal("config/ownership.json") }).strict(),
+    inputs: z.object({ projectRef: projectRefSchema }).strict(),
+    constraints: z.object({ projectRef: projectRefSchema }).strict(),
     requiresExactHead: false,
     evidence: ["authenticated Supabase organization", "project ref fingerprint", "read-only inspection"],
   },
@@ -189,12 +197,12 @@ const operationDefinitions = /** @type {Record<Operation, {
     environments: ["production"],
     reasonCodes: ["acceptance-evidence"],
     inputs: z.object({
-      projectRefSource: z.literal("config/ownership.json"),
-      migrations: z.array(relativeFileSchema.regex(/^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/u)).min(1),
+      projectRef: projectRefSchema,
+      migrations: migrationBindingsSchema,
     }).strict(),
     constraints: z.object({
-      projectRefSource: z.literal("config/ownership.json"),
-      migrations: z.array(relativeFileSchema.regex(/^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/u)).min(1),
+      projectRef: projectRefSchema,
+      migrations: migrationBindingsSchema,
     }).strict(),
     requiresExactHead: true,
     evidence: ["authenticated Supabase organization", "project ref fingerprint", "applied migration names"],
@@ -205,8 +213,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.vercel,
     environments: ["production"],
     reasonCodes: ["issue-contract"],
-    inputs: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
-    constraints: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
+    inputs: z.object({ projectId: vercelProjectIdSchema }).strict(),
+    constraints: z.object({ projectId: vercelProjectIdSchema }).strict(),
     requiresExactHead: false,
     evidence: ["authenticated Vercel scope", "project identity", "read-only inspection"],
   },
@@ -216,8 +224,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.vercel,
     environments: ["preview"],
     reasonCodes: ["acceptance-evidence"],
-    inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
-    constraints: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
+    inputs: z.object({ projectId: vercelProjectIdSchema, environment: z.literal("preview"), headSha: shaSchema, configuration: vercelConfigurationBindingSchema }).strict(),
+    constraints: z.object({ projectId: vercelProjectIdSchema, environment: z.literal("preview"), headSha: shaSchema, configuration: vercelConfigurationBindingSchema }).strict(),
     requiresExactHead: true,
     evidence: ["authenticated Vercel scope", "preview deployment URL", "deployed Head SHA"],
   },
@@ -227,8 +235,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.vercel,
     environments: ["production"],
     reasonCodes: ["reviewed-release"],
-    inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
-    constraints: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
+    inputs: z.object({ projectId: vercelProjectIdSchema, environment: z.literal("production"), headSha: shaSchema, configuration: vercelConfigurationBindingSchema }).strict(),
+    constraints: z.object({ projectId: vercelProjectIdSchema, environment: z.literal("production"), headSha: shaSchema, configuration: vercelConfigurationBindingSchema }).strict(),
     requiresExactHead: true,
     evidence: ["authenticated Vercel scope", "production deployment URL", "deployed Head SHA"],
   },
@@ -238,8 +246,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.cloudflare,
     environments: ["production"],
     reasonCodes: ["issue-contract"],
-    inputs: z.object({ zoneSource: z.literal("config/ownership.json") }).strict(),
-    constraints: z.object({ zoneSource: z.literal("config/ownership.json") }).strict(),
+    inputs: z.object({ zoneId: cloudflareZoneIdSchema }).strict(),
+    constraints: z.object({ zoneId: cloudflareZoneIdSchema }).strict(),
     requiresExactHead: false,
     evidence: ["authenticated Cloudflare account", "zone identity", "read-only DNS snapshot"],
   },
@@ -250,18 +258,20 @@ const operationDefinitions = /** @type {Record<Operation, {
     environments: ["production"],
     reasonCodes: ["reviewed-release"],
     inputs: z.object({
-      zoneSource: z.literal("config/ownership.json"),
-      recordName: z.string().regex(/^(?:[a-z0-9-]+\.)*[a-z0-9-]+$/u),
+      zoneId: cloudflareZoneIdSchema,
+      hostname: z.string().regex(/^(?:[a-z0-9-]+\.)+[a-z]{2,63}$/u),
       recordType: z.enum(["A", "AAAA", "CNAME", "TXT"]),
       target: z.string().min(1).max(253),
       proxied: z.literal(false),
+      routingSource: cloudflareRoutingSourceSchema,
     }).strict(),
     constraints: z.object({
-      zoneSource: z.literal("config/ownership.json"),
-      recordName: z.string().regex(/^(?:[a-z0-9-]+\.)*[a-z0-9-]+$/u),
+      zoneId: cloudflareZoneIdSchema,
+      hostname: z.string().regex(/^(?:[a-z0-9-]+\.)+[a-z]{2,63}$/u),
       recordType: z.enum(["A", "AAAA", "CNAME", "TXT"]),
       target: z.string().min(1).max(253),
       proxied: z.literal(false),
+      routingSource: cloudflareRoutingSourceSchema,
     }).strict(),
     requiresExactHead: true,
     evidence: ["authenticated Cloudflare account", "zone identity", "exact DNS record after write"],
@@ -270,6 +280,7 @@ const operationDefinitions = /** @type {Record<Operation, {
 
 /** @param {unknown} operation */
 export function requiresAuthoritativeHead(operation) {
+  if (unsupportedOperationNames.includes(/** @type {string} */ (operation))) throw new Error(`Unsupported operation: ${operation}`);
   return operationDefinitions[operationSchema.parse(operation)].requiresExactHead;
 }
 
@@ -279,7 +290,6 @@ const operationPurposeDefinitions = /** @type {Record<string, (constraints: Reco
   "github.create_pr": ({ issue }) => `Create the exact reviewed pull request for Issue ${issue}.`,
   "github.merge_pr": ({ issue }) => `Merge the exact reviewed pull request for Issue ${issue}.`,
   "github.delete_branch": ({ branch }) => `Delete the exact merged branch ${branch}.`,
-  "github.update_ruleset": ({ issue }) => `Update the exact protected-branch ruleset for Issue ${issue}.`,
   "supabase.inspect_project": () => "Inspect the configured Supabase project.",
   "supabase.apply_migrations": () => "Apply the exact frozen Supabase migrations.",
   "vercel.inspect_project": () => "Inspect the configured Vercel project.",
@@ -300,8 +310,25 @@ const externalRequestBaseSchema = z.object({
   operatorLabel: operatorLabelSchema,
   executionRole: externalOperatorRoleSchema,
   executionSurface: executionSurfaceSchema,
+  intent: z.string().trim().min(1).max(500).regex(/^[^\r\n]+$/u),
+  reversibility: z.enum(["read-only", "reversible", "compensating-change", "irreversible"]),
+  recovery: z.object({
+    strategy: z.enum(["none", "inspect-provider-state", "forward-fix", "separate-reviewed-operation"]),
+    instructions: z.string().trim().min(1).max(500).regex(/^[^\r\n]+$/u),
+  }).strict(),
   inputs: z.record(z.string(), z.unknown()),
-}).strict();
+}).strict().superRefine((request, context) => {
+  const readOnly = ["github.read_issue", "supabase.inspect_project", "vercel.inspect_project", "cloudflare.inspect_zone"].includes(request.operation);
+  if (readOnly && request.reversibility !== "read-only") {
+    context.addIssue({ code: "custom", path: ["reversibility"], message: "Read-only operations require read-only reversibility." });
+  }
+  if (readOnly && request.recovery.strategy !== "none") {
+    context.addIssue({ code: "custom", path: ["recovery", "strategy"], message: "Read-only operations require no mutation recovery strategy." });
+  }
+  if (!readOnly && request.reversibility === "read-only") {
+    context.addIssue({ code: "custom", path: ["reversibility"], message: "Write operations cannot declare read-only reversibility." });
+  }
+});
 
 const singleLineSchema = z.string().trim().min(1).regex(/^[^\r\n]+$/u);
 const acceptanceCriterionSchema = z.object({ id: acceptanceIdSchema, text: singleLineSchema }).strict();
@@ -374,15 +401,36 @@ const receiptBindingSchema = z.object({
   requestDigest: digestSchema,
   mutationDigest: digestSchema,
 }).strict();
+/** @param {unknown} value @param {(string | number)[]} [trail] @returns {(string | number)[] | null} */
+function rawEmailTrail(value, trail = []) {
+  if (typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) return trail;
+  if (Array.isArray(value)) {
+    for (const [index, child] of value.entries()) {
+      const found = rawEmailTrail(child, [...trail, index]);
+      if (found) return found;
+    }
+  } else if (value && typeof value === "object") {
+    for (const [key, child] of Object.entries(/** @type {Record<string, unknown>} */ (value))) {
+      if (/^(?:email|loginEmail|userEmail)$/iu.test(key)) return [...trail, key];
+      const found = rawEmailTrail(child, [...trail, key]);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+const persistedObservationSchema = z.unknown().superRefine((value, context) => {
+  const trail = rawEmailTrail(value);
+  if (trail) context.addIssue({ code: "custom", path: trail, message: "Persisted observations must not contain raw email fields." });
+});
 const observationPairSchema = z.object({
-  accountObservation: z.unknown(),
-  targetObservation: z.unknown(),
+  accountObservation: persistedObservationSchema,
+  targetObservation: persistedObservationSchema,
   observedAt: timestampSchema,
 }).strict();
 const preflightReceiptSchema = receiptBindingSchema.extend({
   schemaVersion: z.literal(1),
-  accountObservation: z.unknown(),
-  targetObservation: z.unknown(),
+  accountObservation: persistedObservationSchema,
+  targetObservation: persistedObservationSchema,
   observedAt: timestampSchema,
   expiresAt: timestampSchema,
 }).strict();
@@ -395,10 +443,11 @@ const operationResultSchema = receiptBindingSchema.extend({
 
 /** @type {Record<Operation, import("zod").ZodObject<any>>} */
 const operationSuccessEvidenceSchemas = {
-  "github.read_issue": z.object({ issue: z.number().int().positive(), state: z.enum(["OPEN", "CLOSED"]), updatedAt: timestampSchema }).strict(),
-  "github.push_branch": z.object({ branch: branchSchema, headSha: shaSchema }).strict(),
+  "github.read_issue": z.object({ repository: repositorySchema, issue: z.number().int().positive(), state: z.enum(["OPEN", "CLOSED"]), updatedAt: timestampSchema }).strict(),
+  "github.push_branch": z.object({ repository: repositorySchema, branch: branchSchema, headSha: shaSchema }).strict(),
   "github.create_pr": z.object({
     issue: z.number().int().positive(),
+    repository: repositorySchema,
     branch: branchSchema,
     baseBranch: z.literal("main"),
     headSha: shaSchema,
@@ -407,6 +456,7 @@ const operationSuccessEvidenceSchemas = {
   }).strict(),
   "github.merge_pr": z.object({
     issue: z.number().int().positive(),
+    repository: repositorySchema,
     prNumber: z.number().int().positive(),
     headSha: shaSchema,
     method: z.literal("squash"),
@@ -414,80 +464,75 @@ const operationSuccessEvidenceSchemas = {
     issueClosed: z.literal(true),
   }).strict(),
   "github.delete_branch": z.object({
+    repository: repositorySchema,
     branch: branchSchema,
     mergedPrNumber: z.number().int().positive(),
     headSha: shaSchema,
     deleted: z.literal(true),
   }).strict(),
-  "github.update_ruleset": z.object({
-    issue: z.number().int().positive(),
-    rulesetName: z.literal("main exact-Head review"),
-    targetBranch: z.literal("main"),
-    rulesetId: z.number().int().positive(),
-    enforcement: z.literal("active"),
-    requiredCheckName: z.literal("Exact Head review policy"),
-  }).strict(),
   "supabase.inspect_project": z.object({
-    projectRefSource: z.literal("config/ownership.json"),
+    projectRef: projectRefSchema,
     projectRefDigest: digestSchema,
     status: z.literal("reachable"),
   }).strict(),
   "supabase.apply_migrations": z.object({
-    projectRefSource: z.literal("config/ownership.json"),
+    projectRef: projectRefSchema,
     projectRefDigest: digestSchema,
     appliedMigrations: operationDefinitions["supabase.apply_migrations"].inputs.shape.migrations,
   }).strict(),
   "vercel.inspect_project": z.object({
-    projectSource: z.literal("config/ownership.json"),
+    projectId: vercelProjectIdSchema,
     projectIdDigest: digestSchema,
     status: z.literal("reachable"),
   }).strict(),
   "vercel.deploy_preview": z.object({
-    projectSource: z.literal("config/ownership.json"),
+    projectId: vercelProjectIdSchema,
     deploymentId: singleLineSchema,
     projectIdDigest: digestSchema,
     headSha: shaSchema,
     environment: z.literal("preview"),
+    configuration: vercelConfigurationBindingSchema,
   }).strict(),
   "vercel.deploy_production": z.object({
-    projectSource: z.literal("config/ownership.json"),
+    projectId: vercelProjectIdSchema,
     deploymentId: singleLineSchema,
     projectIdDigest: digestSchema,
     headSha: shaSchema,
     environment: z.literal("production"),
+    configuration: vercelConfigurationBindingSchema,
   }).strict(),
   "cloudflare.inspect_zone": z.object({
-    zoneSource: z.literal("config/ownership.json"),
+    zoneId: cloudflareZoneIdSchema,
     zoneIdDigest: digestSchema,
     zonePlan: z.enum(["Free", "Pro", "Business", "Enterprise"]),
     recordSetDigest: digestSchema,
   }).strict(),
   "cloudflare.upsert_dns": z.object({
-    zoneSource: z.literal("config/ownership.json"),
+    zoneId: cloudflareZoneIdSchema,
     recordId: singleLineSchema,
     zoneIdDigest: digestSchema,
-    recordName: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.recordName,
+    hostname: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.hostname,
     recordType: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.recordType,
     target: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.target,
     proxied: z.literal(false),
+    routingSource: cloudflareRoutingSourceSchema,
   }).strict(),
 };
 
 /** @type {Record<Operation, Array<[string, string, string]>>} */
 const operationResultInputBindings = {
-  "github.read_issue": [["issue", "issue", "Issue"]],
-  "github.push_branch": [["branch", "branch", "branch"], ["headSha", "headSha", "Head SHA"]],
-  "github.create_pr": [["issue", "issue", "Issue"], ["branch", "branch", "branch"], ["baseBranch", "baseBranch", "base branch"], ["headSha", "headSha", "Head SHA"]],
-  "github.merge_pr": [["issue", "issue", "Issue"], ["prNumber", "prNumber", "PR number"], ["headSha", "headSha", "Head SHA"], ["method", "method", "merge method"]],
-  "github.delete_branch": [["branch", "branch", "branch"], ["mergedPrNumber", "mergedPrNumber", "merged PR number"], ["headSha", "headSha", "Head SHA"]],
-  "github.update_ruleset": [["issue", "issue", "Issue"], ["rulesetName", "rulesetName", "ruleset name"], ["targetBranch", "targetBranch", "target branch"], ["requiredCheckName", "requiredCheckName", "required check"], ["enforcement", "enforcement", "ruleset enforcement"]],
-  "supabase.inspect_project": [["projectRefSource", "projectRefSource", "Supabase project source"]],
-  "supabase.apply_migrations": [["projectRefSource", "projectRefSource", "Supabase project source"], ["migrations", "appliedMigrations", "migration list"]],
-  "vercel.inspect_project": [["projectSource", "projectSource", "Vercel project source"]],
-  "vercel.deploy_preview": [["projectSource", "projectSource", "Vercel project source"], ["headSha", "headSha", "Head SHA"]],
-  "vercel.deploy_production": [["projectSource", "projectSource", "Vercel project source"], ["headSha", "headSha", "Head SHA"]],
-  "cloudflare.inspect_zone": [["zoneSource", "zoneSource", "Cloudflare zone source"]],
-  "cloudflare.upsert_dns": [["zoneSource", "zoneSource", "Cloudflare zone source"], ["recordName", "recordName", "DNS record name"], ["recordType", "recordType", "DNS record type"], ["target", "target", "DNS target"], ["proxied", "proxied", "DNS proxy mode"]],
+  "github.read_issue": [["repository", "repository", "repository"], ["issue", "issue", "Issue"]],
+  "github.push_branch": [["repository", "repository", "repository"], ["branch", "branch", "branch"], ["headSha", "headSha", "Head SHA"]],
+  "github.create_pr": [["issue", "issue", "Issue"], ["repository", "repository", "repository"], ["branch", "branch", "branch"], ["baseBranch", "baseBranch", "base branch"], ["headSha", "headSha", "Head SHA"]],
+  "github.merge_pr": [["issue", "issue", "Issue"], ["repository", "repository", "repository"], ["prNumber", "prNumber", "PR number"], ["headSha", "headSha", "Head SHA"], ["method", "method", "merge method"]],
+  "github.delete_branch": [["repository", "repository", "repository"], ["branch", "branch", "branch"], ["mergedPrNumber", "mergedPrNumber", "merged PR number"], ["headSha", "headSha", "Head SHA"]],
+  "supabase.inspect_project": [["projectRef", "projectRef", "Supabase project reference"]],
+  "supabase.apply_migrations": [["projectRef", "projectRef", "Supabase project reference"], ["migrations", "appliedMigrations", "migration list"]],
+  "vercel.inspect_project": [["projectId", "projectId", "Vercel project ID"]],
+  "vercel.deploy_preview": [["projectId", "projectId", "Vercel project ID"], ["environment", "environment", "Vercel environment"], ["headSha", "headSha", "Head SHA"], ["configuration", "configuration", "Vercel configuration"]],
+  "vercel.deploy_production": [["projectId", "projectId", "Vercel project ID"], ["environment", "environment", "Vercel environment"], ["headSha", "headSha", "Head SHA"], ["configuration", "configuration", "Vercel configuration"]],
+  "cloudflare.inspect_zone": [["zoneId", "zoneId", "Cloudflare zone ID"]],
+  "cloudflare.upsert_dns": [["zoneId", "zoneId", "Cloudflare zone ID"], ["hostname", "hostname", "DNS hostname"], ["recordType", "recordType", "DNS record type"], ["target", "target", "DNS target"], ["proxied", "proxied", "DNS proxy mode"], ["routingSource", "routingSource", "DNS routing source"]],
 };
 
 /** @type {Partial<Record<Operation, [string, string]>>} */
@@ -503,9 +548,38 @@ const operationTargetDigestBindings = {
 
 for (const operation of operationNames) {
   const inputFields = Object.keys(operationDefinitions[operation].inputs.shape).sort();
+  const constraintFields = Object.keys(operationDefinitions[operation].constraints.shape).sort();
   const boundFields = operationResultInputBindings[operation].map(([inputField]) => inputField).sort();
+  if (canonicalJson(inputFields) !== canonicalJson(constraintFields)) {
+    throw new Error(`Operation ${operation} authorization constraints do not freeze every material mutation input.`);
+  }
   if (canonicalJson(inputFields) !== canonicalJson(boundFields)) {
     throw new Error(`Operation ${operation} result binding does not enumerate every frozen mutation input.`);
+  }
+}
+
+/** @param {ReturnType<typeof parseAuthority>} authority @param {string} repository @param {any} authorization */
+function assertAuthorizationResourceBindings(authority, repository, authorization) {
+  const constraints = authorization.constraints;
+  if (authorization.service === "github" && constraints.repository !== repository) {
+    throw new Error("GitHub authorization repository does not match protected authority.");
+  }
+  if (authorization.service === "supabase" && constraints.projectRef !== authority.resourceTargets.supabase.projectRef) {
+    throw new Error("Supabase authorization project ref does not match protected authority.");
+  }
+  if (authorization.service === "vercel" && constraints.projectId !== authority.resourceTargets.vercel.projectId) {
+    throw new Error("Vercel authorization project ID does not match protected authority.");
+  }
+  if (authorization.service === "cloudflare") {
+    if (constraints.zoneId !== authority.resourceTargets.cloudflare.zoneId) {
+      throw new Error("Cloudflare authorization zone ID does not match protected authority.");
+    }
+    if (constraints.hostname !== undefined && !authority.resourceTargets.cloudflare.domains.includes(constraints.hostname)) {
+      throw new Error("Cloudflare authorization hostname does not match protected authority.");
+    }
+    if (constraints.routingSource?.projectId !== undefined && constraints.routingSource.projectId !== authority.resourceTargets.vercel.projectId) {
+      throw new Error("Cloudflare routing source project does not match protected authority.");
+    }
   }
 }
 
@@ -693,6 +767,7 @@ export function snapshotIssueContract(input, fetchedAt, protectedAuthorityValue)
     if ("issue" in authorization.constraints && authorization.constraints.issue !== parsed.issue) {
       throw new Error("External authorization Issue constraint does not match the Issue contract.");
     }
+    assertAuthorizationResourceBindings(authority, parsed.repository, authorization);
   }
   const contract = {
     ...parsed,
@@ -824,6 +899,7 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
   if (protectedAuthority.commitSha !== contract.authority.commitSha || protectedAuthority.digest !== contract.authority.digest) {
     throw new Error("Operation request protected authority snapshot does not match the frozen Issue contract.");
   }
+  assertAuthorizationResourceBindings(protectedAuthority.authority, contract.repository, authorization);
   if (!protectedAuthority.authority.authorization.operatorLabels.includes(request.operatorLabel)) {
     throw new Error("Operation request operator label is not authorized by protected authority.");
   }
@@ -1593,7 +1669,13 @@ export async function createMergeOperationRequest(root, issue, prNumber, operato
     environment: "production",
     reasonCode: "reviewed-release",
     ...operator,
-    inputs: { issue, prNumber, headSha: gate.headSha, method: "squash" },
+    intent: `Merge pull request ${prNumber} for Issue ${issue} at its exact reviewed Head.`,
+    reversibility: "compensating-change",
+    recovery: {
+      strategy: "separate-reviewed-operation",
+      instructions: "Inspect the merged repository state; any revert requires a later reviewed authorization.",
+    },
+    inputs: { issue, repository: input.contract.repository, prNumber, headSha: gate.headSha, method: "squash" },
   };
   const validated = validateExternalOperationRequest(request, root, input.contract);
   const requestPath = `.artifacts/ops-requests/${request.requestId}.json`;
@@ -1791,8 +1873,17 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   runGit(root, ["commit", "-m", "fixture verified change"]);
   const headSha = runGit(root, ["rev-parse", "HEAD"]).trim();
 
+  const materializedIssueContract = structuredClone(fixture.issueContract);
+  for (const authorization of materializedIssueContract.externalAuthorizations) {
+    if (authorization.operation === "github.merge_pr") {
+      authorization.constraints.headSha = headSha;
+      authorization.constraints.prNumber = fixture.prNumber;
+      authorization.constraints.repository = materializedIssueContract.repository;
+    }
+  }
+
   const protectedAuthority = loadProtectedAuthority(root, protectedAuthorityRef);
-  const contract = snapshotIssueContract(fixture.issueContract, fixture.fetchedAt, protectedAuthority);
+  const contract = snapshotIssueContract(materializedIssueContract, fixture.fetchedAt, protectedAuthority);
   const issueRootRelative = path.join(".artifacts", "issues", String(contract.issue));
   const headRootRelative = path.join(issueRootRelative, headSha);
   const issueRoot = path.resolve(root, issueRootRelative);
@@ -1866,4 +1957,6 @@ export const schemas = {
   reviewResultSchema,
   reviewPacketSchema,
   cleanupPlanSchema,
+  preflightReceiptSchema,
+  operationResultSchema,
 };

@@ -68,7 +68,7 @@ function githubClient(authority, options = {}) {
       if (request.operation === "github.read_issue") {
         return {
           status: "succeeded",
-          evidence: { issue: request.inputs.issue, state: "OPEN", updatedAt: "2026-08-30T01:00:30Z" },
+          evidence: { repository: request.inputs.repository, issue: request.inputs.issue, state: "OPEN", updatedAt: "2026-08-30T01:00:30Z" },
           providerIdempotencyKey: idempotencyKey,
         };
       }
@@ -76,6 +76,7 @@ function githubClient(authority, options = {}) {
         status: "succeeded",
         evidence: {
           issue: request.inputs.issue,
+          repository: request.inputs.repository,
           prNumber: request.inputs.prNumber,
           headSha: request.inputs.headSha,
           method: request.inputs.method,
@@ -128,7 +129,7 @@ describe("provider-specific guarded adapters", () => {
     await expect(createGitHubGuardedAdapter({ providerClient: wrongHeadClient, clock: clock() }).execute({
       root: wrongHeadRoot.root,
       requestPath: wrongHeadRoot.simulated.paths.mergeRequest,
-    })).rejects.toThrow(/live PR Head|frozen.*Head/iu);
+    })).rejects.toThrow(/live (?:PR )?Head|frozen.*Head/iu);
     expect(wrongHeadClient.executionCount()).toBe(0);
   });
 
@@ -178,7 +179,7 @@ describe("provider-specific guarded adapters", () => {
         accountRef: "accounts.github",
         targetRef: "resourceTargets.github",
         environment: "none",
-        constraints: { issue },
+        constraints: { repository: "yuto1201/Web-Template", issue },
         requiresExactHead: false,
       }],
     }, "2026-08-30T00:00:00Z", loadProtectedAuthority(root, "main"));
@@ -193,7 +194,10 @@ describe("provider-specific guarded adapters", () => {
       operatorLabel: "codex",
       executionRole: "external-operator",
       executionSurface: "github-cli",
-      inputs: { issue },
+      intent: `Read Issue ${issue} from the frozen repository target.`,
+      reversibility: "read-only",
+      recovery: { strategy: "none", instructions: "No mutation is performed; repeat only while the authorization remains fresh." },
+      inputs: { repository: "yuto1201/Web-Template", issue },
     };
     const contractPath = path.join(root, ".artifacts", "issues", String(issue), "issue-contract.json");
     const requestPath = path.join(root, ".artifacts", "ops-requests", request.requestId + ".json");
@@ -205,6 +209,23 @@ describe("provider-specific guarded adapters", () => {
     await expect(adapter.execute({ root, requestPath })).resolves.toMatchObject({ outcome: "succeeded" });
     await expect(adapter.execute({ root, requestPath })).resolves.toMatchObject({ outcome: "succeeded" });
     expect(client.executionCount()).toBe(2);
+  });
+
+  it("rejects a changed live Supabase migration content digest before mutation", async () => {
+    const { validateLiveOperationObservation } = await import("../tools/provider-guarded-adapter.mjs");
+    const request = {
+      inputs: {
+        projectRef: "abcdefghijklmnopqrst",
+        migrations: [{
+          name: "supabase/migrations/20260830010101_create_receipts.sql",
+          contentDigest: `sha256:${"4".repeat(64)}`,
+        }],
+      },
+    };
+    expect(() => validateLiveOperationObservation("supabase.apply_migrations", request, {
+      projectRef: request.inputs.projectRef,
+      migrations: [{ ...request.inputs.migrations[0], contentDigest: `sha256:${"9".repeat(64)}` }],
+    })).toThrow(/migration content digest|frozen mutation/iu);
   });
 
   it("rejects caller-authored receipt JSON as an execution-authorizing production path", async () => {
