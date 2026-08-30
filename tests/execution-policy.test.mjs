@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { operationNames as workflowOperationNames } from "../tools/workflow-core.mjs";
+import * as executionPolicyModule from "../tools/execution-policy.mjs";
 import {
   classifyRisk,
   executionOperationNames,
@@ -74,28 +75,56 @@ describe("execution policy", () => {
       reasons: ["operation:cloudflare.upsert_dns"],
     });
     expect(() => classifyRisk({ changedPaths: ["src/app/../proxy.ts"], externalOperations: [] }, policy)).toThrow(/canonical/u);
-    expect(() => classifyRisk({ changedPaths: [], externalOperations: ["github.run_anything"] }, policy)).toThrow(/operation/u);
+    expect(() => classifyRisk({ changedPaths: ["src/app/page.tsx"], externalOperations: ["github.run_anything"] }, policy)).toThrow(/operation/u);
+  });
+
+  it("grants low risk only when every changed path is allowlisted and no external operation exists", () => {
+    expect(classifyRisk({ changedPaths: ["README.md"], externalOperations: [] }, policy)).toEqual({
+      level: "low",
+      reasons: ["path:README.md"],
+    });
+    expect(classifyRisk({ changedPaths: ["README.md", "src/app/page.tsx"], externalOperations: [] }, policy)).toEqual({
+      level: "normal",
+      reasons: [],
+    });
+    expect(classifyRisk({ changedPaths: ["README.md"], externalOperations: ["github.push_branch"] }, policy)).toEqual({
+      level: "normal",
+      reasons: [],
+    });
+    expect(() => classifyRisk({ changedPaths: [], externalOperations: [] }, policy)).toThrow(/changed path/iu);
   });
 
   it.each([
-    "docs/authority.md",
-    "docs/security.md",
-    "docs/workflow.md",
-    "docs/activation.md",
-    "docs/verification.md",
-    "docs/onboarding-cursor-cloud.md",
-    "specs/decisions.md",
-    "specs/cursor-cloud.md",
-  ])("classifies canonical authority path %s as high risk", (changedPath) => {
+    ["docs/authority.md", "docs/authority.md"],
+    ["docs/security.md", "docs/security.md"],
+    ["docs/workflow.md", "docs/workflow.md"],
+    ["docs/activation.md", "docs/activation.md"],
+    ["docs/verification.md", "docs/verification.md"],
+    ["docs/onboarding-cursor-cloud.md", "docs/onboarding-cursor-cloud.md"],
+    ["specs/decisions.md", "specs/decisions.md"],
+    ["specs/cursor-cloud.md", "specs/cursor-cloud.md"],
+    ["docs/agent-contracts/change-evaluator.md", "docs/agent-contracts/"],
+    ["docs/authentication.md", "docs/authentication.md"],
+    ["docs/database.md", "docs/database.md"],
+    ["docs/deployment.md", "docs/deployment.md"],
+    ["docs/domain.md", "docs/domain.md"],
+    ["docs/onboarding-macos.md", "docs/onboarding-macos.md"],
+  ])("classifies canonical authority path %s as high risk", (changedPath, rulePath) => {
     expect(classifyRisk({ changedPaths: [changedPath], externalOperations: [] }, policy)).toEqual({
       level: "high",
-      reasons: [`path:${changedPath}`],
+      reasons: [`path:${rulePath}`],
     });
   });
 
   it("requires observed reviewer families that satisfy risk-specific diversity", () => {
+    expect(requiredReviewerFamilies({ risk: "low", primaryFamily: "openai" })).toEqual([]);
     expect(requiredReviewerFamilies({ risk: "high", primaryFamily: "openai" })).toEqual(["anthropic", "openai"]);
     expect(requiredReviewerFamilies({ risk: "normal", primaryFamily: "anthropic" })).toEqual(["openai"]);
+    expect(validateReviewerFamilies({
+      risk: "low",
+      primaryFamily: "openai",
+      reviewerFamilies: [],
+    })).toEqual([]);
     expect(validateReviewerFamilies({
       risk: "high",
       primaryFamily: "cursor",
@@ -112,6 +141,41 @@ describe("execution policy", () => {
       reviewerFamilies: ["anthropic"],
     })).toThrow(/openai/u);
     expect(() => requiredReviewerFamilies({ risk: "normal", primaryFamily: "unknown" })).toThrow(/unknown/u);
+  });
+
+  it("routes expensive verification from derived risk and relevant paths", () => {
+    expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: ["README.md"], externalOperations: [] }, policy)).toEqual({
+      risk: { level: "low", reasons: ["path:README.md"] },
+      repository: "docs",
+      databaseAuth: false,
+      browser: false,
+      macos: false,
+      template: false,
+    });
+    expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: ["src/app/page.tsx"], externalOperations: [] }, policy)).toEqual({
+      risk: { level: "normal", reasons: [] },
+      repository: "full",
+      databaseAuth: false,
+      browser: true,
+      macos: false,
+      template: false,
+    });
+    expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: ["package-lock.json"], externalOperations: [] }, policy)).toEqual({
+      risk: { level: "normal", reasons: [] },
+      repository: "full",
+      databaseAuth: false,
+      browser: false,
+      macos: true,
+      template: true,
+    });
+    expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: ["config/execution.json"], externalOperations: [] }, policy)).toEqual({
+      risk: { level: "high", reasons: ["path:config/"] },
+      repository: "full",
+      databaseAuth: true,
+      browser: true,
+      macos: true,
+      template: true,
+    });
   });
 
   it("keeps the temporary operation-name copy exactly aligned with workflow core", () => {
