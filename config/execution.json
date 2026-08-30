@@ -27,6 +27,7 @@
     { "type": "prefix", "path": ".codex/" },
     { "type": "prefix", "path": ".github/" },
     { "type": "prefix", "path": "config/" },
+    { "type": "exact", "path": "next.config.mjs" },
     { "type": "exact", "path": "docs/activation.md" },
     { "type": "exact", "path": "docs/authority.md" },
     { "type": "prefix", "path": "docs/agent-contracts/" },
@@ -61,6 +62,9 @@
       { "type": "exact", "path": "tests/supabase-migrations.test.mjs" }
     ],
     "browser": [
+      { "type": "exact", "path": "package.json" },
+      { "type": "exact", "path": "package-lock.json" },
+      { "type": "exact", "path": "next.config.mjs" },
       { "type": "prefix", "path": "src/" },
       { "type": "prefix", "path": "tests/e2e/" },
       { "type": "exact", "path": "playwright.config.ts" }

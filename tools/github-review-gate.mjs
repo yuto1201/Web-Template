@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   classifyRisk,
   normalizeModelIdentity,
+  parseProtectedExecutionPolicy,
   requiredReviewerFamilies,
   validateBranchForSurface,
   validateReviewerFamilies,
@@ -299,11 +300,12 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   assert(pullRequest.head?.repo?.full_name === pullRequest.base?.repo?.full_name, "Independent review requires a same repository branch.");
   assert(evidence.reviewedSha === headSha, "Reviewed SHA must match the current Head SHA.");
   assert(executionPolicy && typeof executionPolicy === "object", "Execution policy is required for independent review.");
+  const trustedExecutionPolicy = parseProtectedExecutionPolicy(executionPolicy);
   assert(typeof pullRequest.head?.ref === "string", "Pull request Head branch is required.");
-  validateBranchForSurface(pullRequest.head.ref, evidence.issue, evidence.executionSurface, executionPolicy);
+  validateBranchForSurface(pullRequest.head.ref, evidence.issue, evidence.executionSurface, trustedExecutionPolicy);
   const allowedOperations = new Set([
-    ...(executionPolicy.routineDeliveryOperations ?? []),
-    ...(executionPolicy.highRiskOperations ?? []),
+    ...(trustedExecutionPolicy.routineDeliveryOperations ?? []),
+    ...(trustedExecutionPolicy.highRiskOperations ?? []),
   ]);
   for (const reason of evidence.risk.reasons.filter((value) => value.startsWith("operation:"))) {
     const operation = reason.slice("operation:".length);
@@ -320,21 +322,21 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
     evidence.primaryModel.configured,
     evidence.primaryModel.observed,
     [],
-    executionPolicy,
+    trustedExecutionPolicy,
   );
   assert(primaryModel.family === evidence.primaryModel.family, "Primary model family must match the observed model.");
   assert(primaryModel.fallback === evidence.primaryModel.fallback, "Primary fallback claim must match the configured and observed models.");
   assert(!primaryModel.fallback, "Primary model fallback cannot satisfy review policy.");
   for (const review of evidence.reviews) {
-    const reviewerModel = normalizeModelIdentity(review.configured, review.observed, [], executionPolicy);
+    const reviewerModel = normalizeModelIdentity(review.configured, review.observed, [], trustedExecutionPolicy);
     assert(reviewerModel.family === review.family, `unknown or mismatched reviewer model family ${review.family}.`);
     assert(reviewerModel.fallback === review.fallback, `Reviewer fallback claim must match configured and observed model IDs for ${review.family}.`);
     assert(!reviewerModel.fallback, `Reviewer model fallback cannot satisfy review policy for ${review.family}.`);
     if (evidence.executionSurface === "cursor-cloud" && (review.family === "openai" || review.family === "anthropic")) {
-      assert(review.configured === executionPolicy.cursorModels[review.family], `Reviewer configured reviewer model must match trusted Cursor policy for ${review.family}.`);
+      assert(review.configured === trustedExecutionPolicy.cursorModels[review.family], `Reviewer configured reviewer model must match trusted Cursor policy for ${review.family}.`);
     }
   }
-  const derivedRisk = deriveReviewRisk(String(pullRequest.body ?? ""), changedPaths, executionPolicy);
+  const derivedRisk = deriveReviewRisk(String(pullRequest.body ?? ""), changedPaths, trustedExecutionPolicy);
   assert(
     JSON.stringify(evidence.risk) === JSON.stringify(derivedRisk),
     "Risk claim must match protected derived risk and cannot reduce it.",

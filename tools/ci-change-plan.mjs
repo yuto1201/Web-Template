@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveVerificationPlan, executionPolicySchema } from "./execution-policy.mjs";
@@ -100,7 +100,7 @@ export async function runCli(argv = process.argv.slice(2)) {
       headSha: /** @type {string} */ (args.headSha),
       policy: JSON.parse(await readFile(path.resolve(/** @type {string} */ (args.policyPath)), "utf8")),
     });
-  if (args.githubOutputPath) await writeFile(path.resolve(args.githubOutputPath), githubOutputs(plan), "utf8");
+  if (args.githubOutputPath) await appendFile(path.resolve(args.githubOutputPath), githubOutputs(plan), "utf8");
   process.stdout.write(`${JSON.stringify(plan)}\n`);
   return plan;
 }

@@ -360,6 +360,14 @@ export function validateCursorEnvironmentPolicy(input) {
   return errors;
 }
 
+/** @param {string} ciWorkflow */
+export function hasConservativeMacosRouting(ciWorkflow) {
+  const condition = "needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'";
+  const runner = `runs-on: \${{ (${condition}) && 'macos-latest' || 'ubuntu-latest' }}`;
+  const workstationStep = `- name: Verify workstation contract\n        if: ${condition}\n        run: npm run workstation:doctor`;
+  return ciWorkflow.includes(runner) && ciWorkflow.includes(workstationStep);
+}
+
 /** @param {string} [root] */
 export async function validateRepository(root = defaultRoot) {
   const errors = [];
@@ -531,7 +539,7 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("package.json must expose the cross-platform workstation doctor.");
   }
   const ciWorkflow = await readFile(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
-  if (!/runs-on:\s*(?:macos-latest|\$\{\{[^\n]*'macos-latest')/u.test(ciWorkflow) || !ciWorkflow.includes("npm run workstation:doctor")) {
+  if (!hasConservativeMacosRouting(ciWorkflow)) {
     errors.push("CI must verify the workstation contract on a real macOS runner.");
   }
   const reviewWorkflow = await readFile(path.join(root, ".github", "workflows", "review-gate.yml"), "utf8");

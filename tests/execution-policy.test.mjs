@@ -175,7 +175,15 @@ describe("execution policy", () => {
       risk: { level: "normal", reasons: [] },
       repository: "full",
       databaseAuth: false,
-      browser: false,
+      browser: true,
+      macos: true,
+      template: true,
+    });
+    expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: ["next.config.mjs"], externalOperations: [] }, policy)).toEqual({
+      risk: { level: "high", reasons: ["path:next.config.mjs"] },
+      repository: "full",
+      databaseAuth: true,
+      browser: true,
       macos: true,
       template: true,
     });

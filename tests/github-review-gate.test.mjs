@@ -153,6 +153,19 @@ describe("GitHub exact-Head review gate", () => {
     })).toMatchObject({ ok: true, mode: "independent-review", risk: "low", reviewers: [] });
   });
 
+  it("evaluates a pre-migration protected policy conservatively instead of deadlocking rollout", () => {
+    const legacyPolicy = /** @type {Record<string, any>} */ (structuredClone(executionPolicy));
+    delete legacyPolicy.lowRiskPathRules;
+    delete legacyPolicy.verificationPathRules;
+    expect(evaluateGitHubReviewGate({
+      event: event(reviewBody()),
+      changedPaths: ["README.md"],
+      diff: "",
+      workflow,
+      executionPolicy: /** @type {any} */ (legacyPolicy),
+    })).toMatchObject({ ok: true, risk: "normal", reviewers: ["anthropic"] });
+  });
+
   it("rejects low-risk claims outside the protected allowlist or with extra reviewer evidence", () => {
     for (const changedPath of ["src/app/page.tsx", "docs/agent-contracts/change-evaluator.md", ".github/workflows/ci.yml"]) {
       expect(() => evaluateGitHubReviewGate({

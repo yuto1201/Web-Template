@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   containsPotentialSecret,
   detectActorAsymmetry,
+  hasConservativeMacosRouting,
   hasCanonicalOperatorParityStatement,
   operatorParityErrors,
   validateCursorHookPolicy,
@@ -34,6 +35,9 @@ describe("repository policy", () => {
     expect(ci.match(/npm run deployment:lint/gu)).toBeNull();
     expect(ci.match(/npm run domain:lint/gu)).toBeNull();
     expect(ci).not.toContain("pull_request_target");
+    expect(hasConservativeMacosRouting(ci)).toBe(true);
+    expect(hasConservativeMacosRouting("runs-on: ${{ false && 'macos-latest' || 'ubuntu-latest' }}\nrun: npm run workstation:doctor\n"))
+      .toBe(false);
   });
 
   it("defines a fast inner loop and bounded review-efficiency policy", async () => {
