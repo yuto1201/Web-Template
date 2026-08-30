@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   collectAndValidateCleanupPlan,
   createMergeOperationRequest,
+  loadProtectedAuthority,
   prepareReviewArtifacts,
   readExternalOperationRequest,
   recordReviewResult,
@@ -71,7 +72,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   if (command === "snapshot") {
     const input = await readJson(required(options, "input"));
     const output = resolveInside(root, required(options, "output"), path.join(".artifacts", "issues"));
-    const contract = snapshotIssueContract(input, required(options, "fetched-at"));
+    const contract = snapshotIssueContract(input, required(options, "fetched-at"), loadProtectedAuthority(root, "main"));
     await writeJson(output, contract);
     printJson({ ok: true, issue: contract.issue, digest: contract.digest, output: path.relative(root, output).replaceAll("\\", "/") });
     return;

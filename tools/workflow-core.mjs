@@ -5,9 +5,11 @@ import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { authorityDigest, authorizeServiceUse, parseAuthority } from "./authority-core.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(moduleDirectory, "..");
+const protectedAuthorityRef = "main";
 const workflowConfiguration = /** @type {{
   reviewerMap: Record<"codex" | "claude", "codex" | "claude">,
   baseRef: string,
@@ -55,39 +57,50 @@ const operationSchema = z.enum(operationNames);
 const branchSchema = z.string().regex(/^(?:codex|claude)\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const worktreeSchema = z.string().regex(/^\.worktrees\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const repositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
+const serviceSchema = z.enum(["github", "supabase", "vercel", "cloudflare", "linear"]);
 
 const targetSources = {
-  github: "config/ownership.json#github",
-  supabase: "config/ownership.json#supabase.projectRef",
-  vercel: "config/ownership.json#vercel.projectId",
-  cloudflare: "config/ownership.json#cloudflare.zoneId",
+  github: "resourceTargets.github",
+  supabase: "resourceTargets.supabase",
+  vercel: "resourceTargets.vercel",
+  cloudflare: "resourceTargets.cloudflare",
 };
 
 const operationDefinitions = /** @type {Record<string, {
+  service: "github" | "supabase" | "vercel" | "cloudflare",
   targetKind: string,
   targetIdentifier: string,
   environments: string[],
   reasonCodes: string[],
   inputs: import("zod").ZodType,
+  constraints: import("zod").ZodType,
+  requiresExactHead: boolean,
   evidence: string[]
 }>} */ ({
   "github.read_issue": {
+    service: "github",
     targetKind: "github.repository",
     targetIdentifier: targetSources.github,
     environments: ["none"],
     reasonCodes: ["issue-contract"],
     inputs: z.object({ issue: z.number().int().positive() }).strict(),
+    constraints: z.object({ issue: z.number().int().positive() }).strict(),
+    requiresExactHead: false,
     evidence: ["authenticated GitHub login", "repository", "sanitized Issue snapshot"],
   },
   "github.push_branch": {
+    service: "github",
     targetKind: "github.repository",
     targetIdentifier: targetSources.github,
     environments: ["none"],
     reasonCodes: ["acceptance-evidence"],
     inputs: z.object({ branch: branchSchema, headSha: shaSchema }).strict(),
+    constraints: z.object({ branch: branchSchema }).strict(),
+    requiresExactHead: false,
     evidence: ["authenticated GitHub login", "repository", "pushed branch Head SHA"],
   },
   "github.create_pr": {
+    service: "github",
     targetKind: "github.repository",
     targetIdentifier: targetSources.github,
     environments: ["none"],
@@ -98,25 +111,38 @@ const operationDefinitions = /** @type {Record<string, {
       baseBranch: z.literal("main"),
       headSha: shaSchema,
     }).strict(),
+    constraints: z.object({
+      issue: z.number().int().positive(),
+      branch: branchSchema,
+      baseBranch: z.literal("main"),
+    }).strict(),
+    requiresExactHead: false,
     evidence: ["authenticated GitHub login", "draft PR URL", "PR Head SHA"],
   },
   "github.merge_pr": {
+    service: "github",
     targetKind: "github.repository",
     targetIdentifier: targetSources.github,
     environments: ["production"],
     reasonCodes: ["reviewed-release"],
     inputs: z.object({ issue: z.number().int().positive(), prNumber: z.number().int().positive(), headSha: shaSchema, method: z.literal("squash") }).strict(),
+    constraints: z.object({ issue: z.number().int().positive(), method: z.literal("squash") }).strict(),
+    requiresExactHead: true,
     evidence: ["authenticated GitHub login", "matched PR Head SHA", "squash merge commit", "closed Issue"],
   },
   "github.delete_branch": {
+    service: "github",
     targetKind: "github.repository",
     targetIdentifier: targetSources.github,
     environments: ["production"],
     reasonCodes: ["verified-cleanup"],
     inputs: z.object({ branch: branchSchema, mergedPrNumber: z.number().int().positive(), headSha: shaSchema }).strict(),
+    constraints: z.object({ branch: branchSchema }).strict(),
+    requiresExactHead: false,
     evidence: ["merged PR identity", "deleted exact remote branch"],
   },
   "github.update_ruleset": {
+    service: "github",
     targetKind: "github.repository",
     targetIdentifier: targetSources.github,
     environments: ["production"],
@@ -128,17 +154,29 @@ const operationDefinitions = /** @type {Record<string, {
       requiredCheckName: z.literal("Exact Head review policy"),
       enforcement: z.literal("active"),
     }).strict(),
+    constraints: z.object({
+      issue: z.number().int().positive(),
+      rulesetName: z.literal("main exact-Head review"),
+      targetBranch: z.literal("main"),
+      requiredCheckName: z.literal("Exact Head review policy"),
+      enforcement: z.literal("active"),
+    }).strict(),
+    requiresExactHead: true,
     evidence: ["authenticated GitHub owner", "ruleset ID", "active enforcement", "required exact-Head check"],
   },
   "supabase.inspect_project": {
+    service: "supabase",
     targetKind: "supabase.project",
     targetIdentifier: targetSources.supabase,
     environments: ["production"],
     reasonCodes: ["issue-contract"],
     inputs: z.object({ projectRefSource: z.literal("config/ownership.json") }).strict(),
+    constraints: z.object({ projectRefSource: z.literal("config/ownership.json") }).strict(),
+    requiresExactHead: false,
     evidence: ["authenticated Supabase organization", "project ref fingerprint", "read-only inspection"],
   },
   "supabase.apply_migrations": {
+    service: "supabase",
     targetKind: "supabase.project",
     targetIdentifier: targetSources.supabase,
     environments: ["production"],
@@ -147,41 +185,59 @@ const operationDefinitions = /** @type {Record<string, {
       projectRefSource: z.literal("config/ownership.json"),
       migrations: z.array(relativeFileSchema.regex(/^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/u)).min(1),
     }).strict(),
+    constraints: z.object({
+      projectRefSource: z.literal("config/ownership.json"),
+      migrations: z.array(relativeFileSchema.regex(/^supabase\/migrations\/\d{14}_[a-z0-9_]+\.sql$/u)).min(1),
+    }).strict(),
+    requiresExactHead: true,
     evidence: ["authenticated Supabase organization", "project ref fingerprint", "applied migration names"],
   },
   "vercel.inspect_project": {
+    service: "vercel",
     targetKind: "vercel.project",
     targetIdentifier: targetSources.vercel,
     environments: ["production"],
     reasonCodes: ["issue-contract"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
+    constraints: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
+    requiresExactHead: false,
     evidence: ["authenticated Vercel scope", "project identity", "read-only inspection"],
   },
   "vercel.deploy_preview": {
+    service: "vercel",
     targetKind: "vercel.project",
     targetIdentifier: targetSources.vercel,
     environments: ["preview"],
     reasonCodes: ["acceptance-evidence"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
+    constraints: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
+    requiresExactHead: false,
     evidence: ["authenticated Vercel scope", "preview deployment URL", "deployed Head SHA"],
   },
   "vercel.deploy_production": {
+    service: "vercel",
     targetKind: "vercel.project",
     targetIdentifier: targetSources.vercel,
     environments: ["production"],
     reasonCodes: ["reviewed-release"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
+    constraints: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
+    requiresExactHead: true,
     evidence: ["authenticated Vercel scope", "production deployment URL", "deployed Head SHA"],
   },
   "cloudflare.inspect_zone": {
+    service: "cloudflare",
     targetKind: "cloudflare.zone",
     targetIdentifier: targetSources.cloudflare,
     environments: ["production"],
     reasonCodes: ["issue-contract"],
     inputs: z.object({ zoneSource: z.literal("config/ownership.json") }).strict(),
+    constraints: z.object({ zoneSource: z.literal("config/ownership.json") }).strict(),
+    requiresExactHead: false,
     evidence: ["authenticated Cloudflare account", "zone identity", "read-only DNS snapshot"],
   },
   "cloudflare.upsert_dns": {
+    service: "cloudflare",
     targetKind: "cloudflare.zone",
     targetIdentifier: targetSources.cloudflare,
     environments: ["production"],
@@ -193,6 +249,14 @@ const operationDefinitions = /** @type {Record<string, {
       target: z.string().min(1).max(253),
       proxied: z.literal(false),
     }).strict(),
+    constraints: z.object({
+      zoneSource: z.literal("config/ownership.json"),
+      recordName: z.string().regex(/^(?:[a-z0-9-]+\.)*[a-z0-9-]+$/u),
+      recordType: z.enum(["A", "AAAA", "CNAME", "TXT"]),
+      target: z.string().min(1).max(253),
+      proxied: z.literal(false),
+    }).strict(),
+    requiresExactHead: true,
     evidence: ["authenticated Cloudflare account", "zone identity", "exact DNS record after write"],
   },
 });
@@ -204,22 +268,59 @@ const externalRequestBaseSchema = z.object({
   operation: operationSchema,
   target: z.object({ kind: z.string().min(1), identifier: z.string().min(1).max(200) }).strict(),
   environment: z.enum(["none", "preview", "production"]),
-  reasonCode: z.enum(["issue-contract", "acceptance-evidence", "reviewed-release", "verified-cleanup"]),
+  reasonCode: z.enum(["issue-contract", "acceptance-evidence", "reviewed-release", "verified-cleanup", "user-directed"]),
   inputs: z.record(z.string(), z.unknown()),
 }).strict();
 
 const singleLineSchema = z.string().trim().min(1).regex(/^[^\r\n]+$/u);
 const acceptanceCriterionSchema = z.object({ id: acceptanceIdSchema, text: singleLineSchema }).strict();
+const externalAuthorizationBaseSchema = z.object({
+  service: serviceSchema,
+  operation: operationSchema,
+  purposeCode: z.enum(["issue-contract", "acceptance-evidence", "reviewed-release", "verified-cleanup", "user-directed"]),
+  purpose: singleLineSchema,
+  accountRef: z.string().regex(/^accounts\.(?:github|supabase|vercel|cloudflare|linear)$/u),
+  targetRef: z.string().regex(/^resourceTargets\.(?:github|supabase|vercel|cloudflare|linear)$/u),
+  environment: z.enum(["none", "preview", "production"]),
+  constraints: z.record(z.string(), z.unknown()),
+  requiresExactHead: z.boolean(),
+}).strict();
+const externalAuthorizationSchema = externalAuthorizationBaseSchema.transform((authorization, context) => {
+  const definition = operationDefinitions[authorization.operation];
+  const expectedAccountRef = `accounts.${definition.service}`;
+  const expectedTargetRef = definition.targetIdentifier;
+  const failures = [
+    [authorization.service === definition.service, ["service"], `Operation ${authorization.operation} requires service ${definition.service}.`],
+    [authorization.accountRef === expectedAccountRef, ["accountRef"], `Operation ${authorization.operation} requires account reference ${expectedAccountRef}.`],
+    [authorization.targetRef === expectedTargetRef, ["targetRef"], `Operation ${authorization.operation} requires target reference ${expectedTargetRef}.`],
+    [definition.environments.includes(authorization.environment), ["environment"], `Invalid environment for ${authorization.operation}.`],
+    [definition.reasonCodes.includes(authorization.purposeCode), ["purposeCode"], `Invalid purpose code for ${authorization.operation}.`],
+    [authorization.requiresExactHead === definition.requiresExactHead, ["requiresExactHead"], `Invalid exact-Head requirement for ${authorization.operation}.`],
+  ];
+  for (const [valid, pathValue, message] of failures) {
+    if (!valid) context.addIssue({ code: "custom", path: /** @type {(string | number)[]} */ (pathValue), message: /** @type {string} */ (message) });
+  }
+  const constraints = definition.constraints.safeParse(authorization.constraints);
+  if (!constraints.success) {
+    for (const issue of constraints.error.issues) {
+      context.addIssue({ ...issue, path: ["constraints", ...issue.path] });
+    }
+    return z.NEVER;
+  }
+  if (failures.some(([valid]) => !valid)) return z.NEVER;
+  return { ...authorization, constraints: constraints.data };
+});
 const issueContractInputSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   issue: z.number().int().positive(),
   repository: repositorySchema,
   goal: singleLineSchema,
   acceptanceCriteria: z.array(acceptanceCriterionSchema).min(1),
   dependencies: z.array(z.number().int().positive()),
-  externalOperations: z.array(operationSchema),
+  externalAuthorizations: z.array(externalAuthorizationSchema),
 }).strict();
 const issueContractSchema = issueContractInputSchema.extend({
+  authority: z.object({ commitSha: shaSchema, digest: digestSchema }).strict(),
   fetchedAt: timestampSchema,
   digest: digestSchema,
 }).strict();
@@ -382,13 +483,32 @@ function unique(values, label) {
   if (new Set(values).size !== values.length) throw new Error(`${label} must not contain duplicates.`);
 }
 
-/** @param {unknown} input @param {string} fetchedAt */
-export function snapshotIssueContract(input, fetchedAt) {
+/** @param {unknown} input @param {string} fetchedAt @param {unknown} protectedAuthorityValue */
+export function snapshotIssueContract(input, fetchedAt, protectedAuthorityValue) {
   const parsed = issueContractInputSchema.parse(input);
+  const protectedAuthority = z.object({
+    commitSha: shaSchema,
+    authority: z.unknown(),
+    digest: digestSchema,
+  }).strict().parse(protectedAuthorityValue);
+  const authority = parseAuthority(protectedAuthority.authority);
+  const digest = authorityDigest(authority);
+  if (protectedAuthority.digest !== digest) throw new Error("Protected authority digest mismatch.");
+  const repository = `${authority.resourceTargets.github.owner}/${authority.resourceTargets.github.repository}`;
+  if (parsed.repository !== repository) throw new Error("Issue repository does not match protected authority.");
   unique(parsed.acceptanceCriteria.map(({ id }) => id), "Acceptance criteria");
   unique(parsed.dependencies.map(String), "Dependencies");
-  unique(parsed.externalOperations, "External operations");
-  const contract = { ...parsed, fetchedAt };
+  unique(parsed.externalAuthorizations.map(({ operation }) => operation), "External authorizations");
+  for (const authorization of parsed.externalAuthorizations) {
+    if ("issue" in authorization.constraints && authorization.constraints.issue !== parsed.issue) {
+      throw new Error("External authorization Issue constraint does not match the Issue contract.");
+    }
+  }
+  const contract = {
+    ...parsed,
+    authority: { commitSha: protectedAuthority.commitSha, digest },
+    fetchedAt,
+  };
   return issueContractSchema.parse({ ...contract, digest: digestValue(contract) });
 }
 
@@ -396,23 +516,70 @@ export function snapshotIssueContract(input, fetchedAt) {
 export function validateIssueContract(value) {
   const contract = issueContractSchema.parse(value);
   unique(contract.acceptanceCriteria.map(({ id }) => id), "Acceptance criteria");
+  unique(contract.dependencies.map(String), "Dependencies");
+  unique(contract.externalAuthorizations.map(({ operation }) => operation), "External authorizations");
+  for (const authorization of contract.externalAuthorizations) {
+    if ("issue" in authorization.constraints && authorization.constraints.issue !== contract.issue) {
+      throw new Error("External authorization Issue constraint does not match the Issue contract.");
+    }
+  }
   if (digestValue(contract) !== contract.digest) throw new Error("Issue contract digest mismatch.");
   return contract;
 }
 
-/** @param {string} root @param {string} source */
-function resolveOwnershipTarget(root, source) {
-  const ownership = JSON.parse(readFileSync(path.join(root, "config", "ownership.json"), "utf8"));
-  if (source === targetSources.github) {
-    const owner = ownership.github?.owner;
-    const repository = ownership.github?.repository;
-    if (!owner || !repository) throw new Error("GitHub ownership target is incomplete.");
-    return `${owner}/${repository}`;
+/** @param {ReturnType<typeof parseAuthority>} authority @param {"github" | "supabase" | "vercel" | "cloudflare"} service */
+function resolveOwnershipTarget(authority, service) {
+  const target = authority.resourceTargets[service];
+  if (service === "github") return `${target.owner}/${target.repository}`;
+  if (service === "supabase" && target.projectRef) return target.projectRef;
+  if (service === "vercel") return target.projectId;
+  if (service === "cloudflare") return target.zoneId;
+  throw new Error(`Protected authority target ${service} is not configured.`);
+}
+
+/**
+ * Load only the protected ref's committed authority. Candidate filesystem contents are never consulted.
+ * @param {string} root
+ * @param {string} baseRef
+ */
+export function loadProtectedAuthority(root, baseRef) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(baseRef)) throw new Error("Protected authority base ref is invalid.");
+  const commitSha = runGit(root, ["rev-parse", "--verify", `${baseRef}^{commit}`]).trim();
+  shaSchema.parse(commitSha);
+  const serialized = runGit(root, ["show", `${commitSha}:config/ownership.json`]);
+  let value;
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    throw new Error("Protected authority is not valid JSON.");
   }
-  if (source === targetSources.supabase && ownership.supabase?.projectRef) return ownership.supabase.projectRef;
-  if (source === targetSources.vercel && ownership.vercel?.projectId) return ownership.vercel.projectId;
-  if (source === targetSources.cloudflare && ownership.cloudflare?.zoneId) return ownership.cloudflare.zoneId;
-  throw new Error(`Ownership target ${source} is not configured.`);
+  const authority = parseAuthority(value);
+  return { commitSha, authority, digest: authorityDigest(authority) };
+}
+
+/** @param {unknown} contractValue @param {unknown} requestValue */
+export function resolveExternalAuthorization(contractValue, requestValue) {
+  const contract = validateIssueContract(contractValue);
+  const request = externalRequestBaseSchema.parse(requestValue);
+  if (contract.issue !== request.issue) throw new Error("Operation request Issue does not match the frozen Issue contract.");
+  const authorization = contract.externalAuthorizations.find(({ operation }) => operation === request.operation);
+  if (!authorization) throw new Error(`Operation ${request.operation} is outside the frozen Issue contract.`);
+  const definition = operationDefinitions[request.operation];
+  if (request.target.kind !== definition.targetKind) {
+    throw new Error(`Operation ${request.operation} requires target kind ${definition.targetKind}.`);
+  }
+  if (request.target.identifier !== authorization.targetRef) {
+    throw new Error(`Operation ${request.operation} requires target reference ${authorization.targetRef}.`);
+  }
+  if (request.environment !== authorization.environment) throw new Error(`Invalid environment for ${request.operation}.`);
+  if (request.reasonCode !== authorization.purposeCode) throw new Error(`Invalid purpose code for ${request.operation}.`);
+  const inputs = definition.inputs.parse(request.inputs);
+  for (const [key, expected] of Object.entries(authorization.constraints)) {
+    if (canonicalJson(inputs[key]) !== canonicalJson(expected)) {
+      throw new Error(`Operation ${request.operation} does not match frozen constraint ${key}.`);
+    }
+  }
+  return authorization;
 }
 
 /** @param {unknown} value @param {string} [root] @param {unknown} [contractValue] */
@@ -422,29 +589,45 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
     resolveInside(root, `.artifacts/issues/${request.issue}/issue-contract.json`, `.artifacts/issues/${request.issue}`),
     "utf8",
   )));
-  if (contract.issue !== request.issue) throw new Error("Operation request Issue does not match the frozen Issue contract.");
-  if (!contract.externalOperations.includes(request.operation)) {
-    throw new Error(`Operation ${request.operation} is outside the frozen Issue contract.`);
-  }
   const definition = operationDefinitions[request.operation];
-  if (request.target.kind !== definition.targetKind) {
-    throw new Error(`Operation ${request.operation} requires target kind ${definition.targetKind}.`);
-  }
-  if (request.target.identifier !== definition.targetIdentifier) {
-    throw new Error(`Operation ${request.operation} requires target identifier ${definition.targetIdentifier}.`);
-  }
-  if (!definition.environments.includes(request.environment)) throw new Error(`Invalid environment for ${request.operation}.`);
-  if (!definition.reasonCodes.includes(request.reasonCode)) throw new Error(`Invalid reason code for ${request.operation}.`);
   const expectedPrefix = `issue-${request.issue}-${request.operation.replace(/[._]/gu, "-")}-`;
   if (!request.requestId.startsWith(expectedPrefix)) throw new Error("Operation requestId does not match its Issue and operation.");
   const inputs = definition.inputs.parse(request.inputs);
   if ("issue" in inputs && inputs.issue !== request.issue) {
     throw new Error("Operation request Issue does not match operation inputs.");
   }
+  const authorization = resolveExternalAuthorization(contract, { ...request, inputs });
+  const currentProtectedAuthority = loadProtectedAuthority(root, protectedAuthorityRef);
+  let protectedMergeBase;
+  try {
+    protectedMergeBase = runGit(root, ["merge-base", currentProtectedAuthority.commitSha, contract.authority.commitSha]).trim();
+  } catch {
+    throw new Error("Operation request authority commit is not reachable from the protected base ref.");
+  }
+  if (protectedMergeBase !== contract.authority.commitSha) {
+    throw new Error("Operation request authority commit is not reachable from the protected base ref.");
+  }
+  const protectedAuthority = contract.authority.commitSha === currentProtectedAuthority.commitSha
+    ? currentProtectedAuthority
+    : loadProtectedAuthority(root, contract.authority.commitSha);
+  if (protectedAuthority.commitSha !== contract.authority.commitSha || protectedAuthority.digest !== contract.authority.digest) {
+    throw new Error("Operation request protected authority snapshot does not match the frozen Issue contract.");
+  }
+  const serviceUse = authorizeServiceUse(protectedAuthority.authority, {
+    service: definition.service,
+    operation: request.operation,
+    purposeCode: authorization.purposeCode,
+    explicitUserPurpose: authorization.purposeCode === "user-directed" ? authorization.purpose : null,
+  });
+  if (!serviceUse.targetRef) throw new Error(`Protected authority target ${definition.service} is not configured.`);
   return {
     ...request,
     inputs,
-    resolvedTarget: resolveOwnershipTarget(root, definition.targetIdentifier),
+    authorization,
+    authority: contract.authority,
+    resolvedAccountRef: serviceUse.accountRef,
+    resolvedTargetRef: serviceUse.targetRef,
+    resolvedTarget: resolveOwnershipTarget(protectedAuthority.authority, definition.service),
     expectedEvidence: definition.evidence,
   };
 }
@@ -948,11 +1131,63 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   await mkdir(path.join(root, "config"), { recursive: true });
   await writeFile(path.join(root, ".gitignore"), ".artifacts/\n", "utf8");
   await writeJson(path.join(root, "config", "ownership.json"), {
-    schemaVersion: 1,
-    github: { owner: fixture.issueContract.repository.split("/")[0], repository: fixture.issueContract.repository.split("/")[1] },
-    supabase: { organizationName: "fixture", projectRef: null },
-    vercel: { scope: null, projectId: null },
-    cloudflare: { accountName: "fixture", zoneId: null, domains: [] },
+    schemaVersion: 2,
+    authorization: {
+      operatorLabels: ["codex", "claude"],
+      externalOperatorRoles: ["implementer", "external-operator"],
+      allowAutomaticAccountSwitch: false,
+    },
+    accounts: {
+      github: { login: "fixture", userId: 1, nodeId: "fixture-user" },
+      supabase: { organizationName: "fixture", organizationId: "abcdefghijklmnopqrst" },
+      vercel: { teamName: "fixture", teamSlug: "fixture", teamId: "team_fixture", requiredPlan: "Hobby" },
+      cloudflare: {
+        accountName: "fixture",
+        accountId: "1".repeat(32),
+        loginEmailHint: "f***@example.invalid",
+        loginEmailSha256: "2".repeat(64),
+        requiredRole: "Super Administrator",
+        allowedZonePlans: ["Free"],
+      },
+      linear: {
+        workspaceName: "fixture",
+        workspaceSlug: "fixture",
+        workspaceUrl: "https://linear.app/fixture",
+        workspaceId: null,
+        userName: "fixture",
+        userEmailHint: "f***@example.invalid",
+        userEmailSha256: "3".repeat(64),
+        userId: null,
+        requiredRole: "Admin",
+      },
+    },
+    servicePolicies: {
+      github: { mode: "repository-active" },
+      supabase: { mode: "repository-active" },
+      vercel: { mode: "repository-active" },
+      cloudflare: { mode: "repository-active" },
+      linear: { mode: "explicit-user-purpose-only" },
+    },
+    resourceTargets: {
+      github: {
+        owner: fixture.issueContract.repository.split("/")[0],
+        repository: fixture.issueContract.repository.split("/")[1],
+        repositoryId: 1,
+        repositoryNodeId: "fixture-repository",
+      },
+      supabase: { projectRef: "abcdefghijklmnopqrst" },
+      vercel: { projectId: "prj_fixture" },
+      cloudflare: { zoneId: "4".repeat(32), domains: ["fixture.example.com"] },
+      linear: { teamKey: "FIX", teamId: null },
+    },
+    observations: {
+      github: {
+        displayName: "Fixture",
+        createdAt: "2020-01-01T00:00:00Z",
+        publicRepositories: 1,
+        observedAt: fixture.fetchedAt,
+      },
+    },
   });
   await writeFile(path.join(root, "README.md"), "# Workflow fixture\n", "utf8");
   runGit(root, ["init", "--initial-branch=main"]);
@@ -971,7 +1206,8 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   runGit(root, ["commit", "-m", "fixture verified change"]);
   const headSha = runGit(root, ["rev-parse", "HEAD"]).trim();
 
-  const contract = snapshotIssueContract(fixture.issueContract, fixture.fetchedAt);
+  const protectedAuthority = loadProtectedAuthority(root, protectedAuthorityRef);
+  const contract = snapshotIssueContract(fixture.issueContract, fixture.fetchedAt, protectedAuthority);
   const issueRootRelative = path.join(".artifacts", "issues", String(contract.issue));
   const headRootRelative = path.join(issueRootRelative, headSha);
   const issueRoot = path.resolve(root, issueRootRelative);

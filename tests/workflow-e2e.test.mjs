@@ -27,6 +27,12 @@ describe("provider-free Issue workflow simulation", () => {
       operation: "github.merge_pr",
       inputs: { issue: 42, method: "squash", headSha: result.headSha },
       resolvedTarget: "yuto1201/Web-Template",
+      authorization: {
+        purposeCode: "reviewed-release",
+        accountRef: "accounts.github",
+        targetRef: "resourceTargets.github",
+        requiresExactHead: true,
+      },
     });
 
     expect(Object.keys(result.paths)).toHaveLength(7);

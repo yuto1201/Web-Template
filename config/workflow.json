@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "artifactRoot": ".artifacts",
   "baseRef": "main",
   "reviewerMap": { "codex": "claude", "claude": "codex" },
