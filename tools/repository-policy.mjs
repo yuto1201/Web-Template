@@ -7,6 +7,8 @@ import { parseAuthority, readAuthority } from "./authority-core.mjs";
 const modulePath = fileURLToPath(import.meta.url);
 const defaultRoot = path.resolve(path.dirname(modulePath), "..");
 const requiredFiles = [
+  ".claude/agents/change-evaluator.md",
+  ".claude/agents/supabase-auditor.md",
   ".claude/settings.json",
   ".codex/agents/change-evaluator.toml",
   ".codex/agents/supabase-auditor.toml",
@@ -30,6 +32,10 @@ const requiredFiles = [
   "docs/activation.md",
   "docs/onboarding-macos.md",
   "docs/workflow.md",
+  "specs/account-bound-authority.md",
+  "tools/authority-core.mjs",
+  "tools/completion-audit.mjs",
+  "tools/generate-agent-wrappers.mjs",
   "tools/issue-workflow.mjs",
   "tools/github-review-gate.mjs",
   "tools/workstation-doctor.mjs",
@@ -41,7 +47,9 @@ const requiredFiles = [
   "tools/domain-workflow.mjs",
   "tools/workflow-core.mjs",
   "specs/acceptance.md",
+  "tests/authority-core.test.mjs",
   "tests/domain-workflow.test.mjs",
+  "tests/operator-parity.test.mjs",
   "tests/workstation-doctor.test.mjs",
 ];
 const secretPatterns = [
@@ -54,6 +62,49 @@ const secretPatterns = [
   /(?:SERVICE_ROLE|SUPABASE_SERVICE_ROLE_KEY)\s*[:=]\s*["']?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/iu,
   /\bv1\.0-[A-Za-z0-9_-]{40,}\b/u,
 ];
+
+const actorSpecificPolicyPatterns = [
+  /guard-claude-tool\.mjs/u,
+  /(?:must be delegated to Codex|Claude may perform local implementation only|Codex-owned policy|Claude shell execution is disabled)/u,
+];
+
+/**
+ * @param {{
+ *   claudeSettings: Record<string, unknown>,
+ *   generatorSource: string,
+ *   generatedAssets: Map<string, string>,
+ * }} input
+ */
+export function operatorParityErrors({ claudeSettings, generatorSource, generatedAssets }) {
+  const errors = [];
+  const permissions = claudeSettings.permissions && typeof claudeSettings.permissions === "object"
+    ? claudeSettings.permissions
+    : {};
+  const hooks = claudeSettings.hooks && typeof claudeSettings.hooks === "object"
+    ? claudeSettings.hooks
+    : {};
+  if (Array.isArray(permissions.deny) && permissions.deny.length > 0) {
+    errors.push("Claude project settings must not contain model-specific deny rules.");
+  }
+  if (Array.isArray(hooks.PreToolUse) && hooks.PreToolUse.length > 0) {
+    errors.push("Claude project settings must not contain a PreToolUse policy hook.");
+  }
+
+  const sources = new Map([
+    [".claude/settings.json", JSON.stringify(claudeSettings)],
+    ["tools/generate-agent-wrappers.mjs", generatorSource],
+    ...generatedAssets,
+  ]);
+  for (const [relativePath, content] of sources) {
+    if (actorSpecificPolicyPatterns[0].test(content)) {
+      errors.push(`Operator parity policy still references the retired Claude guard in ${relativePath}.`);
+    }
+    if (actorSpecificPolicyPatterns[1].test(content)) {
+      errors.push(`Operator parity policy still contains actor-specific delegation or ownership wording in ${relativePath}.`);
+    }
+  }
+  return errors;
+}
 
 /** @param {unknown} value @returns {unknown} */
 function canonical(value) {
@@ -283,22 +334,22 @@ export async function validateRepository(root = defaultRoot) {
     errors.push(".gitignore must ignore .artifacts/ domain evidence.");
   }
 
-  const claudeSettings = JSON.parse(
-    await readFile(path.join(root, ".claude", "settings.json"), "utf8"),
-  );
-  if (!claudeSettings.permissions?.deny?.includes("Bash")) {
-    errors.push("Claude project settings must deny Bash.");
+  const claudeSettings = JSON.parse(await readFile(path.join(root, ".claude", "settings.json"), "utf8"));
+  const generatorSource = await readFile(path.join(root, "tools", "generate-agent-wrappers.mjs"), "utf8");
+  const generatedAssets = new Map([
+    ["CLAUDE.md", await readFile(path.join(root, "CLAUDE.md"), "utf8")],
+  ]);
+  for (const slug of slugs) {
+    generatedAssets.set(
+      `.claude/agents/${slug}.md`,
+      await readFile(path.join(root, ".claude", "agents", `${slug}.md`), "utf8"),
+    );
+    generatedAssets.set(
+      `.codex/agents/${slug}.toml`,
+      await readFile(path.join(root, ".codex", "agents", `${slug}.toml`), "utf8"),
+    );
   }
-  const hookCommand = claudeSettings.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command;
-  if (
-    typeof hookCommand !== "string" ||
-    !hookCommand.includes("CLAUDE_PROJECT_DIR") ||
-    !hookCommand.includes("tools','guard-claude-tool.mjs") ||
-    !hookCommand.includes("process.exit(2)") ||
-    !hookCommand.includes("module.runCli()")
-  ) {
-    errors.push("Claude PreToolUse must locate the guard from the project root and fail closed.");
-  }
+  errors.push(...operatorParityErrors({ claudeSettings, generatorSource, generatedAssets }));
 
   for (const relative of collectTrackedFiles(root)) {
     const normalized = relative.toLowerCase();

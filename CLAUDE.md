@@ -4,6 +4,6 @@
 
 Read and follow `AGENTS.md` as the canonical repository instruction file.
 
-Claude may perform local implementation only when explicitly assigned. All authenticated external operations, including GitHub, Supabase, Vercel, Cloudflare, DNS, deployments, hosted databases, provider APIs, provider CLIs, and MCP tools, must be delegated to Codex as described in `docs/authority.md`.
+Claude acting in implementer and external-operator roles has the same account-bound authority as Codex. Repository-approved authenticated operations must follow the shared authority, frozen Issue authorization, exact-target, receipt, and review gates described in `AGENTS.md` and `docs/authority.md`.
 
-Start every Claude Code session from the repository root so the committed project settings and hooks are loaded. Stop if `.claude/settings.json` is not active.
+Authority follows the authenticated personal account and execution role, not the model family. Generated evaluator and auditor roles remain read-only, and model family is used only to preserve independent cross-model review.
