@@ -588,6 +588,41 @@ const acceptanceEvidenceSchema = z.object({
   status: z.enum(["supported", "unsupported"]),
   evidence: z.array(singleLineSchema).min(1),
 }).strict();
+const externalEvidenceReferenceSchema = z.object({
+  reference: relativeFileSchema.refine(
+    (value) => value.startsWith("evidence/external-operations/") && value.endsWith(".json"),
+    "External-operation evidence must use a committed evidence/external-operations/*.json path.",
+  ),
+  digest: digestSchema,
+}).strict();
+const externalChangeEvidenceSchema = z.object({
+  schemaVersion: z.literal(1),
+  service: z.enum(["github", "supabase", "vercel", "cloudflare"]),
+  operation: operationSchema,
+  operatorLabel: operatorLabelSchema,
+  executionRole: externalOperatorRoleSchema,
+  modelFamily: modelFamilySchema,
+  accountRef: z.string().regex(/^accounts\.(?:github|supabase|vercel|cloudflare)$/u),
+  targetRef: z.string().regex(/^resourceTargets\.(?:github|supabase|vercel|cloudflare)$/u),
+  serviceMode: z.literal("repository-active"),
+  exactHeadSha: shaSchema,
+  request: externalEvidenceReferenceSchema,
+  preflight: externalEvidenceReferenceSchema.extend({ receiptId: receiptIdSchema }).strict(),
+  claim: externalEvidenceReferenceSchema.extend({ observationDigest: digestSchema }).strict(),
+  mutation: externalEvidenceReferenceSchema.extend({ idempotencyKeyDigest: digestSchema }).strict(),
+  result: externalEvidenceReferenceSchema.extend({ receiptId: receiptIdSchema }).strict(),
+  finalized: externalEvidenceReferenceSchema,
+  outcome: z.enum(["succeeded", "failed", "ambiguous"]),
+}).strict().superRefine((change, context) => {
+  if (change.preflight.receiptId !== change.result.receiptId) {
+    context.addIssue({ code: "custom", path: ["result", "receiptId"], message: "External change result must link to the preflight receipt ID." });
+  }
+  const references = [change.request, change.preflight, change.claim, change.mutation, change.result, change.finalized]
+    .map(({ reference }) => reference);
+  if (new Set(references).size !== references.length) {
+    context.addIssue({ code: "custom", message: "External change lifecycle references must be unique." });
+  }
+});
 const verificationSchema = z.object({
   schemaVersion: z.literal(1),
   issue: z.number().int().positive(),
@@ -601,7 +636,7 @@ const verificationSchema = z.object({
     summary: singleLineSchema,
   }).strict()).min(1),
   acceptanceEvidence: z.array(acceptanceEvidenceSchema).min(1),
-  externalChanges: z.array(singleLineSchema),
+  externalChanges: z.array(externalChangeEvidenceSchema),
   remainingWork: z.array(singleLineSchema),
   completedAt: timestampSchema,
 }).strict();
@@ -1451,6 +1486,72 @@ function checkExactAcceptanceMappings(ids, mappings, label) {
   for (const [id, count] of counts) if (count !== 1) throw new Error(`${label} must map ${id} exactly once.`);
 }
 
+/** @param {string} root @param {string} headShaValue @param {string} reference */
+function loadCommittedExternalEvidence(root, headShaValue, reference) {
+  let value;
+  try {
+    value = JSON.parse(runGit(root, ["show", `${headShaValue}:${reference}`]));
+  } catch {
+    throw new Error(`External change lifecycle reference is not valid committed JSON: ${reference}`);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`External change lifecycle artifact must be a JSON object: ${reference}`);
+  }
+  if (rawEmailTrail(value)) throw new Error(`External change lifecycle artifact contains a raw email: ${reference}`);
+  return /** @type {Record<string, any>} */ (value);
+}
+
+/** @param {any[]} changes @param {any} contract @param {any} packet @param {string} currentHeadSha @param {string} root */
+function validateExternalChangeLifecycle(changes, contract, packet, currentHeadSha, root) {
+  const declaredEvidencePaths = packet.changedPaths.filter((candidate) => candidate.startsWith("evidence/external-operations/"));
+  if (changes.length === 0) {
+    if (declaredEvidencePaths.length > 0) {
+      throw new Error("Committed external-operation artifacts require structured external change lifecycle evidence.");
+    }
+    return;
+  }
+  const referencedPaths = new Set();
+  for (const change of changes) {
+    const definition = operationDefinitions[change.operation];
+    const authorization = contract.externalAuthorizations.find(({ operation }) => operation === change.operation);
+    if (!authorization) throw new Error(`External change operation ${change.operation} is absent from the frozen Issue contract.`);
+    if (change.service !== definition.service || change.accountRef !== authorization.accountRef || change.targetRef !== authorization.targetRef) {
+      throw new Error(`External change ${change.operation} does not match its frozen service/account/target authorization.`);
+    }
+    if (change.serviceMode !== "repository-active") throw new Error("External change service mode is not executable.");
+    if (change.exactHeadSha !== currentHeadSha) throw new Error("External change exact Head SHA is stale.");
+    if (change.operatorLabel !== packet.primaryOperatorLabel || change.modelFamily !== packet.primaryModelFamily) {
+      throw new Error("External change operator/model metadata does not match the reviewed primary implementation.");
+    }
+    const phases = ["request", "preflight", "claim", "mutation", "result", "finalized"];
+    /** @type {Record<string, Record<string, any>>} */
+    const artifacts = {};
+    for (const phase of phases) {
+      const binding = change[phase];
+      if (!packet.changedPaths.includes(binding.reference)) {
+        throw new Error(`External change ${phase} reference is not a committed changed artifact.`);
+      }
+      referencedPaths.add(binding.reference);
+      const artifact = loadCommittedExternalEvidence(root, currentHeadSha, binding.reference);
+      if (digestValue(artifact) !== binding.digest) throw new Error(`External change ${phase} artifact digest mismatch.`);
+      artifacts[phase] = artifact;
+    }
+    if (
+      artifacts.request.operation !== change.operation ||
+      artifacts.request.operatorLabel !== change.operatorLabel ||
+      artifacts.request.executionRole !== change.executionRole
+    ) throw new Error("External change request artifact metadata mismatch.");
+    if (artifacts.preflight.receiptId !== change.preflight.receiptId) throw new Error("External change preflight receipt linkage mismatch.");
+    if (artifacts.claim.observationDigest !== change.claim.observationDigest) throw new Error("External change claim observation digest mismatch.");
+    if (artifacts.mutation.idempotencyKeyDigest !== change.mutation.idempotencyKeyDigest) throw new Error("External change mutation idempotency digest mismatch.");
+    if (artifacts.result.receiptId !== change.result.receiptId) throw new Error("External change result receipt linkage mismatch.");
+    if (artifacts.finalized.outcome !== change.outcome) throw new Error("External change finalized outcome mismatch.");
+  }
+  if (declaredEvidencePaths.some((candidate) => !referencedPaths.has(candidate))) {
+    throw new Error("Committed external-operation artifact is missing from structured lifecycle evidence.");
+  }
+}
+
 /**
  * @param {{currentHeadSha:string, contract:unknown, verification:unknown, packet:unknown, review:unknown, root:string}} input
  */
@@ -1486,6 +1587,7 @@ export function runPremergeGate(input) {
   const ids = contract.acceptanceCriteria.map(({ id }) => id);
   checkExactAcceptanceMappings(ids, verification.acceptanceEvidence, "Verification evidence");
   checkExactAcceptanceMappings(ids, review.acceptanceAssessment, "Review assessment");
+  validateExternalChangeLifecycle(verification.externalChanges, contract, packet, input.currentHeadSha, input.root);
   return {
     ok: true,
     issue: contract.issue,
@@ -1698,7 +1800,7 @@ export function renderPullRequestBody(input) {
   const evidence = verification.acceptanceEvidence.map(({ id, evidence: refs }) => `- ${id}: ${refs.map(safe).join("; ")}`).join("\n");
   const externalChanges = verification.externalChanges.length === 0
     ? "- None."
-    : verification.externalChanges.map((item) => `- ${safe(item)}`).join("\n");
+    : verification.externalChanges.map((item) => `- Operation evidence: ${safe(canonicalJson(item))}`).join("\n");
   const remainingWork = verification.remainingWork.length === 0
     ? "- None for this Issue."
     : verification.remainingWork.map((item) => `- ${safe(item)}`).join("\n");
@@ -1959,4 +2061,5 @@ export const schemas = {
   cleanupPlanSchema,
   preflightReceiptSchema,
   operationResultSchema,
+  externalChangeEvidenceSchema,
 };

@@ -89,6 +89,20 @@ describe("current-Head pre-merge gate", () => {
     expect(() => runPremergeGate({ ...bundle, review: unsupportedReview })).toThrow(/marks AC-1 unsupported/u);
   });
 
+  it("rejects free-form or missing external-operation lifecycle evidence", () => {
+    expect(() => runPremergeGate({
+      ...bundle,
+      verification: { ...bundle.verification, externalChanges: ["deployed manually"] },
+    })).toThrow(/external change|object|lifecycle/iu);
+    expect(() => runPremergeGate({
+      ...bundle,
+      packet: {
+        ...bundle.packet,
+        changedPaths: [...bundle.packet.changedPaths, "evidence/external-operations/merge/result.json"],
+      },
+    })).toThrow(/external change|lifecycle|committed artifact/iu);
+  });
+
   it("rejects evidence for a silently changed Issue contract", () => {
     const changedContract = { ...bundle.contract, goal: "Changed after review." };
     expect(() => runPremergeGate({ ...bundle, contract: changedContract })).toThrow(/digest mismatch/u);

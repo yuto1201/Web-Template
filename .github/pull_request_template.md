@@ -26,7 +26,11 @@ Closes #
 
 ## External changes
 
-- None, or list the exact service, declared purpose, environment, operation, and target.
+- None.
+
+## External-change evidence format
+
+- For each authenticated external change, replace `None` above with one single-line `Operation evidence` JSON object produced from validated committed lifecycle artifacts.
 - Operator label: `codex` or `claude`
 - Execution role: `implementer` or `external-operator`
 - Model family: `gpt` or `claude`

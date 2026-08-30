@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { evaluateGitHubReviewGate } from "../tools/github-review-gate.mjs";
+import { digestValue } from "../tools/workflow-core.mjs";
 
 const headSha = "a".repeat(40);
 const workflow = {
@@ -34,9 +35,10 @@ function reviewBody(override = {}) {
     sha: headSha,
     verdict: "approved",
     contracts: "change-evaluator",
+    external: "- None.",
     ...override,
   };
-  return `Closes #22\n\n## Opposite-model review\n- Primary operator: ${values.primary}\n- Reviewer operator: ${values.reviewer}\n- Primary model family: ${values.primaryFamily}\n- Reviewer model family: ${values.reviewerFamily}\n- Reviewed SHA: \`${values.sha}\`\n- Verdict: ${values.verdict}\n- Contracts: ${values.contracts}\n\n## Remaining work\n- None.\n`;
+  return `Closes #22\n\n## Opposite-model review\n- Primary operator: ${values.primary}\n- Reviewer operator: ${values.reviewer}\n- Primary model family: ${values.primaryFamily}\n- Reviewer model family: ${values.reviewerFamily}\n- Reviewed SHA: \`${values.sha}\`\n- Verdict: ${values.verdict}\n- Contracts: ${values.contracts}\n\n## External changes\n${values.external}\n\n## Remaining work\n- None.\n`;
 }
 
 function event(body = reviewBody()) {
@@ -58,6 +60,42 @@ function dependabotEvent() {
 }
 
 const actionDiff = `diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -1 +1 @@\n-        uses: actions/checkout@v6\n+        uses: actions/checkout@v7\n`;
+
+function externalLifecycle() {
+  const prefix = "evidence/external-operations/merge";
+  const receiptId = "receipt-github-merge-1";
+  const observationDigest = `sha256:${"1".repeat(64)}`;
+  const idempotencyKeyDigest = `sha256:${"2".repeat(64)}`;
+  const artifacts = {
+    [`${prefix}/request.json`]: { operation: "github.merge_pr", operatorLabel: "codex", executionRole: "external-operator" },
+    [`${prefix}/preflight.json`]: { receiptId },
+    [`${prefix}/claim.json`]: { observationDigest },
+    [`${prefix}/mutation.json`]: { idempotencyKeyDigest },
+    [`${prefix}/result.json`]: { receiptId },
+    [`${prefix}/finalized.json`]: { outcome: "succeeded" },
+  };
+  const binding = (name) => ({ reference: `${prefix}/${name}.json`, digest: digestValue(artifacts[`${prefix}/${name}.json`]) });
+  const change = {
+    schemaVersion: 1,
+    service: "github",
+    operation: "github.merge_pr",
+    operatorLabel: "codex",
+    executionRole: "external-operator",
+    modelFamily: "gpt",
+    accountRef: "accounts.github",
+    targetRef: "resourceTargets.github",
+    serviceMode: "repository-active",
+    exactHeadSha: headSha,
+    request: binding("request"),
+    preflight: { ...binding("preflight"), receiptId },
+    claim: { ...binding("claim"), observationDigest },
+    mutation: { ...binding("mutation"), idempotencyKeyDigest },
+    result: { ...binding("result"), receiptId },
+    finalized: binding("finalized"),
+    outcome: "succeeded",
+  };
+  return { artifacts, change };
+}
 
 describe("GitHub exact-Head review gate", () => {
   it("accepts exact opposite-model evidence rendered in the PR body", () => {
@@ -82,6 +120,43 @@ describe("GitHub exact-Head review gate", () => {
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody({ reviewerFamily: "gpt" })), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/opposite model family|model family/u);
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody({ verdict: "changes-requested" })), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/approved/u);
     expect(() => evaluateGitHubReviewGate({ event: event(), changedPaths: ["supabase/migrations/001.sql"], diff: "", workflow })).toThrow(/supabase-auditor/u);
+  });
+
+  it("rejects missing lifecycle evidence in the real PR-body gate", () => {
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: '- Operation evidence: {"operation":"github.merge_pr"}' })),
+      changedPaths: ["README.md"],
+      diff: "",
+      workflow,
+    })).toThrow(/lifecycle|external change|operation evidence/iu);
+    expect(() => evaluateGitHubReviewGate({
+      event: event(),
+      changedPaths: ["evidence/external-operations/merge/result.json"],
+      diff: "",
+      workflow,
+    })).toThrow(/missing.*external|lifecycle|committed artifact/iu);
+  });
+
+  it("validates structured lifecycle evidence against committed artifact contents", () => {
+    const { artifacts, change } = externalLifecycle();
+    const result = evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(change)}` })),
+      changedPaths: Object.keys(artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => artifacts[reference],
+    });
+    expect(result).toMatchObject({ ok: true, externalChanges: 1 });
+
+    const tampered = structuredClone(change);
+    tampered.result.digest = `sha256:${"9".repeat(64)}`;
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(tampered)}` })),
+      changedPaths: Object.keys(artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => artifacts[reference],
+    })).toThrow(/result artifact digest mismatch/iu);
   });
 
   it("accepts only a same-repository Dependabot GitHub Actions version-only diff", () => {
