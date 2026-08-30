@@ -17,6 +17,7 @@ import {
   parseAuthority,
 } from "./authority-core.mjs";
 import { createGitHubCliProviderClient } from "./github-cli-provider-client.mjs";
+import { operationModelFamily } from "./execution-policy.mjs";
 
 const readOnlyOperations = new Set([
   "github.read_issue",
@@ -162,6 +163,9 @@ function executeGuardedProviderOperation(configuration) {
       const modelFamily = input.modelFamily;
       if (isWrite && !["gpt", "claude", "cursor", "xai"].includes(/** @type {string} */ (modelFamily))) {
         throw new Error("Write execution requires an explicit recognized model family for review evidence.");
+      }
+      if (isWrite && loaded.gate && operationModelFamily(loaded.gate.primaryModelFamily) !== modelFamily) {
+        throw new Error("Write execution model family does not match the authoritative review gate.");
       }
       const executionHeadSha = git(input.root, ["rev-parse", "HEAD"]);
       if (isWrite && providerClient.idempotencyMode(request.operation) !== "provider-enforced") {

@@ -275,6 +275,30 @@ describe("provider-specific guarded adapters", () => {
     expect(client.executionCount()).toBe(0);
   }, 15_000);
 
+  it("binds the provider execution to the authoritative primary surface, operator, and model", async () => {
+    const surfaceFixture = await repositoryFixture();
+    const surfacePath = path.join(surfaceFixture.root, surfaceFixture.simulated.paths.mergeRequest);
+    const wrongSurface = JSON.parse(await readFile(surfacePath, "utf8"));
+    wrongSurface.executionSurface = "claude-local";
+    await writeFile(surfacePath, `${JSON.stringify(wrongSurface, null, 2)}\n`, "utf8");
+    const surfaceClient = githubClient(surfaceFixture.authority);
+    await expect(createTestGitHubGuardedAdapter({ providerClient: surfaceClient, clock: clock() }).execute({
+      root: surfaceFixture.root,
+      requestPath: surfacePath,
+      modelFamily: "gpt",
+    })).rejects.toThrow(/execution surface.*authoritative review gate/iu);
+    expect(surfaceClient.executionCount()).toBe(0);
+
+    const modelFixture = await repositoryFixture();
+    const modelClient = githubClient(modelFixture.authority);
+    await expect(createTestGitHubGuardedAdapter({ providerClient: modelClient, clock: clock() }).execute({
+      root: modelFixture.root,
+      requestPath: modelFixture.simulated.paths.mergeRequest,
+      modelFamily: "claude",
+    })).rejects.toThrow(/model family.*authoritative review gate/iu);
+    expect(modelClient.executionCount()).toBe(0);
+  }, 20_000);
+
   it("rejects an account or live PR Head switch immediately before mutation", async () => {
     const { root, simulated, authority } = await repositoryFixture();
     const switchedClient = githubClient(authority, { switchAtClaim: true });

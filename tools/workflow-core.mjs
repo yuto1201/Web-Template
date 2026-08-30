@@ -1487,9 +1487,16 @@ export async function readExternalOperationRequest(root, requestPath) {
   const request = validateExternalOperationRequest(JSON.parse(await readFile(actual, "utf8")), root);
   let gate = null;
   if (requiresAuthoritativeHead(request.operation)) {
-    gate = await runAuthoritativePremergeGate(root, request.issue);
+    const authoritativeInput = await loadAuthoritativeGateInput(root, request.issue);
+    gate = runPremergeGate(authoritativeInput);
     if ("headSha" in request.inputs && request.inputs.headSha !== gate.headSha) {
       throw new Error("External operation Head SHA does not match the authoritative review gate.");
+    }
+    if (request.executionSurface !== authoritativeInput.verification.executionSurface) {
+      throw new Error("External operation execution surface does not match the authoritative review gate.");
+    }
+    if (request.operatorLabel !== authoritativeInput.verification.primaryOperatorLabel) {
+      throw new Error("External operation operator label does not match the authoritative review gate.");
     }
   }
   return {
@@ -2045,6 +2052,9 @@ export function runPremergeGate(input) {
     issue: contract.issue,
     headSha: input.currentHeadSha,
     contractDigest: contract.digest,
+    executionSurface: packet.executionSurface,
+    primaryOperatorLabel: packet.primaryOperatorLabel,
+    primaryModelFamily: packet.primaryModel.family,
     risk: packet.risk,
     reviewers: reviews.map(({ reviewerModel, reviewedAt }) => ({ family: reviewerModel.family, reviewedAt })),
   };
