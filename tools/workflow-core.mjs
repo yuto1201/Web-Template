@@ -393,36 +393,115 @@ const operationResultSchema = receiptBindingSchema.extend({
 const operationSuccessEvidenceSchemas = {
   "github.read_issue": z.object({ issue: z.number().int().positive(), state: z.enum(["OPEN", "CLOSED"]), updatedAt: timestampSchema }).strict(),
   "github.push_branch": z.object({ branch: branchSchema, headSha: shaSchema }).strict(),
-  "github.create_pr": z.object({ prNumber: z.number().int().positive(), headSha: shaSchema, state: z.literal("OPEN") }).strict(),
+  "github.create_pr": z.object({
+    issue: z.number().int().positive(),
+    branch: branchSchema,
+    baseBranch: z.literal("main"),
+    headSha: shaSchema,
+    prNumber: z.number().int().positive(),
+    state: z.literal("OPEN"),
+  }).strict(),
   "github.merge_pr": z.object({
+    issue: z.number().int().positive(),
     prNumber: z.number().int().positive(),
     headSha: shaSchema,
+    method: z.literal("squash"),
     mergeCommitSha: shaSchema,
     issueClosed: z.literal(true),
   }).strict(),
-  "github.delete_branch": z.object({ branch: branchSchema, deleted: z.literal(true) }).strict(),
+  "github.delete_branch": z.object({
+    branch: branchSchema,
+    mergedPrNumber: z.number().int().positive(),
+    headSha: shaSchema,
+    deleted: z.literal(true),
+  }).strict(),
   "github.update_ruleset": z.object({
+    issue: z.number().int().positive(),
+    rulesetName: z.literal("main exact-Head review"),
+    targetBranch: z.literal("main"),
     rulesetId: z.number().int().positive(),
     enforcement: z.literal("active"),
     requiredCheckName: z.literal("Exact Head review policy"),
   }).strict(),
-  "supabase.inspect_project": z.object({ projectRefDigest: digestSchema, status: z.literal("reachable") }).strict(),
+  "supabase.inspect_project": z.object({
+    projectRefSource: z.literal("config/ownership.json"),
+    projectRefDigest: digestSchema,
+    status: z.literal("reachable"),
+  }).strict(),
   "supabase.apply_migrations": z.object({
+    projectRefSource: z.literal("config/ownership.json"),
     projectRefDigest: digestSchema,
     appliedMigrations: operationDefinitions["supabase.apply_migrations"].inputs.shape.migrations,
   }).strict(),
-  "vercel.inspect_project": z.object({ projectIdDigest: digestSchema, status: z.literal("reachable") }).strict(),
-  "vercel.deploy_preview": z.object({ deploymentId: singleLineSchema, projectIdDigest: digestSchema, headSha: shaSchema, environment: z.literal("preview") }).strict(),
-  "vercel.deploy_production": z.object({ deploymentId: singleLineSchema, projectIdDigest: digestSchema, headSha: shaSchema, environment: z.literal("production") }).strict(),
-  "cloudflare.inspect_zone": z.object({ zoneIdDigest: digestSchema, zonePlan: z.enum(["Free", "Pro", "Business", "Enterprise"]), recordSetDigest: digestSchema }).strict(),
+  "vercel.inspect_project": z.object({
+    projectSource: z.literal("config/ownership.json"),
+    projectIdDigest: digestSchema,
+    status: z.literal("reachable"),
+  }).strict(),
+  "vercel.deploy_preview": z.object({
+    projectSource: z.literal("config/ownership.json"),
+    deploymentId: singleLineSchema,
+    projectIdDigest: digestSchema,
+    headSha: shaSchema,
+    environment: z.literal("preview"),
+  }).strict(),
+  "vercel.deploy_production": z.object({
+    projectSource: z.literal("config/ownership.json"),
+    deploymentId: singleLineSchema,
+    projectIdDigest: digestSchema,
+    headSha: shaSchema,
+    environment: z.literal("production"),
+  }).strict(),
+  "cloudflare.inspect_zone": z.object({
+    zoneSource: z.literal("config/ownership.json"),
+    zoneIdDigest: digestSchema,
+    zonePlan: z.enum(["Free", "Pro", "Business", "Enterprise"]),
+    recordSetDigest: digestSchema,
+  }).strict(),
   "cloudflare.upsert_dns": z.object({
+    zoneSource: z.literal("config/ownership.json"),
     recordId: singleLineSchema,
     zoneIdDigest: digestSchema,
     recordName: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.recordName,
     recordType: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.recordType,
+    target: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.target,
     proxied: z.literal(false),
   }).strict(),
 };
+
+const operationResultInputBindings = {
+  "github.read_issue": [["issue", "issue", "Issue"]],
+  "github.push_branch": [["branch", "branch", "branch"], ["headSha", "headSha", "Head SHA"]],
+  "github.create_pr": [["issue", "issue", "Issue"], ["branch", "branch", "branch"], ["baseBranch", "baseBranch", "base branch"], ["headSha", "headSha", "Head SHA"]],
+  "github.merge_pr": [["issue", "issue", "Issue"], ["prNumber", "prNumber", "PR number"], ["headSha", "headSha", "Head SHA"], ["method", "method", "merge method"]],
+  "github.delete_branch": [["branch", "branch", "branch"], ["mergedPrNumber", "mergedPrNumber", "merged PR number"], ["headSha", "headSha", "Head SHA"]],
+  "github.update_ruleset": [["issue", "issue", "Issue"], ["rulesetName", "rulesetName", "ruleset name"], ["targetBranch", "targetBranch", "target branch"], ["requiredCheckName", "requiredCheckName", "required check"], ["enforcement", "enforcement", "ruleset enforcement"]],
+  "supabase.inspect_project": [["projectRefSource", "projectRefSource", "Supabase project source"]],
+  "supabase.apply_migrations": [["projectRefSource", "projectRefSource", "Supabase project source"], ["migrations", "appliedMigrations", "migration list"]],
+  "vercel.inspect_project": [["projectSource", "projectSource", "Vercel project source"]],
+  "vercel.deploy_preview": [["projectSource", "projectSource", "Vercel project source"], ["headSha", "headSha", "Head SHA"]],
+  "vercel.deploy_production": [["projectSource", "projectSource", "Vercel project source"], ["headSha", "headSha", "Head SHA"]],
+  "cloudflare.inspect_zone": [["zoneSource", "zoneSource", "Cloudflare zone source"]],
+  "cloudflare.upsert_dns": [["zoneSource", "zoneSource", "Cloudflare zone source"], ["recordName", "recordName", "DNS record name"], ["recordType", "recordType", "DNS record type"], ["target", "target", "DNS target"], ["proxied", "proxied", "DNS proxy mode"]],
+};
+
+const operationTargetDigestBindings = {
+  "supabase.inspect_project": ["projectRefDigest", "Supabase project reference"],
+  "supabase.apply_migrations": ["projectRefDigest", "Supabase project reference"],
+  "vercel.inspect_project": ["projectIdDigest", "Vercel project reference"],
+  "vercel.deploy_preview": ["projectIdDigest", "Vercel project reference"],
+  "vercel.deploy_production": ["projectIdDigest", "Vercel project reference"],
+  "cloudflare.inspect_zone": ["zoneIdDigest", "Cloudflare zone reference"],
+  "cloudflare.upsert_dns": ["zoneIdDigest", "Cloudflare zone reference"],
+};
+
+for (const operation of operationNames) {
+  const inputFields = Object.keys(operationDefinitions[operation].inputs.shape).sort();
+  const boundFields = operationResultInputBindings[operation].map(([inputField]) => inputField).sort();
+  if (canonicalJson(inputFields) !== canonicalJson(boundFields)) {
+    throw new Error(`Operation ${operation} result binding does not enumerate every frozen mutation input.`);
+  }
+}
 
 const acceptanceEvidenceSchema = z.object({
   id: acceptanceIdSchema,
@@ -999,42 +1078,40 @@ function operationOutcomeSchema(operation) {
 
 /** @param {string} operation @param {Record<string, any>} evidence @param {Record<string, any>} inputs @param {string} targetRef @param {unknown} postTarget */
 function validateOperationSuccessEvidence(operation, evidence, inputs, targetRef, postTarget) {
-  const checks = [];
-  const targetRefDigest = digestValue(targetRef);
-  if (operation === "github.read_issue") checks.push([evidence.issue, inputs.issue, "Issue"]);
-  if (operation === "github.push_branch") checks.push([evidence.branch, inputs.branch, "branch"], [evidence.headSha, inputs.headSha, "Head SHA"]);
-  if (operation === "github.create_pr") checks.push([evidence.headSha, inputs.headSha, "Head SHA"]);
-  if (operation === "github.merge_pr") checks.push([evidence.prNumber, inputs.prNumber, "PR number"], [evidence.headSha, inputs.headSha, "Head SHA"]);
-  if (operation === "github.delete_branch") checks.push([evidence.branch, inputs.branch, "branch"]);
-  if (operation === "github.update_ruleset") {
-    checks.push([evidence.enforcement, inputs.enforcement, "ruleset enforcement"], [evidence.requiredCheckName, inputs.requiredCheckName, "required check"]);
-  }
-  if (operation === "supabase.inspect_project" || operation === "supabase.apply_migrations") {
-    checks.push([evidence.projectRefDigest, targetRefDigest, "Supabase project reference"]);
-  }
-  if (operation === "supabase.apply_migrations") checks.push([canonicalJson(evidence.appliedMigrations), canonicalJson(inputs.migrations), "migration list"]);
-  if (operation === "vercel.inspect_project" || operation === "vercel.deploy_preview" || operation === "vercel.deploy_production") {
-    checks.push([evidence.projectIdDigest, targetRefDigest, "Vercel project reference"]);
-  }
-  if (operation === "vercel.deploy_preview" || operation === "vercel.deploy_production") {
-    checks.push([evidence.headSha, inputs.headSha, "Head SHA"]);
-  }
-  if (operation === "cloudflare.upsert_dns") {
-    checks.push(
-      [evidence.recordName, inputs.recordName, "DNS record name"],
-      [evidence.recordType, inputs.recordType, "DNS record type"],
-      [evidence.proxied, inputs.proxied, "DNS proxy mode"],
-    );
-  }
-  if (operation === "cloudflare.inspect_zone" || operation === "cloudflare.upsert_dns") {
-    checks.push([evidence.zoneIdDigest, targetRefDigest, "Cloudflare zone reference"]);
-  }
+  const checks = operationResultInputBindings[operation].map(([inputField, evidenceField, label]) => [
+    canonicalJson(evidence[evidenceField]),
+    canonicalJson(inputs[inputField]),
+    label,
+  ]);
+  const targetBinding = operationTargetDigestBindings[operation];
+  if (targetBinding) checks.push([evidence[targetBinding[0]], digestValue(targetRef), targetBinding[1]]);
   if (operation === "cloudflare.inspect_zone" && postTarget && typeof postTarget === "object") {
     checks.push([evidence.zonePlan, postTarget.zonePlan, "Cloudflare zone plan"]);
   }
   for (const [actual, expected, label] of checks) {
     if (actual !== expected) throw new Error(`Operation result ${label} does not match the frozen mutation request.`);
   }
+}
+
+/**
+ * Validates only operation-specific, redacted result evidence. Full result callers still validate
+ * authority, request, claim, and observation continuity through validateOperationResult.
+ * @param {unknown} operationValue @param {unknown} outcomeValue @param {unknown} contextValue
+ */
+export function validateOperationResultEvidence(operationValue, outcomeValue, contextValue) {
+  const operation = operationSchema.parse(operationValue);
+  if (!contextValue || typeof contextValue !== "object") throw new Error("Operation result evidence context is required.");
+  const context = /** @type {Record<string, any>} */ (contextValue);
+  const inputs = operationDefinitions[operation].inputs.parse(context.inputs);
+  const targetRef = z.string().min(1).parse(context.targetRef);
+  const outcome = operationOutcomeSchema(operation).parse(outcomeValue);
+  if (outcome.evidenceDigest !== digestValue(outcome.evidence)) {
+    throw new Error("Operation result evidence digest does not match the validated redacted evidence.");
+  }
+  if (outcome.status === "succeeded") {
+    validateOperationSuccessEvidence(operation, outcome.evidence, inputs, targetRef, context.postTarget);
+  }
+  return outcome;
 }
 
 /** @param {unknown} value @param {unknown} contextValue */
@@ -1070,19 +1147,11 @@ export function validateOperationResult(value, contextValue) {
   }
   if (digestValue(identity.accountRef) !== claim.accountRefDigest) throw new Error("Result account reference does not match preflight.");
   if (digestValue(identity.targetRef) !== claim.targetRefDigest) throw new Error("Result target reference does not match preflight.");
-  const outcome = operationOutcomeSchema(context.request.operation).parse(result.outcome);
-  if (outcome.evidenceDigest !== digestValue(outcome.evidence)) {
-    throw new Error("Operation result evidence digest does not match the validated redacted evidence.");
-  }
-  if (outcome.status === "succeeded") {
-    validateOperationSuccessEvidence(
-      context.request.operation,
-      outcome.evidence,
-      context.request.inputs,
-      context.validatedRequest.resolvedTargetRef,
-      result.postflight.targetObservation,
-    );
-  }
+  const outcome = validateOperationResultEvidence(context.request.operation, result.outcome, {
+    inputs: context.request.inputs,
+    targetRef: context.validatedRequest.resolvedTargetRef,
+    postTarget: result.postflight.targetObservation,
+  });
   const validated = {
     ok: true,
     consumed: true,

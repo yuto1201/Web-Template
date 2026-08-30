@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -57,7 +57,7 @@ async function prepareReceiptFixture(prefix) {
   return { root, requestPath, request, observation, receipt, receiptPath };
 }
 
-describe("provider-free Issue workflow simulation", () => {
+describe("provider-free Issue workflow simulation", { timeout: 20_000 }, () => {
   it("runs from claim through an approved squash-merge request", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "web-template-e2e-"));
     const command = spawnSync(process.execPath, [
@@ -138,6 +138,12 @@ describe("provider-free Issue workflow simulation", () => {
 
     const validatedPath = path.join(root, ".artifacts", "ops-receipts", "receipts", `${receipt.receiptId}.validated.json`);
     expect((await stat(validatedPath)).mode & 0o777).toBe(0o600);
+    expect((await stat(path.dirname(validatedPath))).mode & 0o777).toBe(0o700);
+    expect((await stat(path.join(root, ".artifacts", "ops-receipts"))).mode & 0o777).toBe(0o700);
+    if (typeof process.getuid === "function") {
+      expect((await stat(validatedPath)).uid).toBe(process.getuid());
+      expect((await stat(path.dirname(validatedPath))).uid).toBe(process.getuid());
+    }
 
     const claimArgs = [
       "claim-execution",
@@ -181,8 +187,10 @@ describe("provider-free Issue workflow simulation", () => {
     expect(secondClaim.stderr).toMatch(/mutation.*already.*claimed|retry.*forbidden/u);
 
     const evidence = {
+      issue: request.inputs.issue,
       prNumber: request.inputs.prNumber,
       headSha: request.inputs.headSha,
+      method: request.inputs.method,
       mergeCommitSha: "7".repeat(40),
       issueClosed: true,
     };
@@ -251,6 +259,8 @@ describe("provider-free Issue workflow simulation", () => {
     await writeFile(outsideState, "sentinel\n", "utf8");
     const receiptsDirectory = path.join(root, ".artifacts", "ops-receipts", "receipts");
     await mkdir(receiptsDirectory, { recursive: true });
+    await chmod(path.join(root, ".artifacts", "ops-receipts"), 0o700);
+    await chmod(receiptsDirectory, 0o700);
     await symlink(outsideState, path.join(receiptsDirectory, `${receipt.receiptId}.validated.json`));
     const finalSymlink = runWorkflow(root, [
       "validate-preflight",
@@ -273,5 +283,22 @@ describe("provider-free Issue workflow simulation", () => {
     expect(symlinked.status).not.toBe(0);
     expect(symlinked.stderr).toMatch(/symbolic link|receipt-state parent/iu);
     expect(await readdir(outside)).toEqual(["state.json"]);
+  });
+
+  it("fails closed for an existing receipt-state directory with non-owner permissions", async () => {
+    const { root, requestPath, receiptPath } = await prepareReceiptFixture("web-template-receipt-mode-");
+    const stateRoot = path.join(root, ".artifacts", "ops-receipts");
+    await mkdir(path.join(stateRoot, "receipts"), { recursive: true });
+    await chmod(stateRoot, 0o755);
+    await chmod(path.join(stateRoot, "receipts"), 0o700);
+
+    const command = runWorkflow(root, [
+      "validate-preflight",
+      "--file", receiptPath,
+      "--request", requestPath,
+      "--surface", "github-cli",
+    ]);
+    expect(command.status).not.toBe(0);
+    expect(command.stderr).toMatch(/owner-only|permissions|mode/u);
   });
 });

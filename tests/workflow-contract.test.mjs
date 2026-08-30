@@ -9,6 +9,7 @@ import {
   createOperationReceiptState,
   digestValue,
   loadProtectedAuthority,
+  operationNames,
   readExternalOperationRequest,
   requiredReviewContracts,
   resolveExternalAuthorization,
@@ -17,6 +18,7 @@ import {
   transitionWorkflowState,
   validateExternalOperationRequest,
   validateIssueContract,
+  validateOperationResultEvidence,
   validateOperationResult,
   validatePreflightReceipt,
   validateReviewResult,
@@ -106,8 +108,10 @@ function preflightReceipt(contract, request, overrides = {}) {
 function operationResult(receipt, overrides = {}) {
   const observation = githubObservation();
   const evidence = {
+    issue: 5,
     prNumber: 15,
     headSha,
+    method: "squash",
     mergeCommitSha: "7".repeat(40),
     issueClosed: true,
   };
@@ -485,6 +489,160 @@ describe("workflow contracts", () => {
       ...failureContext,
       now: "2026-08-30T01:01:20Z",
     })).toMatchObject({ outcome: "failed", retryPolicy: "forbidden", finalized: true });
+  });
+
+  it("binds every registered operation success field to its frozen mutation inputs", () => {
+    const targetRef = "frozen-provider-target";
+    const targetDigest = digestValue(targetRef);
+    const sha = "2".repeat(40);
+    const timestamp = "2026-08-30T01:01:30Z";
+    const migration = "supabase/migrations/20260830010101_create_receipts.sql";
+    const cases = [
+      {
+        operation: "github.read_issue",
+        inputs: { issue: 5 },
+        evidence: { issue: 5, state: "OPEN", updatedAt: timestamp },
+      },
+      {
+        operation: "github.push_branch",
+        inputs: { branch: "codex/33-account-bound-authority", headSha: sha },
+        evidence: { branch: "codex/33-account-bound-authority", headSha: sha },
+      },
+      {
+        operation: "github.create_pr",
+        inputs: { issue: 5, branch: "codex/33-account-bound-authority", baseBranch: "main", headSha: sha },
+        evidence: { issue: 5, branch: "codex/33-account-bound-authority", baseBranch: "main", headSha: sha, prNumber: 34, state: "OPEN" },
+      },
+      {
+        operation: "github.merge_pr",
+        inputs: { issue: 5, prNumber: 34, headSha: sha, method: "squash" },
+        evidence: { issue: 5, prNumber: 34, headSha: sha, method: "squash", mergeCommitSha: "7".repeat(40), issueClosed: true },
+      },
+      {
+        operation: "github.delete_branch",
+        inputs: { branch: "codex/33-account-bound-authority", mergedPrNumber: 34, headSha: sha },
+        evidence: { branch: "codex/33-account-bound-authority", mergedPrNumber: 34, headSha: sha, deleted: true },
+      },
+      {
+        operation: "github.update_ruleset",
+        inputs: { issue: 5, rulesetName: "main exact-Head review", targetBranch: "main", requiredCheckName: "Exact Head review policy", enforcement: "active" },
+        evidence: { issue: 5, rulesetName: "main exact-Head review", targetBranch: "main", requiredCheckName: "Exact Head review policy", enforcement: "active", rulesetId: 9 },
+      },
+      {
+        operation: "supabase.inspect_project",
+        inputs: { projectRefSource: "config/ownership.json" },
+        evidence: { projectRefSource: "config/ownership.json", projectRefDigest: targetDigest, status: "reachable" },
+      },
+      {
+        operation: "supabase.apply_migrations",
+        inputs: { projectRefSource: "config/ownership.json", migrations: [migration] },
+        evidence: { projectRefSource: "config/ownership.json", projectRefDigest: targetDigest, appliedMigrations: [migration] },
+      },
+      {
+        operation: "vercel.inspect_project",
+        inputs: { projectSource: "config/ownership.json" },
+        evidence: { projectSource: "config/ownership.json", projectIdDigest: targetDigest, status: "reachable" },
+      },
+      {
+        operation: "vercel.deploy_preview",
+        inputs: { projectSource: "config/ownership.json", headSha: sha },
+        evidence: { projectSource: "config/ownership.json", deploymentId: "dpl_preview", projectIdDigest: targetDigest, headSha: sha, environment: "preview" },
+      },
+      {
+        operation: "vercel.deploy_production",
+        inputs: { projectSource: "config/ownership.json", headSha: sha },
+        evidence: { projectSource: "config/ownership.json", deploymentId: "dpl_production", projectIdDigest: targetDigest, headSha: sha, environment: "production" },
+      },
+      {
+        operation: "cloudflare.inspect_zone",
+        inputs: { zoneSource: "config/ownership.json" },
+        evidence: { zoneSource: "config/ownership.json", zoneIdDigest: targetDigest, zonePlan: "Free", recordSetDigest: `sha256:${"8".repeat(64)}` },
+        postTarget: { zonePlan: "Free" },
+      },
+      {
+        operation: "cloudflare.upsert_dns",
+        inputs: { zoneSource: "config/ownership.json", recordName: "www.example.com", recordType: "CNAME", target: "example.vercel-dns.com", proxied: false },
+        evidence: { zoneSource: "config/ownership.json", recordId: "dns_record_1", zoneIdDigest: targetDigest, recordName: "www.example.com", recordType: "CNAME", target: "example.vercel-dns.com", proxied: false },
+      },
+    ];
+    const alternate = (field, value) => {
+      if (field === "branch") return "codex/33-account-bound-authority-other";
+      if (field === "headSha") return "9".repeat(40);
+      if (field === "recordType") return "AAAA";
+      if (field === "recordName") return "api.example.com";
+      if (field === "target") return "other.vercel-dns.com";
+      if (field === "migrations") return [migration, "supabase/migrations/20260830010102_other.sql"];
+      if (typeof value === "number") return value + 1;
+      if (typeof value === "boolean") return !value;
+      return `${value}-other`;
+    };
+    expect(cases.map(({ operation }) => operation)).toEqual(operationNames);
+
+    for (const [index, testCase] of cases.entries()) {
+      const outcome = {
+        status: "succeeded",
+        evidence: testCase.evidence,
+        evidenceDigest: digestValue(testCase.evidence),
+      };
+      expect(validateOperationResultEvidence(testCase.operation, outcome, {
+        inputs: testCase.inputs,
+        targetRef,
+        postTarget: testCase.postTarget,
+      })).toEqual(outcome);
+
+      for (const [inputField, inputValue] of Object.entries(testCase.inputs)) {
+        const evidenceField = inputField === "migrations" ? "appliedMigrations" : inputField;
+        const changedEvidence = { ...testCase.evidence, [evidenceField]: alternate(inputField, inputValue) };
+        expect(() => validateOperationResultEvidence(testCase.operation, {
+          status: "succeeded",
+          evidence: changedEvidence,
+          evidenceDigest: digestValue(changedEvidence),
+        }, {
+          inputs: testCase.inputs,
+          targetRef,
+          postTarget: testCase.postTarget,
+        })).toThrow(/frozen mutation request|invalid input|invalid option/iu);
+      }
+
+      const terminalEvidence = {
+        operation: testCase.operation,
+        errorCode: "PROVIDER_REJECTED",
+        providerState: "unchanged",
+        detailDigest: `sha256:${"6".repeat(64)}`,
+      };
+      expect(validateOperationResultEvidence(testCase.operation, {
+        status: "failed",
+        retryPolicy: "forbidden",
+        evidence: terminalEvidence,
+        evidenceDigest: digestValue(terminalEvidence),
+      }, { inputs: testCase.inputs, targetRef, postTarget: testCase.postTarget })).toMatchObject({ status: "failed" });
+      expect(() => validateOperationResultEvidence(testCase.operation, {
+        status: "failed",
+        retryPolicy: "forbidden",
+        evidence: terminalEvidence,
+        evidenceDigest: `sha256:${"0".repeat(64)}`,
+      }, { inputs: testCase.inputs, targetRef, postTarget: testCase.postTarget })).toThrow(/evidence digest/u);
+
+      const ambiguousEvidence = {
+        operation: testCase.operation,
+        reasonCode: "PROVIDER_RESPONSE_UNKNOWN",
+        providerState: "unknown",
+        detailDigest: `sha256:${"7".repeat(64)}`,
+      };
+      expect(validateOperationResultEvidence(testCase.operation, {
+        status: "ambiguous",
+        retryPolicy: "inspect-provider-state-only",
+        evidence: ambiguousEvidence,
+        evidenceDigest: digestValue(ambiguousEvidence),
+      }, { inputs: testCase.inputs, targetRef, postTarget: testCase.postTarget })).toMatchObject({ status: "ambiguous" });
+      const wrongOperationEvidence = { ...ambiguousEvidence, operation: cases[(index + 1) % cases.length].operation };
+      expect(() => validateOperationResultEvidence(testCase.operation, {
+        status: "ambiguous",
+        retryPolicy: "inspect-provider-state-only",
+        evidence: wrongOperationEvidence,
+        evidenceDigest: digestValue(wrongOperationEvidence),
+      }, { inputs: testCase.inputs, targetRef, postTarget: testCase.postTarget })).toThrow(/invalid input|invalid value/iu);
+    }
   });
 
   it("rejects malformed, ambiguous, or operation-incompatible frozen authorizations", () => {
