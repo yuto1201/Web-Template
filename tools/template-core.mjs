@@ -187,7 +187,15 @@ export function normalizeInitializationConfig(value) {
   const linearKeys = ["workspaceName", "workspaceSlug", "workspaceUrl", "workspaceId", "userName", "userEmailHint", "userEmailSha256", "userId", "requiredRole"];
   exactKeys(linearAccount, linearKeys, "accounts.linear");
   const linearValues = Object.fromEntries(linearKeys.map((key) => [key, nullableString(linearAccount[key], `accounts.linear.${key}`)]));
-  rejectPartialAuthority(Object.values(linearValues), "accounts.linear");
+  if (linearValues.workspaceName !== null) string(linearValues.workspaceName, "accounts.linear.workspaceName", /^.{1,256}$/u);
+  if (linearValues.workspaceSlug !== null) string(linearValues.workspaceSlug, "accounts.linear.workspaceSlug", /^[a-z0-9-]+$/u);
+  if (linearValues.workspaceUrl !== null) string(linearValues.workspaceUrl, "accounts.linear.workspaceUrl", /^https:\/\/linear\.app\/[a-z0-9-]+$/u);
+  if (linearValues.workspaceId !== null) string(linearValues.workspaceId, "accounts.linear.workspaceId", /^.{1,256}$/u);
+  if (linearValues.userName !== null) string(linearValues.userName, "accounts.linear.userName", /^.{1,256}$/u);
+  if (linearValues.userEmailHint !== null) string(linearValues.userEmailHint, "accounts.linear.userEmailHint", /^.{1,128}$/u);
+  if (linearValues.userEmailSha256 !== null) string(linearValues.userEmailSha256, "accounts.linear.userEmailSha256", /^[0-9a-f]{64}$/u);
+  if (linearValues.userId !== null) string(linearValues.userId, "accounts.linear.userId", /^.{1,256}$/u);
+  if (linearValues.requiredRole !== null) string(linearValues.requiredRole, "accounts.linear.requiredRole", /^.{1,256}$/u);
 
   const servicePolicies = object(input.servicePolicies, "servicePolicies");
   exactKeys(servicePolicies, ["github", "supabase", "vercel", "cloudflare", "linear"], "servicePolicies");
@@ -231,7 +239,22 @@ export function normalizeInitializationConfig(value) {
   exactKeys(linearTarget, ["teamKey", "teamId"], "resourceTargets.linear");
   const linearTeamKey = nullableString(linearTarget.teamKey, "resourceTargets.linear.teamKey");
   const linearTeamId = nullableString(linearTarget.teamId, "resourceTargets.linear.teamId");
-  rejectPartialAuthority([linearTeamKey, linearTeamId], "resourceTargets.linear");
+  if (linearTeamKey !== null) string(linearTeamKey, "resourceTargets.linear.teamKey", /^[A-Z][A-Z0-9]{1,15}$/u);
+  if (linearTeamId !== null) string(linearTeamId, "resourceTargets.linear.teamId", /^.{1,256}$/u);
+  const linearReadableIdentity = [
+    linearValues.workspaceName,
+    linearValues.workspaceSlug,
+    linearValues.workspaceUrl,
+    linearValues.userName,
+    linearValues.userEmailHint,
+    linearValues.userEmailSha256,
+    linearValues.requiredRole,
+    linearTeamKey,
+  ];
+  const linearStableIdentity = [linearValues.workspaceId, linearValues.userId, linearTeamId];
+  rejectPartialAuthority(linearReadableIdentity, "Linear readable identity");
+  rejectPartialAuthority(linearStableIdentity, "Linear stable identity");
+  assert(linearStableIdentity.every((item) => item === null) || linearReadableIdentity.every((item) => item !== null), "Linear identity contains partial authority.");
 
   const project = {
     schemaVersion: 2,
@@ -314,6 +337,7 @@ export function projectTokens(project) {
     loopbackOrigin: project.publicUrls.loopback,
     supabaseOrganizationName: project.accounts.supabase.organizationName,
     supabaseOrganizationId: project.accounts.supabase.organizationId,
+    vercelTeamName: project.accounts.vercel.teamName,
     vercelTeamSlug: project.accounts.vercel.teamSlug,
     vercelTeamId: project.accounts.vercel.teamId,
     vercelProjectId: project.resourceTargets.vercel.projectId,

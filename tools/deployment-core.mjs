@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { readAuthority } from "./authority-core.mjs";
+import { providerPlaceholders } from "./template-core.mjs";
 
 /** @typedef {{
   releaseEvidenceMaxAgeMinutes: number,
@@ -140,6 +141,11 @@ function uniqueSorted(values, checkpoint) {
   return parsed.toSorted();
 }
 
+function hasInactiveVercelAuthority() {
+  return authority.accounts.vercel.teamId === providerPlaceholders.vercelScope ||
+    authority.resourceTargets.vercel.projectId === providerPlaceholders.vercelProjectId;
+}
+
 /** @param {string} root */
 export async function readLocalVercelLink(root = defaultRoot) {
   const linkDirectory = path.join(root, ".vercel");
@@ -167,7 +173,7 @@ export async function validateDeploymentPreflight(snapshotValue, root = defaultR
   const teamId = authority.accounts.vercel.teamId;
   const projectId = authority.resourceTargets.vercel.projectId;
   const link = await readLocalVercelLink(root);
-  if (!teamId || !projectId) {
+  if (!teamId || !projectId || hasInactiveVercelAuthority()) {
     throw new DeploymentCheckpointError("ownership", "config/ownership.json has no exact Vercel scope/project.");
   }
   if (link.orgId !== teamId || link.projectId !== projectId) {
@@ -200,7 +206,7 @@ export function validateReleaseEvidence(value, expectedCommitSha, now = new Date
   const evidence = releaseEvidenceSchema.parse(value);
   const teamId = authority.accounts.vercel.teamId;
   const projectId = authority.resourceTargets.vercel.projectId;
-  if (!teamId || !projectId) {
+  if (!teamId || !projectId || hasInactiveVercelAuthority()) {
     throw new DeploymentCheckpointError("ownership", "config/ownership.json has no exact Vercel scope/project.");
   }
   if (evidence.teamId !== teamId || evidence.projectId !== projectId) {

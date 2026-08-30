@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   validateReleaseEvidence,
   validateRemoteSchemaOrder,
 } from "../tools/deployment-core.mjs";
 import { readAuthority } from "../tools/authority-core.mjs";
+import { providerPlaceholders } from "../tools/template-core.mjs";
 
 const canonicalAuthority = readAuthority();
 
@@ -30,6 +34,23 @@ function evidence(overrides = {}) {
   };
 }
 
+async function placeholderModule() {
+  await mkdir(path.resolve(".artifacts"), { recursive: true });
+  const root = await mkdtemp(path.join(path.resolve(".artifacts"), "release-placeholder-"));
+  await mkdir(path.join(root, "config"));
+  await mkdir(path.join(root, "tools"));
+  await copyFile(path.resolve("config/deployment.json"), path.join(root, "config", "deployment.json"));
+  await copyFile(path.resolve("tools/authority-core.mjs"), path.join(root, "tools", "authority-core.mjs"));
+  await copyFile(path.resolve("tools/deployment-core.mjs"), path.join(root, "tools", "deployment-core.mjs"));
+  await copyFile(path.resolve("tools/template-core.mjs"), path.join(root, "tools", "template-core.mjs"));
+  const placeholderAuthority = structuredClone(canonicalAuthority);
+  placeholderAuthority.accounts.vercel.teamId = providerPlaceholders.vercelScope;
+  placeholderAuthority.resourceTargets.vercel.projectId = providerPlaceholders.vercelProjectId;
+  await writeFile(path.join(root, "config", "ownership.json"), JSON.stringify(placeholderAuthority), "utf8");
+  const moduleUrl = `${pathToFileURL(path.join(root, "tools", "deployment-core.mjs")).href}?placeholder=${Date.now()}`;
+  return { root, module: await import(moduleUrl) };
+}
+
 describe("Vercel release evidence", () => {
   it("binds a READY production deployment and smoke results to the verified commit", () => {
     expect(validateReleaseEvidence(evidence(), commitSha, verificationTime)).toMatchObject({
@@ -48,6 +69,18 @@ describe("Vercel release evidence", () => {
         { path: "/health", status: 200, jsonStatus: "ok" },
       ],
     }), commitSha, verificationTime)).toThrow(/\/ returned 500/u);
+  });
+
+  it("rejects release evidence bound to inactive Vercel placeholder authority", async () => {
+    const fixture = await placeholderModule();
+    try {
+      expect(() => fixture.module.validateReleaseEvidence(evidence({
+        teamId: providerPlaceholders.vercelScope,
+        projectId: providerPlaceholders.vercelProjectId,
+      }), commitSha, verificationTime)).toThrow(/ownership/u);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("rejects stale, wrong-project, incomplete, and credential-bearing evidence", () => {

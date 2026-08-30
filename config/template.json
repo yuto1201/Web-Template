@@ -156,6 +156,24 @@
       "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 1,
       "specs/account-bound-authority.md": 1
     },
+    "vercelTeamName": {
+      "README.md": 1,
+      "config/domain.json": 2,
+      "config/ownership.json": 8,
+      "config/template.json": 9,
+      "docs/authority.md": 2,
+      "docs/domain.md": 1,
+      "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 10,
+      "specs/account-bound-authority.md": 3,
+      "tests/deployment-release.test.mjs": 2,
+      "tests/domain-workflow.test.mjs": 15,
+      "tests/fixtures/workflow/happy-path.json": 1,
+      "tests/github-review-gate.test.mjs": 5,
+      "tests/workflow-cleanup.test.mjs": 2,
+      "tests/workflow-contract.test.mjs": 1,
+      "tests/workflow-e2e.test.mjs": 1,
+      "tests/workflow-gate.test.mjs": 2
+    },
     "vercelTeamSlug": {
       "config/ownership.json": 1,
       "config/template.json": 1,

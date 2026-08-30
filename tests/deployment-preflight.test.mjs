@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +9,7 @@ import {
   validateDeploymentPreflight,
 } from "../tools/deployment-core.mjs";
 import { readAuthority } from "../tools/authority-core.mjs";
+import { providerPlaceholders } from "../tools/template-core.mjs";
 
 const canonicalAuthority = readAuthority();
 
@@ -44,6 +46,23 @@ async function fixture({ link = true } = {}) {
   return root;
 }
 
+async function placeholderModule() {
+  await mkdir(path.resolve(".artifacts"), { recursive: true });
+  const root = await mkdtemp(path.join(path.resolve(".artifacts"), "deployment-placeholder-"));
+  await mkdir(path.join(root, "config"));
+  await mkdir(path.join(root, "tools"));
+  await copyFile(path.resolve("config/deployment.json"), path.join(root, "config", "deployment.json"));
+  await copyFile(path.resolve("tools/authority-core.mjs"), path.join(root, "tools", "authority-core.mjs"));
+  await copyFile(path.resolve("tools/deployment-core.mjs"), path.join(root, "tools", "deployment-core.mjs"));
+  await copyFile(path.resolve("tools/template-core.mjs"), path.join(root, "tools", "template-core.mjs"));
+  const placeholderAuthority = structuredClone(canonicalAuthority);
+  placeholderAuthority.accounts.vercel.teamId = providerPlaceholders.vercelScope;
+  placeholderAuthority.resourceTargets.vercel.projectId = providerPlaceholders.vercelProjectId;
+  await writeFile(path.join(root, "config", "ownership.json"), JSON.stringify(placeholderAuthority), "utf8");
+  const moduleUrl = `${pathToFileURL(path.join(root, "tools", "deployment-core.mjs")).href}?placeholder=${Date.now()}`;
+  return { root, module: await import(moduleUrl) };
+}
+
 describe("Vercel deployment preflight", () => {
   it("keeps the compatibility export aligned with canonical authority paths", () => {
     expect(canonicalVercelOwnership).toEqual({
@@ -70,6 +89,20 @@ describe("Vercel deployment preflight", () => {
       name: "DeploymentCheckpointError",
       checkpoint: "link",
     });
+  });
+
+  it("rejects parser-valid inactive Vercel placeholder authority", async () => {
+    const fixture = await placeholderModule();
+    try {
+      await mkdir(path.join(fixture.root, ".vercel"));
+      await writeFile(path.join(fixture.root, ".vercel", "project.json"), JSON.stringify({
+        orgId: providerPlaceholders.vercelScope,
+        projectId: providerPlaceholders.vercelProjectId,
+      }), "utf8");
+      await expect(fixture.module.validateDeploymentPreflight(snapshot(), fixture.root)).rejects.toMatchObject({ checkpoint: "ownership" });
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("blocks missing environment keys without accepting values", async () => {

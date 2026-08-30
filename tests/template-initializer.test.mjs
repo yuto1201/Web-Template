@@ -100,6 +100,7 @@ async function sourceFixture() {
   const project = sourceProject();
   await writeFile(path.join(root, "package.json"), `${JSON.stringify({ name: project.slug }, null, 2)}\n`, "utf8");
   await writeFile(path.join(root, "README.md"), `# ${project.appName}\n`, "utf8");
+  await writeFile(path.join(root, "provider-notes.txt"), `Vercel team: ${project.accounts.vercel.teamName}\n`, "utf8");
   await writeFile(path.join(root, "config", "ownership.json"), `${JSON.stringify({
     schemaVersion: project.schemaVersion,
     authorization: project.authorization,
@@ -239,6 +240,7 @@ describe("template initialization", () => {
       },
     });
     expect(JSON.stringify(initializedAuthority)).not.toContain(["7ea8e713d76506f9e303f", "58624829aa5"].join(""));
+    expect(await readFile(path.join(target, "provider-notes.txt"), "utf8")).not.toContain("Source Team");
     await writeFile(path.join(target, "package.json"), `${JSON.stringify({ name: "edited-after-init" }, null, 2)}\n`, "utf8");
     await expect(initializeTemplate(target, configuration())).rejects.toThrow(/managed file changed/u);
   });
@@ -271,6 +273,45 @@ describe("template initialization", () => {
     const partial = configuration();
     partial.accounts.vercel.teamId = "team_PARTIAL";
     expect(() => normalizeInitializationConfig(partial)).toThrow(/partial authority/u);
+  });
+
+  it("allows complete Linear metadata with an explicitly incomplete stable identity", () => {
+    const incomplete = configuration();
+    incomplete.accounts.linear = {
+      workspaceName: "Target Workspace",
+      workspaceSlug: "target-workspace",
+      workspaceUrl: "https://linear.app/target-workspace",
+      workspaceId: null,
+      userName: "Target User",
+      userEmailHint: "t***@example.test",
+      userEmailSha256: "e".repeat(64),
+      userId: null,
+      requiredRole: "Admin",
+    };
+    incomplete.resourceTargets.linear = { teamKey: "TGT", teamId: null };
+
+    expect(normalizeInitializationConfig(incomplete)).toMatchObject({
+      accounts: { linear: { workspaceName: "Target Workspace", workspaceId: null, userId: null } },
+      resourceTargets: { linear: { teamKey: "TGT", teamId: null } },
+    });
+  });
+
+  it("rejects mixed Linear stable identity state", () => {
+    const mixed = configuration();
+    mixed.accounts.linear = {
+      workspaceName: "Target Workspace",
+      workspaceSlug: "target-workspace",
+      workspaceUrl: "https://linear.app/target-workspace",
+      workspaceId: "workspace_123",
+      userName: "Target User",
+      userEmailHint: "t***@example.test",
+      userEmailSha256: "e".repeat(64),
+      userId: null,
+      requiredRole: "Admin",
+    };
+    mixed.resourceTargets.linear = { teamKey: "TGT", teamId: null };
+
+    expect(() => normalizeInitializationConfig(mixed)).toThrow(/partial authority/u);
   });
 
   it("refuses a different configuration after successful initialization", async () => {

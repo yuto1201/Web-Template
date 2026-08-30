@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { readAuthority } from "./authority-core.mjs";
+import { providerPlaceholders } from "./template-core.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(moduleDirectory, "..");
@@ -218,8 +219,19 @@ function recordBody(record) {
   return { type: record.type, name: record.name, content: record.content, proxied: record.proxied, ttl: record.ttl };
 }
 
+function requireActiveProviderAuthority() {
+  if (
+    authority.accounts.vercel.teamId === providerPlaceholders.vercelScope ||
+    authority.resourceTargets.vercel.projectId === providerPlaceholders.vercelProjectId ||
+    authority.accounts.cloudflare.accountId === providerPlaceholders.cloudflareAccountId ||
+    authority.accounts.cloudflare.accountName === providerPlaceholders.cloudflareAccountName ||
+    authority.resourceTargets.cloudflare.zoneId === providerPlaceholders.cloudflareZoneId
+  ) throw new Error("[ownership] Canonical provider authority is inactive.");
+}
+
 /** @param {z.infer<typeof planSchema>} plan */
 function validatePlanIntegrity(plan) {
+  requireActiveProviderAuthority();
   validateSnapshotClassification(plan.cloudflare);
   if (
     plan.hostname !== domainConfiguration.hostname ||
@@ -267,6 +279,7 @@ function validatePlanIntegrity(plan) {
 /** @param {unknown} value @param {Date} [now] */
 export function createDomainPlan(value, now = new Date()) {
   const input = liveInputSchema.parse(value);
+  requireActiveProviderAuthority();
   validateObservationTime("cloudflare-observation", input.cloudflare.observedAt, now, 300_000);
   validateObservationTime("vercel-observation", input.vercel.observedAt, now, 300_000);
   validateSnapshotClassification(input.cloudflare);
