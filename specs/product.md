@@ -33,4 +33,4 @@ The repository owner creates a new repository from this GitHub template, fills i
 - Automatic production deployment, DNS mutation, or database migration without an account-bound preflight, one-time claim, and finalized result
 - OS-level isolation between local AI tools running as the same user
 - A default billing, roles, organization, or audit-log product schema
-- General Linear access: it remains explicit-user-purpose-only and fails closed while stable IDs are incomplete
+- General Linear access: it remains explicit-user-purpose-only and every read/write fails closed because no Linear operation is registered, regardless of purpose or stable IDs

@@ -148,6 +148,9 @@ describe("repository policy", () => {
     expect(authority).toMatch(/repository-active/iu);
     expect(authority).toMatch(/explicit-user-purpose-only/iu);
     expect(authority).toMatch(/Linear[^\n]*(?:deny|denies|denial|denied|block|fail closed)/iu);
+    for (const relative of ["README.md", "docs/authority.md", "docs/onboarding-macos.md", "specs/acceptance.md", "specs/architecture.md", "specs/product.md"]) {
+      expect(contents.get(relative), `${relative} must keep Linear denied because no operation is registered`).toMatch(/Linear[^\n]*(?:no (?:Linear )?operation is registered|操作自体が未登録)/iu);
+    }
   });
 
   it("preserves D-003 as superseded history and records accepted D-007", async () => {

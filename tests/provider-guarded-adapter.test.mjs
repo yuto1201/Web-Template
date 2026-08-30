@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import { cp, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { describe, expect, it, vi } from "vitest";
+import { createGitHubCliProviderClient } from "../tools/github-cli-provider-client.mjs";
+import { executeRegisteredProviderOperation } from "../tools/provider-guarded-adapter.mjs";
 import {
   digestValue,
   loadProtectedAuthority,
@@ -11,6 +14,30 @@ import {
 } from "../tools/workflow-core.mjs";
 
 const fixturePath = path.resolve("tests/fixtures/workflow/happy-path.json");
+
+vi.mock("../tools/github-cli-provider-client.mjs", async (importOriginal) => {
+  const actual = /** @type {typeof import("../tools/github-cli-provider-client.mjs")} */ (await importOriginal());
+  return { ...actual, createGitHubCliProviderClient: vi.fn(actual.createGitHubCliProviderClient) };
+});
+
+/** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
+function createTestGitHubGuardedAdapter(configuration) {
+  vi.mocked(createGitHubCliProviderClient).mockReturnValue(
+    /** @type {ReturnType<typeof createGitHubCliProviderClient>} */ (configuration.providerClient),
+  );
+  return {
+    /** @param {{root:string,requestPath:string,modelFamily?:"gpt"|"claude"}} input */
+    execute(input) {
+      return executeRegisteredProviderOperation({
+        service: "github",
+        root: input.root,
+        requestPath: input.requestPath,
+        modelFamily: input.modelFamily ?? "gpt",
+        ...(configuration.clock ? { clock: configuration.clock } : {}),
+      });
+    },
+  };
+}
 
 /** @param {string} root @param {string[]} args */
 function git(root, args) {
@@ -96,7 +123,9 @@ function githubClient(authority, options = {}) {
 
 describe("provider-specific guarded adapters", () => {
   it("uses the production GitHub CLI client without switching accounts and binds the merge SHA", async () => {
-    const { createGitHubCliProviderClient } = await import("../tools/github-cli-provider-client.mjs");
+    const { createGitHubCliProviderClient: createActualGitHubClient } = /** @type {typeof import("../tools/github-cli-provider-client.mjs")} */ (
+      await vi.importActual("../tools/github-cli-provider-client.mjs")
+    );
     const authority = JSON.parse(await readFile(path.resolve("config/ownership.json"), "utf8"));
     /** @type {string[][]} */
     const calls = [];
@@ -104,8 +133,9 @@ describe("provider-specific guarded adapters", () => {
       operation: "github.merge_pr",
       inputs: { issue: 33, repository: "yuto1201/Web-Template", prNumber: 44, headSha: "a".repeat(40), method: "squash" },
     };
-    const client = createGitHubCliProviderClient({
+    const client = createActualGitHubClient({
       now: () => new Date("2026-08-30T01:00:00Z"),
+      /** @param {string[]} args */
       invoke(args) {
         calls.push(args);
         const joined = args.join(" ");
@@ -128,7 +158,6 @@ describe("provider-specific guarded adapters", () => {
   });
 
   it("collects preflight, claim, and postflight from one provider surface and executes only the frozen mutation", async () => {
-    const { createTestGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
     const { root, simulated, authority } = await repositoryFixture();
     const client = githubClient(authority);
     const adapter = createTestGitHubGuardedAdapter({ providerClient: client, clock: clock() });
@@ -177,7 +206,6 @@ describe("provider-specific guarded adapters", () => {
   }, 15_000);
 
   it("rejects an account or live PR Head switch immediately before mutation", async () => {
-    const { createTestGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
     const { root, simulated, authority } = await repositoryFixture();
     const switchedClient = githubClient(authority, { switchAtClaim: true });
     await expect(createTestGitHubGuardedAdapter({ providerClient: switchedClient, clock: clock() }).execute({
@@ -198,7 +226,6 @@ describe("provider-specific guarded adapters", () => {
   }, 15_000);
 
   it("requires provider-enforced idempotency for writes and shares one-use state across sibling worktrees", async () => {
-    const { createTestGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
     const fixture = await repositoryFixture();
     const unsupportedClient = githubClient(fixture.authority, { idempotency: "none" });
     await expect(createTestGitHubGuardedAdapter({ providerClient: unsupportedClient, clock: clock() }).execute({
@@ -228,7 +255,6 @@ describe("provider-specific guarded adapters", () => {
   });
 
   it("does not permanently deduplicate repeated authorized reads", async () => {
-    const { createTestGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
     const { root, authority } = await repositoryFixture();
     const issue = 42;
     const contract = snapshotIssueContract({
@@ -348,5 +374,32 @@ describe("provider-specific guarded adapters", () => {
     ]);
     expect(command.status).not.toBe(0);
     expect(command.stderr).toMatch(/caller-authored|guarded provider adapter|unsupported/iu);
+  });
+
+  it("exports no injectable provider-adapter factory to a normal process", () => {
+    const command = spawnSync(process.execPath, [
+      "--input-type=module",
+      "--eval",
+      `import(${JSON.stringify(pathToFileURL(path.resolve("tools/provider-guarded-adapter.mjs")).href)}).then((module) => {
+         if (Object.keys(module).some((name) => /createTest|GuardedAdapter/u.test(name))) process.exitCode = 2;
+       });`,
+    ], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      windowsHide: true,
+      env: { ...process.env, VITEST: "true" },
+    });
+    expect(command.status).toBe(0);
+  });
+
+  it("fails closed for every provider without a production client", async () => {
+    for (const service of /** @type {const} */ (["supabase", "vercel", "cloudflare"])) {
+      await expect(executeRegisteredProviderOperation({
+        service,
+        root: path.resolve("."),
+        requestPath: "caller-authored.json",
+        modelFamily: "gpt",
+      })).rejects.toThrow(/No registered production provider client.*fails closed/iu);
+    }
   });
 });

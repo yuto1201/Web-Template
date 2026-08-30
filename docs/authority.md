@@ -31,7 +31,7 @@ Email identity is normalized and compared locally by SHA-256 fingerprint. Commit
 
 The Issue contract schema v2 records the protected-main authority commit and digest plus strict `externalAuthorizations`. Each authorization binds service, operation, purpose code and text, account and target references, environment, operation-specific constraints, and whether authoritative exact-Head review is required. Examples include repository/branch/PR/Head for GitHub, project ref and migration digests for Supabase, project/environment/commit for Vercel, zone/hostname/record/routing source for Cloudflare, and workspace/team/object/filter/result limit for Linear.
 
-An operator request declares only its operator label, eligible execution role and surface, authorization reference, intent, reversibility, recovery strategy, and exact operation inputs. It cannot inject a free-form account or target, token, approval claim, or evidence. For a merge request, generate every required field from the gated Issue evidence and then validate it:
+An operator request declares only its operator label, eligible execution role and surface, authorization reference, intent, reversibility, recovery strategy, and exact operation inputs. It cannot inject a free-form account or target, token, approval claim, or evidence. Linear has no request constraint because no Linear operation is registered. For a merge request, generate every required field from the gated Issue evidence and then validate it:
 
 ```bash
 npm run workflow -- request-merge --issue 33 --pr-number 123 --operator-label codex --execution-role external-operator --surface codex-cli
@@ -49,13 +49,13 @@ Repository-approved authenticated operations use this sequence:
 3. Immediately before mutation, the adapter re-reads account and target, rejects any switch, and atomically consumes the mutation once. Automatic logout, login, profile, team, project, or account switching is forbidden.
 4. The adapter performs only the frozen operation, obtains provider post-state through that same surface, and finalizes a strict redacted result linked to the original receipt.
 
-The legacy `validate-preflight`, `claim-execution`, and `validate-result` CLI commands cannot authorize execution; they fail closed. Tests inject a fake provider client into the adapter, but production callers cannot substitute caller-authored account, target, receipt, or result JSON for provider collection.
+The legacy `validate-preflight`, `claim-execution`, and `validate-result` CLI commands cannot authorize execution; they fail closed. The production module exports no injectable provider-adapter factory. Tests replace the GitHub client only through Vitest module mocking, while the registered production entry point always constructs its fixed client and accepts no provider-client argument. Repository-approved production callers therefore cannot substitute caller-authored account, target, receipt, or result JSON for provider collection.
 
 Do not retry an ambiguous result with unchanged inputs. Read provider state and resume only the missing phase. A failed or ambiguous finalized mutation records `retryPolicy: forbidden`; a new reviewed authorization is required for another mutation.
 
 ## Supported and unsupported operations
 
-The executable registry supports `github.read_issue`, `github.push_branch`, `github.create_pr`, `github.merge_pr`, `github.delete_branch`, `supabase.inspect_project`, `supabase.apply_migrations`, `vercel.inspect_project`, `vercel.deploy_preview`, `vercel.deploy_production`, `cloudflare.inspect_zone`, and `cloudflare.upsert_dns`.
+The operation-contract registry contains `github.read_issue`, `github.push_branch`, `github.create_pr`, `github.merge_pr`, `github.delete_branch`, `supabase.inspect_project`, `supabase.apply_migrations`, `vercel.inspect_project`, `vercel.deploy_preview`, `vercel.deploy_production`, `cloudflare.inspect_zone`, and `cloudflare.upsert_dns`.
 
 The following high-risk operations are explicitly unsupported and fail closed until a later Issue registers their complete request, result, recovery, and idempotency contracts: GitHub ruleset updates, Supabase Auth-policy updates, Vercel configuration changes, Vercel deployment rollback, and Cloudflare DNS rollback. A registered operation contract also remains non-executable until a production provider client implements its authenticated observation and mutation surface. This release provides that production client only for GitHub Issue reads and exact-Head squash merge; Supabase, Vercel, and Cloudflare production clients remain fail closed. Compatibility with an older command is not authorization.
 

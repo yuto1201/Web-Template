@@ -26,7 +26,7 @@
 - Supabase service-role keys and provider credentials are server-only and never available to preview deployments by default.
 - RLS and grants authorize database access for real JWT roles.
 - Provider account names in `config/ownership.json` are expected identities, not credentials.
-- GitHub, Supabase, Vercel, and Cloudflare are repository-active only inside an exact frozen authorization. Linear is explicit-user-purpose-only and denied until user purpose plus stable IDs exist.
+- GitHub, Supabase, Vercel, and Cloudflare are repository-active only inside an exact frozen authorization. Linear is explicit-user-purpose-only and all access remains denied because no Linear operation is registered, regardless of user purpose or stable IDs.
 - Shared adapters and CI reduce accidental account/target misuse; they do not create an OS security boundary when operators share an OS user.
 
 ## Change boundaries

@@ -83,7 +83,6 @@ export function validateLiveOperationObservation(operation, request, observation
   }
   const observation = /** @type {Record<string, any>} */ (observationValue);
   /** @type {Record<string, string[]>} */
-  /** @type {Record<string, string[]>} */
   const scopeBindings = {
     "github.read_issue": ["repository", "issue"],
     "github.push_branch": ["repository"],
@@ -407,28 +406,3 @@ export async function executeRegisteredProviderOperation(input) {
   });
   return adapter.execute({ root: input.root, requestPath: input.requestPath, modelFamily: input.modelFamily });
 }
-
-function requireVitestFactory() {
-  if (process.env.VITEST !== "true") throw new Error("Injected provider clients are test-only; production must use a registered provider operation.");
-}
-
-/** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
-export const createTestGitHubGuardedAdapter = (configuration) => {
-  requireVitestFactory();
-  return executeGuardedProviderOperation({ service: "github", ...configuration });
-};
-/** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
-export const createTestSupabaseGuardedAdapter = (configuration) => {
-  requireVitestFactory();
-  return executeGuardedProviderOperation({ service: "supabase", ...configuration });
-};
-/** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
-export const createTestVercelGuardedAdapter = (configuration) => {
-  requireVitestFactory();
-  return executeGuardedProviderOperation({ service: "vercel", ...configuration });
-};
-/** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
-export const createTestCloudflareGuardedAdapter = (configuration) => {
-  requireVitestFactory();
-  return executeGuardedProviderOperation({ service: "cloudflare", ...configuration });
-};

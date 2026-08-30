@@ -35,6 +35,13 @@ jobs:
         with:
           node-version-file: trusted/.node-version
 
+      - name: Install trusted gate dependencies
+        working-directory: trusted
+        shell: bash
+        run: |
+          npm install --global npm@11.6.2
+          npm ci --ignore-scripts
+
       - name: Verify exact-Head review evidence
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

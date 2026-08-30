@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { externalEvidencePathPattern, operationNames, validateExternalLifecycleArtifactSet } from "./workflow-core.mjs";
+import { digestValue, externalEvidencePathPattern, operationNames, validateExternalLifecycleArtifactSet } from "./workflow-core.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const shaPattern = /^[0-9a-f]{40}$/u;
@@ -21,22 +20,6 @@ function uniqueBodyField(body, label) {
   const matches = body.split(/\r?\n/u).filter((line) => line.startsWith(prefix));
   assert(matches.length === 1, `PR body must contain ${label} exactly once.`);
   return matches[0].slice(prefix.length).trim();
-}
-
-/** @param {unknown} value @returns {unknown} */
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonicalize(child)]));
-  }
-  return value;
-}
-
-/** @param {unknown} value */
-function digestValue(value) {
-  const copy = value && typeof value === "object" && !Array.isArray(value) ? { ...value } : value;
-  if (copy && typeof copy === "object" && !Array.isArray(copy)) delete /** @type {Record<string, unknown>} */ (copy).digest;
-  return `sha256:${createHash("sha256").update(JSON.stringify(canonicalize(copy)), "utf8").digest("hex")}`;
 }
 
 /** @param {Record<string, unknown>} value @param {string[]} keys @param {string} label */
@@ -79,6 +62,7 @@ function parseExternalChanges(body) {
   const lines = section.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
   if (lines.length === 1 && lines[0] === "- None.") return [];
   assert(!lines.includes("- None."), "External changes cannot combine None with operation evidence.");
+  assert(lines.length === 1, "A pull request may declare at most one pre-merge external change.");
   return lines.map((line) => {
     const prefix = "- Operation evidence: ";
     assert(line.startsWith(prefix), "External changes require structured Operation evidence lifecycle JSON.");
@@ -205,9 +189,9 @@ function validateDependabotDiff(diff, policy) {
 }
 
 /**
- * @param {{event: any, changedPaths: string[], diff: string, workflow: any, artifactLoader?: (reference: string) => unknown, authorityLoader?: (commitSha: string) => unknown, evidenceCommit?: {headSha:string,parentSha:string,changedPaths:string[]}, isAuthorityAncestor?: (authorityCommitSha:string,executionHeadSha:string)=>boolean}} input
+ * @param {{event: any, changedPaths: string[], diff: string, workflow: any, artifactLoader?: (reference: string) => unknown, authorityLoader?: (commitSha: string) => unknown, evidenceCommit?: {headSha:string,parentSha:string,changedPaths:string[]}, isAuthorityProtected?: (authorityCommitSha:string)=>boolean}} input
  */
-export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, artifactLoader, authorityLoader, evidenceCommit, isAuthorityAncestor }) {
+export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, artifactLoader, authorityLoader, evidenceCommit, isAuthorityProtected }) {
   const pullRequest = event?.pull_request;
   assert(pullRequest && typeof pullRequest === "object", "GitHub event must contain a pull_request object.");
   const headSha = pullRequest.head?.sha;
@@ -238,8 +222,8 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   if (externalChanges.length === 0) {
     assert(committedExternalPaths.length === 0, "Committed external-operation artifacts are missing structured external lifecycle evidence.");
   } else {
-    if (typeof artifactLoader !== "function" || typeof authorityLoader !== "function" || !evidenceCommit) {
-      throw new Error("Structured external changes require committed artifact, authority, and evidence-commit loaders.");
+    if (typeof artifactLoader !== "function" || typeof authorityLoader !== "function" || typeof isAuthorityProtected !== "function" || !evidenceCommit) {
+      throw new Error("Structured external changes require committed artifact, protected-authority, and evidence-commit loaders.");
     }
     /** @type {Set<string>} */
     const referencedPaths = new Set();
@@ -260,10 +244,11 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
       const requestArtifact = record(artifacts.request, "request committed artifact");
       const contract = record(record(requestArtifact.payload, "request lifecycle payload").contract, "request lifecycle Issue contract");
       const authorityCommitSha = String(record(contract.authority, "request lifecycle authority").commitSha ?? "");
+      assert(shaPattern.test(authorityCommitSha), "Request lifecycle authority commit SHA is invalid.");
       validateExternalLifecycleArtifactSet(change, artifacts, {
         authority: authorityLoader(authorityCommitSha),
         evidenceCommit,
-        isAuthorityAncestor,
+        isAuthorityProtected,
       });
     }
     assert(committedExternalPaths.every((candidate) => referencedPaths.has(candidate)), "Committed external-operation artifact is missing from lifecycle evidence.");
@@ -327,8 +312,9 @@ export async function runCli(argv = process.argv.slice(2)) {
     artifactLoader: (reference) => JSON.parse(git("show", `${headSha}:${reference}`)),
     authorityLoader: (commitSha) => JSON.parse(git("show", `${commitSha}:config/ownership.json`)),
     evidenceCommit: { headSha, parentSha: evidenceParentSha, changedPaths: evidenceCommitChangedPaths },
-    isAuthorityAncestor: (authorityCommitSha, executionHeadSha) => {
-      const result = spawnSync("git", ["merge-base", "--is-ancestor", authorityCommitSha, executionHeadSha], { cwd: repository, encoding: "utf8", windowsHide: true });
+    isAuthorityProtected: (authorityCommitSha) => {
+      if (!shaPattern.test(authorityCommitSha)) return false;
+      const result = spawnSync("git", ["merge-base", "--is-ancestor", authorityCommitSha, baseSha], { cwd: repository, encoding: "utf8", windowsHide: true });
       return result.status === 0;
     },
   }), null, 2)}\n`);

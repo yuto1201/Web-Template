@@ -43,7 +43,7 @@ npm run workstation:doctor -- --require-env --require-docker
 - `local.status: ready`: package slug、所有者設定、URL、ローカルポートが整合し、ローカル実装を開始できる。
 - `liveProviders.*.status: needs-codex`: 対象の個人アカウントや hosted project がまだ確定していないことを示す既存の機械可読 status 名。operator 権限を Codex に限定する意味ではありません。
 
-ローカル準備完了は、デプロイやドメイン公開の成功を意味しません。Claude と Codex は implementer / external-operator として同権ですが、operator label と実際のアカウント認証は別物です。認証済み操作は protected `main` の authority、Issue の宣言目的、service mode、exact target、fresh receipt が一致した場合だけ行います。GitHub・Supabase・Vercel・Cloudflare は `repository-active`、Linear は `explicit-user-purpose-only` で、ユーザーが目的を明示し stable IDs が登録されるまでは read/write とも fail closed です。
+ローカル準備完了は、デプロイやドメイン公開の成功を意味しません。Claude と Codex は implementer / external-operator として同権ですが、operator label と実際のアカウント認証は別物です。認証済み操作は protected `main` の authority、Issue の宣言目的、service mode、exact target、fresh receipt が一致した場合だけ行います。GitHub・Supabase・Vercel・Cloudflare は `repository-active` です。Linear は `explicit-user-purpose-only` ですが、現在は操作自体が未登録なので、ユーザーが目的を明示して stable IDs を登録しても read/write とも fail closed です。
 
 ## 環境変数
 

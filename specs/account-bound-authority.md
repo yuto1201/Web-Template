@@ -85,7 +85,7 @@ A single shared parser in `tools/authority-core.mjs` owns this schema. Deploymen
 - Supabase: organization name and organization ID `kmjpkzaqlewqnypyqwkg`; hosted work also requires an exact non-null project ref.
 - Vercel: team name `yuto`, slug `yuto16`, team ID `team_ANEUn6gVL8dccPaY08wkvxFt`, and plan `Hobby`; deployment also requires the exact project ID.
 - Cloudflare: account name `Yuto Dev`, account ID `7ea8e713d76506f9e303f58624829aa5`, login-email fingerprint, membership role `Super Administrator`, and allowed zone plan `Free`; Pro or Business zone observations fail closed. DNS also requires the exact zone ID and hostname.
-- Linear: workspace name `Yuto33004`, workspace slug `yuto33004`, workspace URL, user-name hint, user-email fingerprint, membership role `Admin`, and team key `YUT`. Provider-stable workspace/user IDs remain null and block all access until the user supplies an explicit purpose and a read-only identity discovery Issue records them through protected main.
+- Linear: workspace name `Yuto33004`, workspace slug `yuto33004`, workspace URL, user-name hint, user-email fingerprint, membership role `Admin`, and team key `YUT`. Provider-stable workspace/user IDs remain null. An explicit user purpose and a protected-main identity-discovery Issue would still be only prerequisites for a future operation; all current access remains denied because no Linear operation is registered.
 
 Email addresses are normalized locally, compared by SHA-256 fingerprint, and never emitted in operation receipts, Issue text, PR text, or logs. Masked hints may be committed for operator recognition.
 

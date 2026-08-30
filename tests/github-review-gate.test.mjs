@@ -211,6 +211,19 @@ function externalLifecycle() {
   };
 }
 
+/** @param {ReturnType<typeof externalLifecycle>} fixture */
+function refreshLifecycleDigests(fixture) {
+  const change = /** @type {Record<string, any>} */ (fixture.change);
+  let previousDigest = null;
+  for (const phase of ["request", "preflight", "claim", "mutation", "result", "finalized"]) {
+    const reference = change[phase].reference;
+    fixture.artifacts[reference].previousDigest = previousDigest;
+    previousDigest = digestValue(fixture.artifacts[reference]);
+    change[phase].digest = previousDigest;
+  }
+  return fixture;
+}
+
 describe("GitHub exact-Head review gate", () => {
   it("accepts exact opposite-model evidence rendered in the PR body", () => {
     expect(evaluateGitHubReviewGate({ event: event(), changedPaths: ["src/app/page.tsx"], diff: "", workflow })).toMatchObject({
@@ -261,9 +274,30 @@ describe("GitHub exact-Head review gate", () => {
       artifactLoader: (reference) => artifacts[reference],
       authorityLoader: () => authority,
       evidenceCommit,
-      isAuthorityAncestor: () => true,
+      isAuthorityProtected: () => true,
     });
     expect(result).toMatchObject({ ok: true, externalChanges: 1 });
+
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(change)}` })),
+      changedPaths: Object.keys(artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => artifacts[reference],
+      authorityLoader: () => authority,
+      evidenceCommit,
+    })).toThrow(/protected-authority|loader/iu);
+
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(change)}` })),
+      changedPaths: Object.keys(artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => artifacts[reference],
+      authorityLoader: () => authority,
+      evidenceCommit,
+      isAuthorityProtected: () => false,
+    })).toThrow(/protected base|authority commit/iu);
 
     const tampered = structuredClone(change);
     tampered.result.digest = `sha256:${"9".repeat(64)}`;
@@ -275,7 +309,7 @@ describe("GitHub exact-Head review gate", () => {
       artifactLoader: (reference) => artifacts[reference],
       authorityLoader: () => authority,
       evidenceCommit,
-      isAuthorityAncestor: () => true,
+      isAuthorityProtected: () => true,
     })).toThrow(/result artifact digest mismatch/iu);
   });
 
@@ -305,8 +339,19 @@ describe("GitHub exact-Head review gate", () => {
       artifactLoader: (reference) => artifacts[reference],
       authorityLoader: () => authority,
       evidenceCommit,
-      isAuthorityAncestor: () => true,
+      isAuthorityProtected: () => true,
     })).toThrow(/strict|contract|request|receipt|lifecycle|execution Head/iu);
+  });
+
+  it("rejects more than one pre-merge external change", () => {
+    const fixture = externalLifecycle();
+    const line = `- Operation evidence: ${JSON.stringify(fixture.change)}`;
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `${line}\n${line}` })),
+      changedPaths: Object.keys(fixture.artifacts),
+      diff: "",
+      workflow,
+    })).toThrow(/at most one/iu);
   });
 
   it("rejects execution-Head relabeling and non-evidence successor changes", () => {
@@ -321,7 +366,7 @@ describe("GitHub exact-Head review gate", () => {
       artifactLoader: (reference) => fixture.artifacts[reference],
       authorityLoader: () => fixture.authority,
       evidenceCommit: fixture.evidenceCommit,
-      isAuthorityAncestor: () => true,
+      isAuthorityProtected: () => true,
     })).toThrow(/first parent|execution Head/iu);
 
     expect(() => evaluateGitHubReviewGate({
@@ -332,8 +377,52 @@ describe("GitHub exact-Head review gate", () => {
       artifactLoader: (reference) => fixture.artifacts[reference],
       authorityLoader: () => fixture.authority,
       evidenceCommit: { ...fixture.evidenceCommit, changedPaths: [...fixture.evidenceCommit.changedPaths, "src/app/page.tsx"] },
-      isAuthorityAncestor: () => true,
+      isAuthorityProtected: () => true,
     })).toThrow(/only the six|evidence files/iu);
+  });
+
+  it("rejects redigested lifecycle evidence with stale or discontinuous receipt semantics", () => {
+    const expired = externalLifecycle();
+    expired.artifacts[expired.change.preflight.reference].payload.receipt.expiresAt = "2026-08-30T01:00:02Z";
+    refreshLifecycleDigests(expired);
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(expired.change)}` })),
+      changedPaths: Object.keys(expired.artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => expired.artifacts[reference],
+      authorityLoader: () => expired.authority,
+      evidenceCommit: expired.evidenceCommit,
+      isAuthorityProtected: () => true,
+    })).toThrow(/claim.*freshness|outside.*window/iu);
+
+    const discontinuous = externalLifecycle();
+    discontinuous.artifacts[discontinuous.change.result.reference].payload.result.preflight.observedAt = "2026-08-30T01:00:00Z";
+    refreshLifecycleDigests(discontinuous);
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(discontinuous.change)}` })),
+      changedPaths: Object.keys(discontinuous.artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => discontinuous.artifacts[reference],
+      authorityLoader: () => discontinuous.authority,
+      evidenceCommit: discontinuous.evidenceCommit,
+      isAuthorityProtected: () => true,
+    })).toThrow(/result preflight.*receipt/iu);
+
+    const staleFinalization = externalLifecycle();
+    staleFinalization.artifacts[staleFinalization.change.finalized.reference].payload.finalizedAt = "2026-08-30T01:03:00Z";
+    refreshLifecycleDigests(staleFinalization);
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(staleFinalization.change)}` })),
+      changedPaths: Object.keys(staleFinalization.artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => staleFinalization.artifacts[reference],
+      authorityLoader: () => staleFinalization.authority,
+      evidenceCommit: staleFinalization.evidenceCommit,
+      isAuthorityProtected: () => true,
+    })).toThrow(/Finalized lifecycle/iu);
   });
 
   it("accepts only a same-repository Dependabot GitHub Actions version-only diff", () => {
@@ -368,6 +457,8 @@ describe("GitHub exact-Head review gate", () => {
     expect(source).not.toMatch(/^\s*if:/mu);
     expect(source).toContain("HEAD_REPOSITORY");
     expect(source).toContain("BASE_REPOSITORY");
+    expect(source).toContain("npm@11.6.2");
+    expect(source).toContain("npm ci --ignore-scripts");
   });
 
   it("runs the committed CLI and derives pull-request changes from merge-base", async () => {

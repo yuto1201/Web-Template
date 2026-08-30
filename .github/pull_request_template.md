@@ -30,7 +30,7 @@ Closes #
 
 ## External-change evidence format
 
-- For each pre-merge authenticated external change, replace `None` above with one single-line `Operation evidence` JSON object produced by `workflow bind-external-evidence` from the six-file evidence-only successor commit. PR merge itself is protected-base delivery evidence, not candidate-PR external-change evidence.
+- A pull request may declare at most one pre-merge authenticated external change. Replace `None` above with one single-line `Operation evidence` JSON object produced by `workflow bind-external-evidence` from the six-file evidence-only successor commit. PR merge itself is protected-base delivery evidence, not candidate-PR external-change evidence.
 - Operator label: `codex` or `claude`
 - Execution role: `implementer` or `external-operator`
 - Model family: `gpt` or `claude`

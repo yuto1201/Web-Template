@@ -683,7 +683,7 @@ const verificationSchema = z.object({
     summary: singleLineSchema,
   }).strict()).min(1),
   acceptanceEvidence: z.array(acceptanceEvidenceSchema).min(1),
-  externalChanges: z.array(externalChangeEvidenceSchema),
+  externalChanges: z.array(externalChangeEvidenceSchema).max(1),
   remainingWork: z.array(singleLineSchema),
   completedAt: timestampSchema,
 }).strict();
@@ -1580,7 +1580,7 @@ function assertLifecycleOperationObservation(operation, request, observationValu
  * Re-derives the complete committed lifecycle rather than trusting caller-authored phase labels.
  * @param {unknown} changeValue
  * @param {Record<string, unknown>} artifactsValue
- * @param {{ authority: unknown, evidenceCommit: { headSha: string, parentSha: string, changedPaths: string[] }, isAuthorityAncestor?: (authorityCommitSha: string, executionHeadSha: string) => boolean }} context
+ * @param {{ authority: unknown, evidenceCommit: { headSha: string, parentSha: string, changedPaths: string[] }, isAuthorityProtected: (authorityCommitSha: string) => boolean }} context
  */
 export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue, context) {
   const change = externalChangeEvidenceSchema.parse(changeValue);
@@ -1621,9 +1621,8 @@ export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue
   const request = externalRequestBaseSchema.parse(requestArtifact.payload.request);
   const contract = validateIssueContract(requestArtifact.payload.contract);
   if (contract.authority.digest !== authorityDigest(authority)) throw new Error("Lifecycle protected authority digest mismatch.");
-  if (typeof context.isAuthorityAncestor === "function" && !context.isAuthorityAncestor(contract.authority.commitSha, change.executionHeadSha)) {
-    throw new Error("Lifecycle protected authority commit is not an ancestor of the execution Head.");
-  }
+  if (typeof context.isAuthorityProtected !== "function") throw new Error("Lifecycle protected-authority verifier is required.");
+  if (!context.isAuthorityProtected(contract.authority.commitSha)) throw new Error("Lifecycle authority commit is not anchored to the protected base.");
   const repository = `${authority.resourceTargets.github.owner}/${authority.resourceTargets.github.repository}`;
   if (contract.repository !== repository) throw new Error("Lifecycle Issue contract repository does not match protected authority.");
   const authorization = resolveExternalAuthorization(contract, request);
@@ -1661,6 +1660,12 @@ export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue
 
   const receipt = artifacts.preflight.payload.receipt;
   const receiptId = receipt.receiptId;
+  const receiptObservedAt = Date.parse(receipt.observedAt);
+  const receiptExpiresAt = Date.parse(receipt.expiresAt);
+  if (
+    receiptExpiresAt <= receiptObservedAt ||
+    receiptExpiresAt - receiptObservedAt > 120_000
+  ) throw new Error("Committed preflight receipt freshness window is invalid.");
   if (artifacts.request.receiptId !== null) throw new Error("Request lifecycle cannot claim a receipt before provider preflight.");
   for (const phase of phases.slice(1)) {
     if (artifacts[phase].receiptId !== receiptId) throw new Error(`External change ${phase} receipt linkage mismatch.`);
@@ -1677,6 +1682,10 @@ export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue
     target: receipt.targetObservation,
   });
   const claimPayload = artifacts.claim.payload;
+  const claimStartedAt = Date.parse(claimPayload.startedAt);
+  if (claimStartedAt < receiptObservedAt || claimStartedAt >= receiptExpiresAt) {
+    throw new Error("Committed execution claim is outside the preflight receipt freshness window.");
+  }
   evaluateAccountObservation(authority, {
     service: definition.service,
     account: claimPayload.accountObservation,
@@ -1705,6 +1714,15 @@ export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue
   for (const key of ["receiptId", "requestId", "service", "operatorLabel", "executionRole", "executionSurface", "authorityDigest", "issueContractDigest", "authorizationDigest", "requestDigest", "mutationDigest"]) {
     if (result[key] !== (key === "receiptId" ? receiptId : expected[key])) throw new Error(`Result receipt ${key} linkage mismatch.`);
   }
+  if (
+    digestValue(result.preflight.accountObservation) !== digestValue(receipt.accountObservation) ||
+    digestValue(result.preflight.targetObservation) !== digestValue(receipt.targetObservation) ||
+    result.preflight.observedAt !== receipt.observedAt
+  ) throw new Error("Committed result preflight does not match the validated preflight receipt.");
+  const postflightObservedAt = Date.parse(result.postflight.observedAt);
+  if (postflightObservedAt <= claimStartedAt) {
+    throw new Error("Committed result postflight must follow the execution claim.");
+  }
   evaluateAccountObservation(authority, {
     service: definition.service,
     account: result.postflight.accountObservation,
@@ -1719,10 +1737,12 @@ export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue
   });
   if (outcome.status !== change.outcome) throw new Error("External change outcome does not match the strict result receipt.");
   const finalized = artifacts.finalized.payload;
+  const finalizedAt = Date.parse(finalized.finalizedAt);
   if (
     finalized.outcome !== outcome.status ||
     finalized.evidenceDigest !== outcome.evidenceDigest ||
-    Date.parse(finalized.finalizedAt) < Date.parse(result.postflight.observedAt)
+    finalizedAt < postflightObservedAt ||
+    finalizedAt - postflightObservedAt > 120_000
   ) throw new Error("Finalized lifecycle does not match the strict result receipt.");
   if (change.preflight.receiptId !== receiptId || change.result.receiptId !== receiptId) throw new Error("External change receipt binding mismatch.");
   return { change, request, contract, authorization, outcome };
@@ -1788,9 +1808,9 @@ export function bindExternalOperationEvidence(root, directory) {
   validateExternalLifecycleArtifactSet(change, artifacts, {
     authority,
     evidenceCommit: { headSha: evidenceHeadSha, parentSha: executionHeadSha, changedPaths },
-    isAuthorityAncestor(authorityCommitSha, candidateExecutionHeadSha) {
+    isAuthorityProtected(authorityCommitSha) {
       try {
-        runGit(root, ["merge-base", "--is-ancestor", authorityCommitSha, candidateExecutionHeadSha]);
+        runGit(root, ["merge-base", "--is-ancestor", authorityCommitSha, protectedAuthorityRef]);
         return true;
       } catch {
         return false;
@@ -1834,9 +1854,9 @@ function validateExternalChangeLifecycle(changes, contract, packet, currentHeadS
     const validated = validateExternalLifecycleArtifactSet(change, artifacts, {
       authority: loadAuthorityAtCommit(root, contract.authority.commitSha).authority,
       evidenceCommit: { headSha: currentHeadSha, parentSha: evidenceParentSha, changedPaths: evidenceCommitPaths },
-      isAuthorityAncestor(authorityCommitSha, executionHeadSha) {
+      isAuthorityProtected(authorityCommitSha) {
         try {
-          runGit(root, ["merge-base", "--is-ancestor", authorityCommitSha, executionHeadSha]);
+          runGit(root, ["merge-base", "--is-ancestor", authorityCommitSha, protectedAuthorityRef]);
           return true;
         } catch {
           return false;
