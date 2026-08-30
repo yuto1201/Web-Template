@@ -2,6 +2,10 @@ import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildGeneratedAssets } from "../tools/generate-agent-wrappers.mjs";
+import {
+  detectActorAsymmetry,
+  hasCanonicalOperatorParityStatement,
+} from "../tools/repository-policy.mjs";
 
 const root = path.resolve(".");
 
@@ -23,6 +27,7 @@ describe("Claude and Codex operator parity", () => {
 
     expect(settings.permissions?.deny ?? []).not.toContain("Bash");
     expect(JSON.stringify(settings)).not.toContain("guard-claude-tool.mjs");
+    expect(detectActorAsymmetry(JSON.stringify(settings))).toBeNull();
     await expect(fileExists("tools/guard-claude-tool.mjs")).resolves.toBe(false);
   });
 
@@ -30,9 +35,9 @@ describe("Claude and Codex operator parity", () => {
     const assets = await buildGeneratedAssets(root);
     const generatedClaude = assets.get("CLAUDE.md");
 
-    expect(generatedClaude).toContain("same account-bound authority as Codex");
+    expect(hasCanonicalOperatorParityStatement(generatedClaude ?? "")).toBe(true);
     expect(generatedClaude).toContain("implementer and external-operator roles");
-    expect(generatedClaude).not.toContain("must be delegated to Codex");
+    expect(detectActorAsymmetry(generatedClaude ?? "")).toBeNull();
   });
 
   it("keeps Claude and Codex evaluator roles read-only", async () => {

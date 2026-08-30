@@ -63,19 +63,54 @@ const secretPatterns = [
   /\bv1\.0-[A-Za-z0-9_-]{40,}\b/u,
 ];
 
-const actorSpecificPolicyPatterns = [
-  /guard-claude-tool\.mjs/u,
-  /(?:must be delegated to Codex|Claude may perform local implementation only|Codex-owned policy|Claude shell execution is disabled)/u,
-];
+const actorPattern = /\b(?:claude|codex)\b/iu;
+const actorReviewerRolePattern = /\b(?:claude|codex)(?:\s+and\s+(?:claude|codex))?\s+(?:reviewers?|evaluators?|auditors?)\b/iu;
+const reviewIndependencePattern = /\b(?:approv(?:e|al|es|ed|ing)|audit(?:or|ors|ed|ing)?|cross[- ]model|evaluat(?:e|or|ors|ed|ing|ion)|review(?:er|ers|ed|ing|s)?)\b/iu;
+const operatorSurfacePattern = /\b(?:authenticated|cloudflare|command|deploy(?:ment|ments|ed|ing)?|dns|external\s+(?:operation|operations|service|services)|github|mcp|provider|shell|supabase|tool|tools|vercel)\b/iu;
+const actorRestrictionPattern = /\b(?:alone|barred|belongs?\s+to|cannot|can(?:['’]t)|delegat(?:e|es|ed|ing|ion|ions)|den(?:y|ies|ied)|disallow(?:ed|s)?|exclusive|exclusively|forbid(?:den|s)?|hand[- ]?off|limited\s+to|may\s+not|must\s+not|mustn(?:['’]t)|not\s+allowed|only|owned|owner|ownership|owns|prohibit(?:ed|s|ion)?|remains?\s+(?:an?\s+)?(?:claude|codex)\s+(?:operation|operator|work)|reserved|restricted|shall\s+not|sole|stays?\s+with)\b/iu;
+const canonicalOperatorParityPattern = /\bclaude\b[^.!?。！？\n]{0,160}\bhas\s+the\s+same\s+account-bound\s+authority\s+as\s+codex\b/iu;
+
+/** @param {string} content */
+export function detectActorAsymmetry(content) {
+  if (/guard-claude-tool\.mjs/iu.test(content)) {
+    return "Actor-specific Claude guard policy remains.";
+  }
+
+  const clauses = content.split(/[.!?。！？;\n]+/u);
+  for (const clause of clauses) {
+    if (!actorPattern.test(clause) || !actorRestrictionPattern.test(clause)) {
+      continue;
+    }
+    if (actorReviewerRolePattern.test(clause)) {
+      continue;
+    }
+    if (reviewIndependencePattern.test(clause) && !operatorSurfacePattern.test(clause)) {
+      continue;
+    }
+    return `Actor-specific operator delegation, ownership, or restriction remains: ${clause.trim()}`;
+  }
+  return null;
+}
+
+/** @param {string} content */
+export function hasCanonicalOperatorParityStatement(content) {
+  return canonicalOperatorParityPattern.test(content);
+}
 
 /**
  * @param {{
  *   claudeSettings: Record<string, unknown>,
  *   generatorSource: string,
  *   generatedAssets: Map<string, string>,
+ *   canonicalSurfaces?: Map<string, string>,
  * }} input
  */
-export function operatorParityErrors({ claudeSettings, generatorSource, generatedAssets }) {
+export function operatorParityErrors({
+  claudeSettings,
+  generatorSource,
+  generatedAssets,
+  canonicalSurfaces = new Map(),
+}) {
   const errors = [];
   const permissions = claudeSettings.permissions && typeof claudeSettings.permissions === "object"
     ? claudeSettings.permissions
@@ -90,17 +125,26 @@ export function operatorParityErrors({ claudeSettings, generatorSource, generate
     errors.push("Claude project settings must not contain a PreToolUse policy hook.");
   }
 
+  const generatedClaude = generatedAssets.get("CLAUDE.md");
   const sources = new Map([
     [".claude/settings.json", JSON.stringify(claudeSettings)],
     ["tools/generate-agent-wrappers.mjs", generatorSource],
-    ...generatedAssets,
+    ...(typeof generatedClaude === "string" ? [["CLAUDE.md", generatedClaude]] : []),
+    ...canonicalSurfaces,
   ]);
   for (const [relativePath, content] of sources) {
-    if (actorSpecificPolicyPatterns[0].test(content)) {
-      errors.push(`Operator parity policy still references the retired Claude guard in ${relativePath}.`);
+    const asymmetry = detectActorAsymmetry(content);
+    if (asymmetry) {
+      errors.push(`${relativePath}: ${asymmetry}`);
     }
-    if (actorSpecificPolicyPatterns[1].test(content)) {
-      errors.push(`Operator parity policy still contains actor-specific delegation or ownership wording in ${relativePath}.`);
+  }
+  for (const relativePath of ["tools/generate-agent-wrappers.mjs", "CLAUDE.md"]) {
+    const content = sources.get(relativePath);
+    if (typeof content !== "string" || !hasCanonicalOperatorParityStatement(content)) {
+      const surface = relativePath === "CLAUDE.md"
+        ? "generated CLAUDE.md"
+        : `generator source (${relativePath})`;
+      errors.push(`Canonical operator equality statement is missing from ${surface}.`);
     }
   }
   return errors;
@@ -349,7 +393,15 @@ export async function validateRepository(root = defaultRoot) {
       await readFile(path.join(root, ".codex", "agents", `${slug}.toml`), "utf8"),
     );
   }
-  errors.push(...operatorParityErrors({ claudeSettings, generatorSource, generatedAssets }));
+  const canonicalSurfaces = new Map([
+    ["tools/completion-audit.mjs", await readFile(path.join(root, "tools", "completion-audit.mjs"), "utf8")],
+  ]);
+  errors.push(...operatorParityErrors({
+    claudeSettings,
+    generatorSource,
+    generatedAssets,
+    canonicalSurfaces,
+  }));
 
   for (const relative of collectTrackedFiles(root)) {
     const normalized = relative.toLowerCase();
