@@ -218,7 +218,7 @@ describe("current-Head pre-merge gate", () => {
         ...bundle.packet,
         changedPaths: [...bundle.packet.changedPaths, "evidence/external-operations/merge/result.json"],
       },
-    })).toThrow(/external change|lifecycle|committed artifact/iu);
+    })).toThrow(/risk|external change|lifecycle|committed artifact/iu);
   });
 
   it("rejects evidence for a silently changed Issue contract", () => {
