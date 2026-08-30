@@ -28,6 +28,7 @@ describe("current-Head pre-merge gate", () => {
       "github.merge_pr",
       "github.update_ruleset",
       "supabase.apply_migrations",
+      "vercel.deploy_preview",
       "vercel.deploy_production",
       "cloudflare.upsert_dns",
     ]) {

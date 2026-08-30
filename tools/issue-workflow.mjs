@@ -1,8 +1,10 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   collectAndValidateCleanupPlan,
+  claimOperationExecution,
   createOperationReceiptState,
   createMergeOperationRequest,
   digestValue,
@@ -35,15 +37,22 @@ async function writeJson(filePath, value) {
 }
 
 /** @param {string} filePath @param {unknown} value */
-async function writeJsonExclusive(filePath, value) {
-  await mkdir(path.dirname(filePath), { recursive: true });
+async function writeJsonExclusive(filePath, value, existsMessage) {
+  let handle;
   try {
-    await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
+    handle = await open(filePath, flags, 0o600);
+    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      throw new Error("Receipt ID has already been validated or consumed; reuse is forbidden.");
+      throw new Error(existsMessage);
+    }
+    if (error && typeof error === "object" && "code" in error && error.code === "ELOOP") {
+      throw new Error("Receipt-state files must not be symbolic links.");
     }
     throw error;
+  } finally {
+    await handle?.close();
   }
 }
 
@@ -81,13 +90,61 @@ function printJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-/** @param {string} root @param {string} receiptId @param {"validated" | "consumed"} phase */
-function receiptStatePath(root, receiptId, phase) {
-  return resolveInside(
-    root,
-    `.artifacts/ops-receipts/${receiptId}.${phase}.json`,
-    path.join(".artifacts", "ops-receipts"),
-  );
+/** @param {string} root @param {"receipts" | "mutations"} kind */
+async function secureReceiptStateDirectory(root, kind) {
+  const canonicalRoot = await realpath(root);
+  let current = canonicalRoot;
+  for (const segment of [".artifacts", "ops-receipts", kind]) {
+    current = path.join(current, segment);
+    let entry;
+    try {
+      entry = await lstat(current);
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+      try {
+        await mkdir(current, { mode: 0o700 });
+      } catch (mkdirError) {
+        if (!(mkdirError && typeof mkdirError === "object" && "code" in mkdirError && mkdirError.code === "EEXIST")) throw mkdirError;
+      }
+      entry = await lstat(current);
+    }
+    if (entry.isSymbolicLink()) throw new Error("Receipt-state parent directories must not be symbolic links.");
+    if (!entry.isDirectory()) throw new Error("Receipt-state parent path must be a directory.");
+    if (await realpath(current) !== current) throw new Error("Receipt-state parent directory resolved outside its canonical path.");
+  }
+  return current;
+}
+
+/** @param {string} root @param {string} receiptId */
+async function validatedReceiptStatePath(root, receiptId) {
+  if (!/^receipt-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(receiptId)) throw new Error("Receipt ID is not a canonical state key.");
+  return path.join(await secureReceiptStateDirectory(root, "receipts"), `${receiptId}.validated.json`);
+}
+
+/** @param {string} root @param {string} mutationDigest @param {"claim" | "finalized"} phase */
+async function mutationStatePath(root, mutationDigest, phase) {
+  const match = /^sha256:([0-9a-f]{64})$/u.exec(mutationDigest);
+  if (!match) throw new Error("Mutation digest is not a canonical state key.");
+  return path.join(await secureReceiptStateDirectory(root, "mutations"), `${match[1]}.${phase}.json`);
+}
+
+/** @param {string} filePath */
+async function readStateJson(filePath) {
+  let handle;
+  try {
+    const entry = await lstat(filePath);
+    if (entry.isSymbolicLink()) throw new Error("Receipt-state files must not be symbolic links.");
+    if (!entry.isFile()) throw new Error("Receipt-state path must be a regular file.");
+    handle = await open(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    return JSON.parse(await handle.readFile("utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ELOOP") {
+      throw new Error("Receipt-state files must not be symbolic links.");
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
 }
 
 /** @param {string} root @param {Record<string, string>} options */
@@ -102,14 +159,45 @@ async function readReceiptContext(root, options) {
     contract,
     request,
     executionSurface: required(options, "surface"),
-    now: required(options, "now"),
   };
+}
+
+/** @param {string} root @param {unknown} preflight @param {Record<string, any>} baseContext */
+async function restoreValidatedPreflight(root, preflight, baseContext) {
+  if (!preflight || typeof preflight !== "object" || typeof preflight.receiptId !== "string") {
+    throw new Error("Execution requires a valid preflight receipt.");
+  }
+  let validatedState;
+  try {
+    validatedState = await readStateJson(await validatedReceiptStatePath(root, preflight.receiptId));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      throw new Error("Execution requires a validated preflight receipt.");
+    }
+    throw error;
+  }
+  if (validatedState.preflightDigest !== digestValue(preflight)) {
+    throw new Error("Persisted preflight receipt digest mismatch.");
+  }
+  const receiptState = createOperationReceiptState();
+  const validatedPreflight = validatePreflightReceipt(preflight, {
+    ...baseContext,
+    now: validatedState.validatedAt,
+    receiptState,
+  });
+  if (validatedState.validationDigest !== digestValue(validatedPreflight)) {
+    throw new Error("Persisted preflight validation evidence mismatch.");
+  }
+  return { receiptState, validatedState, validatedPreflight };
 }
 
 export async function runCli(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   const options = parseOptions(rest);
   const root = path.resolve(options.root ?? repositoryRoot);
+  if (["validate-preflight", "claim-execution", "validate-result"].includes(command) && options.now !== undefined) {
+    throw new Error("--now is not accepted by production receipt commands; the trusted runtime clock is used.");
+  }
 
   if (command === "snapshot") {
     const input = await readJson(required(options, "input"));
@@ -128,64 +216,80 @@ export async function runCli(argv = process.argv.slice(2)) {
   if (command === "validate-preflight") {
     const receipt = await readJson(required(options, "file"));
     const receiptState = createOperationReceiptState();
+    const baseContext = await readReceiptContext(root, options);
+    const validatedAt = new Date().toISOString();
     const validated = validatePreflightReceipt(receipt, {
-      ...await readReceiptContext(root, options),
+      ...baseContext,
+      now: validatedAt,
       receiptState,
     });
-    await writeJsonExclusive(receiptStatePath(root, validated.receiptId, "validated"), {
+    await writeJsonExclusive(await validatedReceiptStatePath(root, validated.receiptId), {
       schemaVersion: 1,
       receiptId: validated.receiptId,
       preflightDigest: digestValue(receipt),
-      validatedAt: required(options, "now"),
+      requestDigest: validated.requestDigest,
+      mutationDigest: validated.mutationDigest,
+      validatedAt,
       validationDigest: digestValue(validated),
       evidence: validated,
-    });
+    }, "Receipt ID has already been validated; reuse is forbidden.");
     printJson(validated);
+    return;
+  }
+
+  if (command === "claim-execution") {
+    const preflight = await readJson(required(options, "preflight"));
+    const baseContext = await readReceiptContext(root, options);
+    const { receiptState } = await restoreValidatedPreflight(root, preflight, baseContext);
+    const claim = claimOperationExecution(preflight.receiptId, { receiptState, now: new Date().toISOString() });
+    await writeJsonExclusive(await mutationStatePath(root, claim.mutationDigest, "claim"), {
+      schemaVersion: 1,
+      receiptId: claim.receiptId,
+      requestId: claim.requestId,
+      requestDigest: claim.requestDigest,
+      mutationDigest: claim.mutationDigest,
+      startedAt: claim.startedAt,
+      claimDigest: digestValue(claim),
+      evidence: claim,
+    }, "The same mutation has already been claimed; retry is forbidden.");
+    printJson(claim);
     return;
   }
 
   if (command === "validate-result") {
     const result = await readJson(required(options, "file"));
     const preflight = await readJson(required(options, "preflight"));
-    if (!preflight || typeof preflight !== "object" || typeof preflight.receiptId !== "string") {
-      throw new Error("Operation result requires a valid preflight receipt.");
-    }
-    let validatedState;
+    const baseContext = await readReceiptContext(root, options);
+    const { receiptState } = await restoreValidatedPreflight(root, preflight, baseContext);
+    let persistedClaim;
     try {
-      validatedState = await readJson(receiptStatePath(root, preflight.receiptId, "validated"));
+      persistedClaim = await readStateJson(await mutationStatePath(root, preflight.mutationDigest, "claim"));
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        throw new Error("Operation result requires a valid preflight receipt before execution.");
+        throw new Error("Operation result requires an atomic execution claim before mutation.");
       }
       throw error;
     }
-    if (validatedState.preflightDigest !== digestValue(preflight)) {
-      throw new Error("Persisted preflight receipt digest mismatch.");
+    if (
+      persistedClaim.receiptId !== preflight.receiptId ||
+      persistedClaim.requestDigest !== preflight.requestDigest ||
+      persistedClaim.mutationDigest !== preflight.mutationDigest
+    ) {
+      throw new Error("Persisted execution claim does not match the receipt, request, and mutation digests.");
     }
-    try {
-      await readFile(receiptStatePath(root, preflight.receiptId, "consumed"), "utf8");
-      throw new Error("Preflight receipt ID has already been consumed; result receipt reuse is forbidden.");
-    } catch (error) {
-      if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
-    }
-    const receiptState = createOperationReceiptState();
-    const baseContext = await readReceiptContext(root, options);
-    const validatedPreflight = validatePreflightReceipt(preflight, {
-      ...baseContext,
-      now: validatedState.validatedAt,
-      receiptState,
-    });
-    if (validatedState.validationDigest !== digestValue(validatedPreflight)) {
-      throw new Error("Persisted preflight validation evidence mismatch.");
-    }
-    const validated = validateOperationResult(result, { ...baseContext, receiptState });
-    await writeJsonExclusive(receiptStatePath(root, validated.receiptId, "consumed"), {
+    const claim = claimOperationExecution(preflight.receiptId, { receiptState, now: persistedClaim.startedAt });
+    if (persistedClaim.claimDigest !== digestValue(claim)) throw new Error("Persisted execution claim digest mismatch.");
+    const finalizedAt = new Date().toISOString();
+    const validated = validateOperationResult(result, { ...baseContext, now: finalizedAt, receiptState });
+    await writeJsonExclusive(await mutationStatePath(root, validated.mutationDigest, "finalized"), {
       schemaVersion: 1,
       receiptId: validated.receiptId,
+      requestDigest: validated.requestDigest,
+      mutationDigest: validated.mutationDigest,
       resultDigest: digestValue(result),
-      consumedAt: required(options, "now"),
+      finalizedAt,
       evidence: validated,
-    });
+    }, "Execution claim has already been finalized; result reuse is forbidden.");
     printJson(validated);
     return;
   }
@@ -254,7 +358,7 @@ export async function runCli(argv = process.argv.slice(2)) {
     return;
   }
 
-  throw new Error("Usage: issue-workflow <snapshot|prepare-review|record-review|validate-request|validate-preflight|validate-result|gate|render-pr|request-merge|cleanup-check|simulate|transition> [options]");
+  throw new Error("Usage: issue-workflow <snapshot|prepare-review|record-review|validate-request|validate-preflight|claim-execution|validate-result|gate|render-pr|request-merge|cleanup-check|simulate|transition> [options]");
 }
 
 runCli().catch((error) => {

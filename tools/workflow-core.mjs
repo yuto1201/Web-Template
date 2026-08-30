@@ -215,7 +215,7 @@ const operationDefinitions = /** @type {Record<string, {
     reasonCodes: ["acceptance-evidence"],
     inputs: z.object({ projectSource: z.literal("config/ownership.json"), headSha: shaSchema }).strict(),
     constraints: z.object({ projectSource: z.literal("config/ownership.json") }).strict(),
-    requiresExactHead: false,
+    requiresExactHead: true,
     evidence: ["authenticated Vercel scope", "preview deployment URL", "deployed Head SHA"],
   },
   "vercel.deploy_production": {
@@ -387,11 +387,42 @@ const operationResultSchema = receiptBindingSchema.extend({
   schemaVersion: z.literal(1),
   preflight: observationPairSchema,
   postflight: observationPairSchema,
-  outcome: z.object({
-    status: z.enum(["succeeded", "failed", "ambiguous"]),
-    evidenceDigest: digestSchema,
-  }).strict(),
+  outcome: z.unknown(),
 }).strict();
+
+const operationSuccessEvidenceSchemas = {
+  "github.read_issue": z.object({ issue: z.number().int().positive(), state: z.enum(["OPEN", "CLOSED"]), updatedAt: timestampSchema }).strict(),
+  "github.push_branch": z.object({ branch: branchSchema, headSha: shaSchema }).strict(),
+  "github.create_pr": z.object({ prNumber: z.number().int().positive(), headSha: shaSchema, state: z.literal("OPEN") }).strict(),
+  "github.merge_pr": z.object({
+    prNumber: z.number().int().positive(),
+    headSha: shaSchema,
+    mergeCommitSha: shaSchema,
+    issueClosed: z.literal(true),
+  }).strict(),
+  "github.delete_branch": z.object({ branch: branchSchema, deleted: z.literal(true) }).strict(),
+  "github.update_ruleset": z.object({
+    rulesetId: z.number().int().positive(),
+    enforcement: z.literal("active"),
+    requiredCheckName: z.literal("Exact Head review policy"),
+  }).strict(),
+  "supabase.inspect_project": z.object({ projectRefDigest: digestSchema, status: z.literal("reachable") }).strict(),
+  "supabase.apply_migrations": z.object({
+    projectRefDigest: digestSchema,
+    appliedMigrations: operationDefinitions["supabase.apply_migrations"].inputs.shape.migrations,
+  }).strict(),
+  "vercel.inspect_project": z.object({ projectIdDigest: digestSchema, status: z.literal("reachable") }).strict(),
+  "vercel.deploy_preview": z.object({ deploymentId: singleLineSchema, projectIdDigest: digestSchema, headSha: shaSchema, environment: z.literal("preview") }).strict(),
+  "vercel.deploy_production": z.object({ deploymentId: singleLineSchema, projectIdDigest: digestSchema, headSha: shaSchema, environment: z.literal("production") }).strict(),
+  "cloudflare.inspect_zone": z.object({ zoneIdDigest: digestSchema, zonePlan: z.enum(["Free", "Pro", "Business", "Enterprise"]), recordSetDigest: digestSchema }).strict(),
+  "cloudflare.upsert_dns": z.object({
+    recordId: singleLineSchema,
+    zoneIdDigest: digestSchema,
+    recordName: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.recordName,
+    recordType: operationDefinitions["cloudflare.upsert_dns"].inputs.shape.recordType,
+    proxied: z.literal(false),
+  }).strict(),
+};
 
 const acceptanceEvidenceSchema = z.object({
   id: acceptanceIdSchema,
@@ -735,6 +766,8 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
 export function createOperationReceiptState() {
   return {
     validatedPreflights: new Map(),
+    executionClaims: new Map(),
+    mutationClaims: new Map(),
     consumedReceiptIds: new Set(),
   };
 }
@@ -742,11 +775,16 @@ export function createOperationReceiptState() {
 /** @param {unknown} value */
 function parseReceiptState(value) {
   if (!value || typeof value !== "object") throw new Error("Receipt validation requires caller-owned receipt state.");
-  const state = /** @type {{ validatedPreflights?: unknown, consumedReceiptIds?: unknown }} */ (value);
-  if (!(state.validatedPreflights instanceof Map) || !(state.consumedReceiptIds instanceof Set)) {
-    throw new Error("Receipt validation requires caller-owned validated and consumed receipt state.");
+  const state = /** @type {{ validatedPreflights?: unknown, executionClaims?: unknown, mutationClaims?: unknown, consumedReceiptIds?: unknown }} */ (value);
+  if (
+    !(state.validatedPreflights instanceof Map) ||
+    !(state.executionClaims instanceof Map) ||
+    !(state.mutationClaims instanceof Map) ||
+    !(state.consumedReceiptIds instanceof Set)
+  ) {
+    throw new Error("Receipt validation requires caller-owned preflight, execution-claim, mutation, and terminal state.");
   }
-  return /** @type {{ validatedPreflights: Map<string, any>, consumedReceiptIds: Set<string> }} */ (state);
+  return /** @type {{ validatedPreflights: Map<string, any>, executionClaims: Map<string, any>, mutationClaims: Map<string, any>, consumedReceiptIds: Set<string> }} */ (state);
 }
 
 /** @param {unknown} value @param {string} label */
@@ -797,7 +835,7 @@ function expectedReceiptBinding(context) {
     issueContractDigest: context.contract.digest,
     authorizationDigest: digestValue(context.validatedRequest.authorization),
     requestDigest: digestValue(context.request),
-    mutationDigest: digestValue(context.request.inputs),
+    mutationDigest: digestValue({ operation: context.request.operation, inputs: context.request.inputs }),
   };
 }
 
@@ -866,6 +904,7 @@ export function validatePreflightReceipt(value, contextValue) {
     targetObservationDigest: digestValue(receipt.targetObservation),
     observedAt: receipt.observedAt,
     expiresAt: receipt.expiresAt,
+    validatedAt: context.now.value,
     warnings: identity.warnings,
   };
   context.receiptState.validatedPreflights.set(receipt.receiptId, {
@@ -875,20 +914,145 @@ export function validatePreflightReceipt(value, contextValue) {
   return validated;
 }
 
+/** @param {unknown} receiptIdValue @param {unknown} contextValue */
+export function claimOperationExecution(receiptIdValue, contextValue) {
+  const receiptId = receiptIdSchema.parse(receiptIdValue);
+  if (!contextValue || typeof contextValue !== "object") throw new Error("Execution claim context is required.");
+  const context = /** @type {Record<string, any>} */ (contextValue);
+  const receiptState = parseReceiptState(context.receiptState);
+  const now = receiptTimestamp(context.now ?? new Date().toISOString(), "Execution claim time");
+  if (receiptState.consumedReceiptIds.has(receiptId)) {
+    throw new Error("Receipt execution is already terminal; mutation retry is forbidden.");
+  }
+  if (receiptState.executionClaims.has(receiptId)) {
+    throw new Error("Receipt execution has already been claimed; mutation retry is forbidden.");
+  }
+  const preflight = receiptState.validatedPreflights.get(receiptId);
+  if (!preflight) throw new Error("Execution claim requires a valid preflight receipt.");
+  if (now.milliseconds < Date.parse(preflight.validatedAt)) {
+    throw new Error("Execution claim time predates preflight validation.");
+  }
+  if (now.milliseconds >= Date.parse(preflight.expiresAt)) {
+    throw new Error("Preflight receipt is expired or stale at execution claim time.");
+  }
+  const existingMutation = receiptState.mutationClaims.get(preflight.mutationDigest);
+  if (existingMutation) {
+    const phase = existingMutation.status === "finalized" ? "terminal" : "already claimed";
+    throw new Error(`The same mutation is ${phase}; mutation retry under another receipt ID is forbidden.`);
+  }
+  const claim = {
+    ok: true,
+    status: "claimed",
+    receiptId,
+    requestId: preflight.requestId,
+    requestDigest: preflight.requestDigest,
+    mutationDigest: preflight.mutationDigest,
+    startedAt: now.value,
+  };
+  receiptState.validatedPreflights.delete(receiptId);
+  receiptState.executionClaims.set(receiptId, { ...preflight, ...claim });
+  receiptState.mutationClaims.set(preflight.mutationDigest, {
+    status: "claimed",
+    receiptId,
+    requestDigest: preflight.requestDigest,
+    mutationDigest: preflight.mutationDigest,
+    startedAt: now.value,
+  });
+  return claim;
+}
+
+/** @param {string} operation */
+function operationOutcomeSchema(operation) {
+  const successEvidenceSchema = operationSuccessEvidenceSchemas[operation];
+  const terminalEvidenceBase = {
+    operation: z.literal(operation),
+    detailDigest: digestSchema,
+  };
+  return z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("succeeded"),
+      evidence: successEvidenceSchema,
+      evidenceDigest: digestSchema,
+    }).strict(),
+    z.object({
+      status: z.literal("failed"),
+      retryPolicy: z.literal("forbidden"),
+      evidence: z.object({
+        ...terminalEvidenceBase,
+        errorCode: z.string().regex(/^[A-Z][A-Z0-9_]{2,127}$/u),
+        providerState: z.enum(["unchanged", "unknown"]),
+      }).strict(),
+      evidenceDigest: digestSchema,
+    }).strict(),
+    z.object({
+      status: z.literal("ambiguous"),
+      retryPolicy: z.literal("inspect-provider-state-only"),
+      evidence: z.object({
+        ...terminalEvidenceBase,
+        reasonCode: z.string().regex(/^[A-Z][A-Z0-9_]{2,127}$/u),
+        providerState: z.literal("unknown"),
+      }).strict(),
+      evidenceDigest: digestSchema,
+    }).strict(),
+  ]);
+}
+
+/** @param {string} operation @param {Record<string, any>} evidence @param {Record<string, any>} inputs @param {string} targetRef @param {unknown} postTarget */
+function validateOperationSuccessEvidence(operation, evidence, inputs, targetRef, postTarget) {
+  const checks = [];
+  const targetRefDigest = digestValue(targetRef);
+  if (operation === "github.read_issue") checks.push([evidence.issue, inputs.issue, "Issue"]);
+  if (operation === "github.push_branch") checks.push([evidence.branch, inputs.branch, "branch"], [evidence.headSha, inputs.headSha, "Head SHA"]);
+  if (operation === "github.create_pr") checks.push([evidence.headSha, inputs.headSha, "Head SHA"]);
+  if (operation === "github.merge_pr") checks.push([evidence.prNumber, inputs.prNumber, "PR number"], [evidence.headSha, inputs.headSha, "Head SHA"]);
+  if (operation === "github.delete_branch") checks.push([evidence.branch, inputs.branch, "branch"]);
+  if (operation === "github.update_ruleset") {
+    checks.push([evidence.enforcement, inputs.enforcement, "ruleset enforcement"], [evidence.requiredCheckName, inputs.requiredCheckName, "required check"]);
+  }
+  if (operation === "supabase.inspect_project" || operation === "supabase.apply_migrations") {
+    checks.push([evidence.projectRefDigest, targetRefDigest, "Supabase project reference"]);
+  }
+  if (operation === "supabase.apply_migrations") checks.push([canonicalJson(evidence.appliedMigrations), canonicalJson(inputs.migrations), "migration list"]);
+  if (operation === "vercel.inspect_project" || operation === "vercel.deploy_preview" || operation === "vercel.deploy_production") {
+    checks.push([evidence.projectIdDigest, targetRefDigest, "Vercel project reference"]);
+  }
+  if (operation === "vercel.deploy_preview" || operation === "vercel.deploy_production") {
+    checks.push([evidence.headSha, inputs.headSha, "Head SHA"]);
+  }
+  if (operation === "cloudflare.upsert_dns") {
+    checks.push(
+      [evidence.recordName, inputs.recordName, "DNS record name"],
+      [evidence.recordType, inputs.recordType, "DNS record type"],
+      [evidence.proxied, inputs.proxied, "DNS proxy mode"],
+    );
+  }
+  if (operation === "cloudflare.inspect_zone" || operation === "cloudflare.upsert_dns") {
+    checks.push([evidence.zoneIdDigest, targetRefDigest, "Cloudflare zone reference"]);
+  }
+  if (operation === "cloudflare.inspect_zone" && postTarget && typeof postTarget === "object") {
+    checks.push([evidence.zonePlan, postTarget.zonePlan, "Cloudflare zone plan"]);
+  }
+  for (const [actual, expected, label] of checks) {
+    if (actual !== expected) throw new Error(`Operation result ${label} does not match the frozen mutation request.`);
+  }
+}
+
 /** @param {unknown} value @param {unknown} contextValue */
 export function validateOperationResult(value, contextValue) {
   const result = operationResultSchema.parse(value);
   const context = resolveReceiptContext(contextValue);
   if (context.receiptState.consumedReceiptIds.has(result.receiptId)) {
-    throw new Error("Preflight receipt ID has already been consumed; result receipt reuse is forbidden.");
+    throw new Error("Execution claim has already been finalized; result receipt reuse is forbidden.");
   }
-  const preflight = context.receiptState.validatedPreflights.get(result.receiptId);
-  if (!preflight) throw new Error("Operation result requires a valid preflight receipt before execution.");
+  const claim = context.receiptState.executionClaims.get(result.receiptId);
+  if (!claim) throw new Error("Operation result requires an atomic execution claim before mutation.");
   assertReceiptBinding(result, expectedReceiptBinding(context), context.executionSurface);
-  if (result.preflight.observedAt !== preflight.observedAt) throw new Error("Result preflight observation timestamp mismatch.");
+  if (result.requestDigest !== claim.requestDigest || result.mutationDigest !== claim.mutationDigest) {
+    throw new Error("Operation result does not match the claimed request and mutation digests.");
+  }
+  if (result.preflight.observedAt !== claim.observedAt) throw new Error("Result preflight observation timestamp mismatch.");
   const postObservedAt = receiptTimestamp(result.postflight.observedAt, "Result postflight observedAt");
-  if (postObservedAt.milliseconds < Date.parse(result.preflight.observedAt)) throw new Error("Result postflight observation predates preflight.");
-  if (postObservedAt.milliseconds >= Date.parse(preflight.expiresAt)) throw new Error("Operation result was observed after the preflight receipt expired.");
+  if (postObservedAt.milliseconds <= Date.parse(claim.startedAt)) throw new Error("Result postflight observation must be after execution startedAt.");
   if (postObservedAt.milliseconds > context.now.milliseconds) throw new Error("Operation result observation is dated in the future.");
   if (context.now.milliseconds - postObservedAt.milliseconds > 120_000) throw new Error("Operation result observation is stale.");
   const identity = evaluateAccountObservation(context.authority, {
@@ -898,17 +1062,31 @@ export function validateOperationResult(value, contextValue) {
     previousAccount: result.preflight.accountObservation,
     previousTarget: result.preflight.targetObservation,
   });
-  if (digestValue(result.preflight.accountObservation) !== preflight.accountObservationDigest) {
+  if (digestValue(result.preflight.accountObservation) !== claim.accountObservationDigest) {
     throw new Error("Result preflight account observation does not match the validated receipt.");
   }
-  if (digestValue(result.preflight.targetObservation) !== preflight.targetObservationDigest) {
+  if (digestValue(result.preflight.targetObservation) !== claim.targetObservationDigest) {
     throw new Error("Result preflight target observation does not match the validated receipt.");
   }
-  if (digestValue(identity.accountRef) !== preflight.accountRefDigest) throw new Error("Result account reference does not match preflight.");
-  if (digestValue(identity.targetRef) !== preflight.targetRefDigest) throw new Error("Result target reference does not match preflight.");
+  if (digestValue(identity.accountRef) !== claim.accountRefDigest) throw new Error("Result account reference does not match preflight.");
+  if (digestValue(identity.targetRef) !== claim.targetRefDigest) throw new Error("Result target reference does not match preflight.");
+  const outcome = operationOutcomeSchema(context.request.operation).parse(result.outcome);
+  if (outcome.evidenceDigest !== digestValue(outcome.evidence)) {
+    throw new Error("Operation result evidence digest does not match the validated redacted evidence.");
+  }
+  if (outcome.status === "succeeded") {
+    validateOperationSuccessEvidence(
+      context.request.operation,
+      outcome.evidence,
+      context.request.inputs,
+      context.validatedRequest.resolvedTargetRef,
+      result.postflight.targetObservation,
+    );
+  }
   const validated = {
     ok: true,
     consumed: true,
+    finalized: true,
     receiptId: result.receiptId,
     requestId: result.requestId,
     issue: context.contract.issue,
@@ -923,13 +1101,25 @@ export function validateOperationResult(value, contextValue) {
     mutationDigest: result.mutationDigest,
     accountRefDigest: digestValue(identity.accountRef),
     targetRefDigest: digestValue(identity.targetRef),
-    outcome: result.outcome.status,
-    evidenceDigest: result.outcome.evidenceDigest,
+    outcome: outcome.status,
+    ...(outcome.status === "succeeded" ? {} : { retryPolicy: outcome.retryPolicy }),
+    evidence: outcome.evidence,
+    evidenceDigest: outcome.evidenceDigest,
+    startedAt: claim.startedAt,
     observedAt: result.postflight.observedAt,
     warnings: identity.warnings,
   };
-  context.receiptState.validatedPreflights.delete(result.receiptId);
+  context.receiptState.executionClaims.delete(result.receiptId);
   context.receiptState.consumedReceiptIds.add(result.receiptId);
+  context.receiptState.mutationClaims.set(result.mutationDigest, {
+    status: "finalized",
+    receiptId: result.receiptId,
+    requestDigest: result.requestDigest,
+    mutationDigest: result.mutationDigest,
+    startedAt: claim.startedAt,
+    finalizedAt: context.now.value,
+    outcome: outcome.status,
+  });
   return validated;
 }
 

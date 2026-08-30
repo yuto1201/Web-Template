@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { authorityDigest } from "../tools/authority-core.mjs";
 import {
+  claimOperationExecution,
   createOperationReceiptState,
   digestValue,
   loadProtectedAuthority,
@@ -93,7 +94,7 @@ function preflightReceipt(contract, request, overrides = {}) {
     issueContractDigest: contract.digest,
     authorizationDigest: digestValue(externalAuthorization()),
     requestDigest: digestValue(request),
-    mutationDigest: digestValue(request.inputs),
+    mutationDigest: digestValue({ operation: request.operation, inputs: request.inputs }),
     accountObservation: observation.account,
     targetObservation: observation.target,
     observedAt: "2026-08-30T01:00:00Z",
@@ -104,6 +105,12 @@ function preflightReceipt(contract, request, overrides = {}) {
 
 function operationResult(receipt, overrides = {}) {
   const observation = githubObservation();
+  const evidence = {
+    prNumber: 15,
+    headSha,
+    mergeCommitSha: "7".repeat(40),
+    issueClosed: true,
+  };
   return {
     schemaVersion: 1,
     receiptId: receipt.receiptId,
@@ -129,7 +136,8 @@ function operationResult(receipt, overrides = {}) {
     },
     outcome: {
       status: "succeeded",
-      evidenceDigest: `sha256:${"8".repeat(64)}`,
+      evidence,
+      evidenceDigest: digestValue(evidence),
     },
     ...overrides,
   };
@@ -280,7 +288,7 @@ describe("workflow contracts", () => {
     }
   });
 
-  it("requires a validated one-use preflight and rejects account or target switches", async () => {
+  it("requires an atomic one-use execution claim and rejects account or target switches", async () => {
     const { root } = await gitAuthorityFixture(authority, authority);
     const contract = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", loadProtectedAuthority(root, "main"));
     const request = mergeRequest();
@@ -296,10 +304,11 @@ describe("workflow contracts", () => {
     expect(() => validateOperationResult(operationResult(receipt), {
       ...context,
       receiptState: createOperationReceiptState(),
-    })).toThrow(/valid preflight/u);
+    })).toThrow(/execution claim/u);
 
     const strictResultState = createOperationReceiptState();
     validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z", receiptState: strictResultState });
+    claimOperationExecution(receipt.receiptId, { receiptState: strictResultState, now: "2026-08-30T01:01:05Z" });
     expect(() => validateOperationResult({ ...operationResult(receipt), unexpected: true }, {
       ...context,
       receiptState: strictResultState,
@@ -307,23 +316,175 @@ describe("workflow contracts", () => {
 
     const accountSwitchState = createOperationReceiptState();
     validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z", receiptState: accountSwitchState });
+    claimOperationExecution(receipt.receiptId, { receiptState: accountSwitchState, now: "2026-08-30T01:01:05Z" });
     const accountSwitch = operationResult(receipt);
     accountSwitch.preflight.accountObservation = { ...accountSwitch.preflight.accountObservation, login: "company-user" };
     expect(() => validateOperationResult(accountSwitch, { ...context, receiptState: accountSwitchState })).toThrow(/account switch/u);
 
     const targetSwitchState = createOperationReceiptState();
     validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z", receiptState: targetSwitchState });
+    claimOperationExecution(receipt.receiptId, { receiptState: targetSwitchState, now: "2026-08-30T01:01:05Z" });
     const targetSwitch = operationResult(receipt);
     targetSwitch.preflight.targetObservation = { ...targetSwitch.preflight.targetObservation, repositoryId: 99 };
     expect(() => validateOperationResult(targetSwitch, { ...context, receiptState: targetSwitchState })).toThrow(/target switch/u);
 
     const receiptState = createOperationReceiptState();
     validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z", receiptState });
+    expect(claimOperationExecution(receipt.receiptId, {
+      receiptState,
+      now: "2026-08-30T01:01:05Z",
+    })).toMatchObject({
+      ok: true,
+      status: "claimed",
+      requestDigest: receipt.requestDigest,
+      mutationDigest: receipt.mutationDigest,
+    });
     const validated = validateOperationResult(operationResult(receipt), { ...context, receiptState });
     expect(validated).toMatchObject({ ok: true, consumed: true, outcome: "succeeded" });
     expect(validated).not.toHaveProperty("preflight");
     expect(validated).not.toHaveProperty("postflight");
     expect(() => validateOperationResult(operationResult(receipt), { ...context, receiptState })).toThrow(/consumed|reuse/u);
+  });
+
+  it("blocks the same mutation under another receipt ID and keeps ambiguous outcomes terminal", async () => {
+    const { root } = await gitAuthorityFixture(authority, authority);
+    const contract = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", loadProtectedAuthority(root, "main"));
+    const request = mergeRequest();
+    const first = preflightReceipt(contract, request);
+    const second = preflightReceipt(contract, request, { receiptId: "receipt-issue-5-github-merge-pr-2" });
+    const receiptState = createOperationReceiptState();
+    const context = { root, contract, request, executionSurface: "github-cli", receiptState };
+
+    validatePreflightReceipt(first, { ...context, now: "2026-08-30T01:01:00Z" });
+    validatePreflightReceipt(second, { ...context, now: "2026-08-30T01:01:00Z" });
+    claimOperationExecution(first.receiptId, { receiptState, now: "2026-08-30T01:01:05Z" });
+    expect(() => claimOperationExecution(second.receiptId, {
+      receiptState,
+      now: "2026-08-30T01:01:06Z",
+    })).toThrow(/mutation.*already.*claimed|retry.*forbidden/u);
+
+    const evidence = {
+      operation: request.operation,
+      reasonCode: "PROVIDER_RESPONSE_UNKNOWN",
+      providerState: "unknown",
+      detailDigest: `sha256:${"6".repeat(64)}`,
+    };
+    const ambiguous = operationResult(first, {
+      outcome: {
+        status: "ambiguous",
+        retryPolicy: "inspect-provider-state-only",
+        evidence,
+        evidenceDigest: digestValue(evidence),
+      },
+    });
+    expect(validateOperationResult(ambiguous, {
+      ...context,
+      now: "2026-08-30T01:01:45Z",
+    })).toMatchObject({ outcome: "ambiguous", retryPolicy: "inspect-provider-state-only" });
+    expect(() => claimOperationExecution(second.receiptId, {
+      receiptState,
+      now: "2026-08-30T01:01:46Z",
+    })).toThrow(/mutation.*terminal|retry.*forbidden/u);
+  });
+
+  it("recomputes strict operation evidence and permits a fresh result after a long operation", async () => {
+    const { root } = await gitAuthorityFixture(authority, authority);
+    const contract = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", loadProtectedAuthority(root, "main"));
+    const request = mergeRequest();
+    const receipt = preflightReceipt(contract, request);
+    const expiredState = createOperationReceiptState();
+    validatePreflightReceipt(receipt, {
+      root,
+      contract,
+      request,
+      executionSurface: "github-cli",
+      receiptState: expiredState,
+      now: "2026-08-30T01:01:00Z",
+    });
+    expect(() => claimOperationExecution(receipt.receiptId, {
+      receiptState: expiredState,
+      now: receipt.expiresAt,
+    })).toThrow(/expired|stale/u);
+
+    const receiptState = createOperationReceiptState();
+    const context = { root, contract, request, executionSurface: "github-cli", receiptState };
+    validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z" });
+    claimOperationExecution(receipt.receiptId, { receiptState, now: "2026-08-30T01:01:05Z" });
+
+    const beforeStart = operationResult(receipt);
+    beforeStart.postflight.observedAt = "2026-08-30T01:01:05Z";
+    expect(() => validateOperationResult(beforeStart, {
+      ...context,
+      now: "2026-08-30T01:01:20Z",
+    })).toThrow(/after execution startedAt/u);
+
+    const stalePostflight = operationResult(receipt);
+    stalePostflight.postflight.observedAt = "2026-08-30T01:58:00Z";
+    expect(() => validateOperationResult(stalePostflight, {
+      ...context,
+      now: "2026-08-30T02:00:01Z",
+    })).toThrow(/stale/u);
+
+    const forged = operationResult(receipt);
+    forged.postflight.observedAt = "2026-08-30T02:00:30Z";
+    forged.outcome.evidenceDigest = `sha256:${"9".repeat(64)}`;
+    expect(() => validateOperationResult(forged, {
+      ...context,
+      now: "2026-08-30T02:00:45Z",
+    })).toThrow(/evidence digest/u);
+
+    const malformed = operationResult(receipt);
+    malformed.postflight.observedAt = "2026-08-30T02:00:30Z";
+    malformed.outcome.evidence.force = true;
+    expect(() => validateOperationResult(malformed, {
+      ...context,
+      now: "2026-08-30T02:00:45Z",
+    })).toThrow(/unrecognized|unknown|invalid input/u);
+
+    const wrongMutationEvidence = operationResult(receipt);
+    wrongMutationEvidence.postflight.observedAt = "2026-08-30T02:00:30Z";
+    wrongMutationEvidence.outcome.evidence.prNumber = 16;
+    wrongMutationEvidence.outcome.evidenceDigest = digestValue(wrongMutationEvidence.outcome.evidence);
+    expect(() => validateOperationResult(wrongMutationEvidence, {
+      ...context,
+      now: "2026-08-30T02:00:45Z",
+    })).toThrow(/frozen mutation request/u);
+
+    const longRunning = operationResult(receipt);
+    longRunning.postflight.observedAt = "2026-08-30T02:00:30Z";
+    expect(validateOperationResult(longRunning, {
+      ...context,
+      now: "2026-08-30T02:00:45Z",
+    })).toMatchObject({ ok: true, outcome: "succeeded" });
+
+    const failureReceipt = preflightReceipt(contract, request, { receiptId: "receipt-issue-5-github-merge-pr-3" });
+    const failureState = createOperationReceiptState();
+    const failureContext = { ...context, receiptState: failureState };
+    validatePreflightReceipt(failureReceipt, { ...failureContext, now: "2026-08-30T01:01:00Z" });
+    claimOperationExecution(failureReceipt.receiptId, { receiptState: failureState, now: "2026-08-30T01:01:05Z" });
+    const failureEvidence = {
+      operation: request.operation,
+      errorCode: "PROVIDER_REJECTED",
+      providerState: "unchanged",
+      detailDigest: `sha256:${"5".repeat(64)}`,
+    };
+    const failed = operationResult(failureReceipt, {
+      postflight: {
+        accountObservation: githubObservation().account,
+        targetObservation: githubObservation().target,
+        observedAt: "2026-08-30T01:01:10Z",
+      },
+      outcome: {
+        status: "failed",
+        retryPolicy: "forbidden",
+        evidence: failureEvidence,
+        evidenceDigest: digestValue(failureEvidence),
+      },
+    });
+    expect(validateOperationResult(failed, {
+      ...failureContext,
+      now: "2026-08-30T01:01:20Z",
+    })).toMatchObject({ outcome: "failed", retryPolicy: "forbidden", finalized: true });
   });
 
   it("rejects malformed, ambiguous, or operation-incompatible frozen authorizations", () => {
