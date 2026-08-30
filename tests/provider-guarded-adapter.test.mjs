@@ -381,7 +381,9 @@ describe("provider-specific guarded adapters", () => {
       "--input-type=module",
       "--eval",
       `import(${JSON.stringify(pathToFileURL(path.resolve("tools/provider-guarded-adapter.mjs")).href)}).then((module) => {
-         if (Object.keys(module).some((name) => /createTest|GuardedAdapter/u.test(name))) process.exitCode = 2;
+         const actual = Object.keys(module).sort();
+         const expected = ["executeRegisteredProviderOperation", "validateLiveOperationObservation"];
+         if (JSON.stringify(actual) !== JSON.stringify(expected)) process.exitCode = 2;
        });`,
     ], {
       cwd: path.resolve("."),

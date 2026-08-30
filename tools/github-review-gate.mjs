@@ -60,6 +60,7 @@ function parseExternalChanges(body) {
   const section = end === -1 ? tail : tail.slice(0, end);
   assertReviewSectionVisible(body, headings[0].index ?? 0, section);
   const lines = section.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  assert(lines.length > 0, "External changes require either - None. or one structured Operation evidence entry.");
   if (lines.length === 1 && lines[0] === "- None.") return [];
   assert(!lines.includes("- None."), "External changes cannot combine None with operation evidence.");
   assert(lines.length === 1, "A pull request may declare at most one pre-merge external change.");
