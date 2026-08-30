@@ -33,6 +33,8 @@
     "workflow": "node tools/issue-workflow.mjs",
     "provider:github": "node tools/github-provider-operation.mjs",
     "check:generated": "node tools/generate-agent-wrappers.mjs --check",
+    "check:fast": "npm run lint && npm run typecheck && npm test",
+    "check:docs": "npm run template:source-check && npm run policy && npm run check:links && npm run audit:trace && npm run check:generated",
     "cursor:hook-check": "node tools/guard-cursor-hook.mjs --check",
     "cursor:doctor": "node tools/cursor-cloud-doctor.mjs",
     "lint": "eslint .",

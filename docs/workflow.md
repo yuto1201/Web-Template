@@ -24,21 +24,26 @@ The canonical state names, transitions, model-family review mapping, and privile
 - A provider operation is executable only when both its strict registry contract and a production provider client exist. This release exposes `npm run provider:github`; registered Supabase, Vercel, and Cloudflare mutations remain non-executable until later Issues add their clients.
 - Update durable specifications and decisions in the same change.
 - Persist state transitions so an interrupted run resumes from recorded evidence instead of inference.
+- Use focused tests or `npm run check:fast` during the inner loop. Ask reviewers for one complete pass and batch findings before revising instead of starting a new round per finding.
+- Treat 30 changed files or 3,000 changed lines as advisory scope limits. Split oversized work into independently safe Issues, or record why atomic delivery is justified; never lower risk to fit the limit.
 
 ## 4. Verify
 
-- Run `npm run check`.
-- Run Issue-specific database, build, browser, or deployment checks.
+- Let the protected-base policy derive `low`, `normal`, or `high` from the actual merge-base diff. Candidate text, labels, and candidate-edited policy cannot lower it.
+- Low runs `npm run check:docs` once at the final Head. Normal and high run one final `npm run check` at the review Head; rerun it only if code or generated artifacts change afterward.
+- Run Issue-specific database, build, browser, deployment, macOS, or template checks when the trusted change plan selects them. High risk runs every relevant integration.
 - Record commands, outcomes, and any checks that could not run.
 - Do not use a successful build as a substitute for behavior or authorization tests.
 - Bind `verify.json` to the exact current Head SHA and frozen Issue digest. Map every acceptance criterion exactly once with concrete evidence.
 - After committing the implementation, run `prepare-review`; it derives the base, Head, byte-exact Git diff, changed paths, digests, and privileged contracts from Git rather than caller input.
+- Required CI success on the exact unchanged Head satisfies the before-merge rerun. Do not run an identical local suite solely for ceremony. Reserve the completion audit for high-risk, template-release, or milestone work.
 
 ## 5. Review
 
 - Send a bounded diff and acceptance criteria to an independent model.
 - The reviewer remains read-only and returns severity-ranked findings.
 - Address material findings or record a concrete rationale before merge.
+- Target at most two review rounds by batching all findings from each pass. A low-risk packet has no reviewer artifacts; normal needs one different observed family; high needs approved OpenAI and Anthropic families.
 - Follow `docs/agent-contracts/review-packet.md`. A new commit makes the packet and review stale.
 - The implementer records the opposite model's strict JSON with `record-review`; the reviewer cannot write Issue evidence directly or self-approve.
 - If the opposite model is unavailable or returns invalid output, record `blocked:review`; self-approval is forbidden.

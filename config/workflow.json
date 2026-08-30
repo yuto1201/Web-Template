@@ -14,6 +14,11 @@
       "allowedPathPrefixes": [".github/workflows/"]
     }
   },
+  "efficiency": {
+    "targetReviewRounds": 2,
+    "changedFileAdvisoryLimit": 30,
+    "changedLineAdvisoryLimit": 3000
+  },
   "states": [
     "proposed", "approved", "claimed", "in-progress", "verify-passed",
     "review-requested", "changes-requested", "approved-for-merge", "merged", "done",
@@ -40,6 +45,7 @@
     { "type": "prefix", "path": ".codex/", "contracts": ["change-evaluator"] },
     { "type": "prefix", "path": ".github/", "contracts": ["change-evaluator"] },
     { "type": "prefix", "path": "config/", "contracts": ["change-evaluator"] },
+    { "type": "prefix", "path": "docs/agent-contracts/", "contracts": ["change-evaluator"] },
     { "type": "prefix", "path": "tools/", "contracts": ["change-evaluator"] },
     { "type": "exact", "path": "next.config.mjs", "contracts": ["change-evaluator"] },
     { "type": "prefix", "path": "supabase/", "contracts": ["change-evaluator", "supabase-auditor"] },

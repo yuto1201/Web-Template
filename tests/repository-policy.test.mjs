@@ -36,6 +36,29 @@ describe("repository policy", () => {
     expect(ci).not.toContain("pull_request_target");
   });
 
+  it("defines a fast inner loop and bounded review-efficiency policy", async () => {
+    const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
+    const workflowConfig = JSON.parse(await readFile(path.resolve("config/workflow.json"), "utf8"));
+    const guidance = await Promise.all([
+      "AGENTS.md",
+      "docs/workflow.md",
+      "docs/verification.md",
+    ].map((relative) => readFile(path.resolve(relative), "utf8")));
+    const combined = guidance.join("\n");
+
+    expect(packageJson.scripts["check:fast"]).toBe("npm run lint && npm run typecheck && npm test");
+    expect(packageJson.scripts["check:docs"]).toBe("npm run template:source-check && npm run policy && npm run check:links && npm run audit:trace && npm run check:generated");
+    expect(workflowConfig.efficiency).toEqual({
+      targetReviewRounds: 2,
+      changedFileAdvisoryLimit: 30,
+      changedLineAdvisoryLimit: 3000,
+    });
+    expect(combined).toMatch(/batch[^.\n]*findings|findings[^.\n]*batch/iu);
+    expect(combined).toMatch(/oversized[^.\n]*(?:split|justif)|(?:split|justif)[^.\n]*oversized/iu);
+    expect(combined).toMatch(/normal[^.\n]*high[^.\n]*one final[^.\n]*`npm run check`/iu);
+    expect(combined).toMatch(/completion audit[^.\n]*high-risk[^.\n]*template-release[^.\n]*milestone/iu);
+  });
+
   it("requires every supported Cursor hook to remain finite and fail closed", async () => {
     const hooksConfig = JSON.parse(await readFile(path.resolve(".cursor/hooks.json"), "utf8"));
     const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
