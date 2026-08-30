@@ -27,6 +27,7 @@
     { "type": "prefix", "path": ".codex/" },
     { "type": "prefix", "path": ".github/" },
     { "type": "prefix", "path": "config/" },
+    { "type": "prefix", "path": "evidence/external-operations/" },
     { "type": "exact", "path": "next.config.mjs" },
     { "type": "exact", "path": "docs/activation.md" },
     { "type": "exact", "path": "docs/authority.md" },

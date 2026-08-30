@@ -187,6 +187,17 @@ describe("execution policy", () => {
       macos: true,
       template: true,
     });
+    expect(executionPolicyModule.deriveVerificationPlan({
+      changedPaths: ["evidence/external-operations/issue-35-provider/result.json"],
+      externalOperations: [],
+    }, policy)).toEqual({
+      risk: { level: "high", reasons: ["path:evidence/external-operations/"] },
+      repository: "full",
+      databaseAuth: true,
+      browser: true,
+      macos: true,
+      template: true,
+    });
     expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: ["config/execution.json"], externalOperations: [] }, policy)).toEqual({
       risk: { level: "high", reasons: ["path:config/"] },
       repository: "full",
