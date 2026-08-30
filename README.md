@@ -23,6 +23,8 @@ npm run check
 
 初期化の詳細と外部サービスの順序は [activation runbook](docs/activation.md) を参照してください。
 
+Cursor Cloud ではローカル認証情報をコピーせず、生成済み環境と run-bound activation を使います。準備、read-only evaluator、個人アカウント照合、失効手順は [Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md) を参照してください。
+
 ## 作業PCをMacへ移す
 
 Macへの移行は、既存PCのフォルダや認証情報を丸ごとコピーせず、fresh cloneから再構築します。Apple Silicon/Intelの前提、Node/npm/Docker、アカウント境界、秘密値の再入力、復旧方法と完了ゲートは [macOS workstation onboarding](docs/onboarding-macos.md) を参照してください。
@@ -82,7 +84,8 @@ npm run audit:completion -- --include-integration --require-all
 
 - [AGENTS.md](AGENTS.md): 全モデル共通の実行規約
 - [specs/README.md](specs/README.md): 仕様の正本と更新ルール
-- [completion audit trace](specs/completion-audit.md): Issue #1–#8・#19・#33 と現在の実装/検証の対応
+- [completion audit trace](specs/completion-audit.md): Issue #1–#8・#19・#29・#33 と現在の実装/検証の対応
+- [Cursor Cloud design](specs/cursor-cloud.md): execution surface、observed model、risk、activation の境界
 - [account-bound authority design](specs/account-bound-authority.md): operator parity、service mode、receipt、enforcement boundary
 - [authority boundary](docs/authority.md): アカウントと外部操作の権限境界
 - [workflow](docs/workflow.md): Issue から squash merge までの標準手順

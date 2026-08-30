@@ -14,5 +14,28 @@
       "color": "yellow",
       "contract": "docs/agent-contracts/supabase-auditor.md"
     }
-  ]
+  ],
+  "cursor": {
+    "families": ["openai", "anthropic"],
+    "roles": [
+      {
+        "slug": "consultant",
+        "description": "Read-only bounded consultant",
+        "use": "Use to assess a scoped question before any workflow transition.",
+        "contract": "docs/agent-contracts/consultant.md"
+      },
+      {
+        "slug": "change-evaluator",
+        "description": "Read-only exact-Head change evaluator",
+        "use": "Use after verification for the family slot required by repository risk policy.",
+        "contract": "docs/agent-contracts/change-evaluator.md"
+      },
+      {
+        "slug": "supabase-auditor",
+        "description": "Read-only Supabase auditor",
+        "use": "Use after verification for the family slot required by repository risk policy.",
+        "contract": "docs/agent-contracts/supabase-auditor.md"
+      }
+    ]
+  }
 }

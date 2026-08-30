@@ -56,6 +56,12 @@
       "commands": ["workstation:doctor", "check", "test:e2e"]
     },
     {
+      "issue": 29,
+      "title": "Cursor Cloud development mode and activation boundary",
+      "evidence": ["specs/cursor-cloud.md", "config/execution.json", ".cursor/environment.json", ".cursor/hooks.json", "docs/onboarding-cursor-cloud.md", "tools/cursor-cloud-doctor.mjs"],
+      "commands": ["cursor:doctor", "cursor:hook-check", "check:generated", "policy", "test", "check"]
+    },
+    {
       "issue": 33,
       "title": "Account-bound authority and equal operator policy",
       "evidence": ["specs/account-bound-authority.md", "docs/authority.md", "tools/authority-core.mjs", "tools/issue-workflow.mjs", "tools/provider-guarded-adapter.mjs", "tools/github-review-gate.mjs", "tools/repository-policy.mjs", "tools/verify-template-instantiation.mjs", "tests/authority-core.test.mjs", "tests/provider-guarded-adapter.test.mjs", "tests/github-review-gate.test.mjs", "tests/workflow-contract.test.mjs", "tests/domain-workflow.test.mjs", "tests/deployment-release.test.mjs", "tests/operator-parity.test.mjs", "tests/template-initializer.test.mjs"],

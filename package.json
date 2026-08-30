@@ -32,6 +32,8 @@
     "workflow": "node tools/issue-workflow.mjs",
     "provider:github": "node tools/github-provider-operation.mjs",
     "check:generated": "node tools/generate-agent-wrappers.mjs --check",
+    "cursor:hook-check": "node tools/guard-cursor-hook.mjs --check",
+    "cursor:doctor": "node tools/cursor-cloud-doctor.mjs",
     "lint": "eslint .",
     "typegen": "node tools/generate-next-types.mjs",
     "typecheck": "npm run typegen && tsc --noEmit",

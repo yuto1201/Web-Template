@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "surfaces": {
+    "codex-local": { "branchPrefix": "codex", "providerOperator": true },
+    "claude-local": { "branchPrefix": "claude", "providerOperator": true },
+    "cursor-cloud": { "branchPrefix": "cursor", "providerOperator": true }
+  },
+  "modelFamilies": {
+    "openai": ["^gpt-5\\.6-(?:sol|terra|luna)$"],
+    "anthropic": ["^claude-(?:opus|sonnet|fable)-5$"],
+    "cursor": ["^composer-2(?:\\.[0-9]+)?$"],
+    "xai": ["^grok-4(?:\\.[0-9]+)?$"]
+  },
+  "cursorModels": {
+    "openai": "gpt-5.6-sol[effort=high]",
+    "anthropic": "claude-opus-5[effort=high]"
+  },
+  "highRiskPathRules": [
+    { "type": "exact", "path": "AGENTS.md" },
+    { "type": "prefix", "path": ".cursor/" },
+    { "type": "prefix", "path": ".claude/" },
+    { "type": "prefix", "path": ".codex/" },
+    { "type": "prefix", "path": ".github/" },
+    { "type": "prefix", "path": "config/" },
+    { "type": "exact", "path": "docs/activation.md" },
+    { "type": "exact", "path": "docs/authority.md" },
+    { "type": "exact", "path": "docs/onboarding-cursor-cloud.md" },
+    { "type": "exact", "path": "docs/security.md" },
+    { "type": "exact", "path": "docs/verification.md" },
+    { "type": "exact", "path": "docs/workflow.md" },
+    { "type": "exact", "path": "specs/cursor-cloud.md" },
+    { "type": "exact", "path": "specs/decisions.md" },
+    { "type": "prefix", "path": "tools/" },
+    { "type": "prefix", "path": "supabase/" },
+    { "type": "prefix", "path": "src/app/api/" },
+    { "type": "prefix", "path": "src/lib/auth/" },
+    { "type": "prefix", "path": "src/lib/env" },
+    { "type": "prefix", "path": "src/lib/supabase/" },
+    { "type": "exact", "path": "src/proxy.ts" }
+  ],
+  "routineDeliveryOperations": ["github.push_branch", "github.create_pr", "github.delete_branch"],
+  "highRiskOperations": [
+    "github.merge_pr",
+    "supabase.apply_migrations",
+    "vercel.deploy_preview",
+    "vercel.deploy_production",
+    "cloudflare.upsert_dns"
+  ]
+}

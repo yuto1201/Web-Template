@@ -12,6 +12,9 @@ const requiredFiles = [
   ".claude/settings.json",
   ".codex/agents/change-evaluator.toml",
   ".codex/agents/supabase-auditor.toml",
+  ".cursor/Dockerfile",
+  ".cursor/environment.json",
+  ".cursor/hooks.json",
   ".gitattributes",
   ".github/pull_request_template.md",
   ".github/workflows/review-gate.yml",
@@ -19,6 +22,7 @@ const requiredFiles = [
   "CLAUDE.md",
   "config/agents.json",
   "config/deployment.json",
+  "config/execution.json",
   "config/domain.json",
   "config/github-ruleset.json",
   "config/ownership.json",
@@ -31,8 +35,10 @@ const requiredFiles = [
   "docs/domain.md",
   "docs/activation.md",
   "docs/onboarding-macos.md",
+  "docs/onboarding-cursor-cloud.md",
   "docs/workflow.md",
   "specs/account-bound-authority.md",
+  "specs/cursor-cloud.md",
   "tools/authority-core.mjs",
   "tools/completion-audit.mjs",
   "tools/generate-agent-wrappers.mjs",
@@ -40,6 +46,9 @@ const requiredFiles = [
   "tools/github-cli-provider-client.mjs",
   "tools/github-provider-operation.mjs",
   "tools/github-review-gate.mjs",
+  "tools/external-change-review-gate.mjs",
+  "tools/cursor-cloud-doctor.mjs",
+  "tools/guard-cursor-hook.mjs",
   "tools/generate-next-types.mjs",
   "tools/provider-guarded-adapter.mjs",
   "tools/workstation-doctor.mjs",
@@ -244,6 +253,63 @@ export function containsPotentialSecret(content) {
   return secretPatterns.some((pattern) => pattern.test(content));
 }
 
+const canonicalCursorEnvironment = {
+  build: { dockerfile: "Dockerfile", context: ".." },
+  install: "npm ci && npm exec -- playwright install --with-deps chromium && npm run cursor:doctor -- --build",
+  start: "sudo service docker start",
+};
+const canonicalCursorDockerfile = `FROM node:24.13.0-bookworm
+
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends \\
+      ca-certificates \\
+      curl \\
+      docker.io \\
+      git \\
+      ripgrep \\
+    && npm install --global npm@11.6.2 \\
+    && rm -rf /var/lib/apt/lists/*`;
+
+/** @param {unknown} value @returns {boolean} */
+function containsSecretShape(value) {
+  if (Array.isArray(value)) return value.some(containsSecretShape);
+  if (!value || typeof value !== "object") {
+    return typeof value === "string" && containsPotentialSecret(value);
+  }
+  return Object.entries(value).some(([key, child]) => (
+    /(?:token|secret|password|credential|api[_-]?key|private[_-]?key|cookie|auth)/iu.test(key) ||
+    containsSecretShape(child)
+  ));
+}
+
+/** @param {{ environmentConfig: unknown, dockerfile: unknown, packageJson: unknown }} input */
+export function validateCursorEnvironmentPolicy(input) {
+  const errors = [];
+  if (!equal(input.environmentConfig, canonicalCursorEnvironment)) {
+    errors.push(".cursor/environment.json must contain only the exact build, install, and start contract.");
+  }
+  if (containsSecretShape(input.environmentConfig)) {
+    errors.push(".cursor/environment.json must not contain secret-shaped fields or values.");
+  }
+  const dockerfile = typeof input.dockerfile === "string" ? input.dockerfile : "";
+  const logicalDockerfile = dockerfile.endsWith("\n") ? dockerfile.slice(0, -1) : dockerfile;
+  if (logicalDockerfile !== canonicalCursorDockerfile) {
+    errors.push(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
+  }
+  const packageJson = input.packageJson && typeof input.packageJson === "object"
+    ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
+    : {};
+  if (
+    packageJson.scripts?.["cursor:doctor"] !== "node tools/cursor-cloud-doctor.mjs" ||
+    Object.values(packageJson.scripts ?? {}).some(
+      (script) => typeof script === "string" && script.includes("--activation-input") && script !== packageJson.scripts?.["cursor:doctor"],
+    )
+  ) {
+    errors.push("package.json must expose the non-activating Cursor Cloud doctor.");
+  }
+  return errors;
+}
+
 /** @param {string} [root] */
 export async function validateRepository(root = defaultRoot) {
   const errors = [];
@@ -322,9 +388,6 @@ export async function validateRepository(root = defaultRoot) {
   const states = /** @type {string[]} */ (Array.isArray(workflow.states) ? workflow.states : []);
   const stateSet = new Set(states);
   if (stateSet.size !== states.length) errors.push("config/workflow.json states must be unique.");
-  if (workflow.reviewerModelFamilyMap?.gpt !== "claude" || workflow.reviewerModelFamilyMap?.claude !== "gpt") {
-    errors.push("config/workflow.json must map each primary model family to the opposite reviewer family.");
-  }
   if (workflow.baseRef !== "main") errors.push("config/workflow.json must derive review scope from main.");
   const reviewGate = workflow.githubReviewGate;
   if (reviewGate?.checkName !== "Exact Head review policy") {
@@ -392,6 +455,11 @@ export async function validateRepository(root = defaultRoot) {
   const nodeVersion = (await readFile(path.join(root, ".node-version"), "utf8")).trim();
   const nvmVersion = (await readFile(path.join(root, ".nvmrc"), "utf8")).trim();
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  errors.push(...validateCursorEnvironmentPolicy({
+    environmentConfig: JSON.parse(await readFile(path.join(root, ".cursor", "environment.json"), "utf8")),
+    dockerfile: await readFile(path.join(root, ".cursor", "Dockerfile"), "utf8"),
+    packageJson,
+  }));
   if (nodeVersion !== nvmVersion || packageJson.engines?.node !== nodeVersion) {
     errors.push(".node-version, .nvmrc, and package.json engines.node must agree exactly.");
   }
@@ -413,12 +481,20 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("CI must verify the workstation contract on a real macOS runner.");
   }
   const reviewWorkflow = await readFile(path.join(root, ".github", "workflows", "review-gate.yml"), "utf8");
+  const trustedInstallIndex = reviewWorkflow.indexOf("npm ci --ignore-scripts");
+  const verificationIndex = reviewWorkflow.indexOf("Verify exact-Head review evidence");
   if (
     !reviewWorkflow.includes("name: Exact Head review policy") ||
     !reviewWorkflow.includes("types: [opened, synchronize, reopened, edited, ready_for_review]") ||
     !reviewWorkflow.includes("ref: ${{ github.event.pull_request.base.sha }}") ||
-    !reviewWorkflow.includes('BASE_SHA" != "62da0e1699ddfcf39f35914b54ad963fe5aa0740"') ||
-    !reviewWorkflow.includes('HEAD_REF" != "codex/22-exact-head-review"') ||
+    !reviewWorkflow.includes('gate_path="trusted/tools/github-review-gate.mjs"') ||
+    !reviewWorkflow.includes('workflow_path="trusted/config/workflow.json"') ||
+    !reviewWorkflow.includes("working-directory: trusted") ||
+    trustedInstallIndex === -1 ||
+    verificationIndex === -1 ||
+    trustedInstallIndex > verificationIndex ||
+    /working-directory:\s*candidate[\s\S]{0,160}npm (?:ci|install)/u.test(reviewWorkflow) ||
+    /npm (?:--prefix\s+candidate|ci[^\n]*candidate|install[^\n]*candidate)/u.test(reviewWorkflow) ||
     !reviewWorkflow.includes('HEAD_REPOSITORY" != "$BASE_REPOSITORY"') ||
     !reviewWorkflow.includes("github.event.pull_request.head.repo.full_name") ||
     !reviewWorkflow.includes("github.event.pull_request.base.repo.full_name") ||

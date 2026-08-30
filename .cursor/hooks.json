@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "node tools/guard-cursor-hook.mjs",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "type": "command",
+        "command": "node tools/guard-cursor-hook.mjs",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "command": "node tools/guard-cursor-hook.mjs",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "command": "node tools/guard-cursor-hook.mjs",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "type": "command",
+        "command": "node tools/guard-cursor-hook.mjs",
+        "timeout": 10,
+        "failClosed": true
+      }
+    ]
+  }
+}

@@ -32,8 +32,8 @@ describe("provider-free Issue workflow simulation", { timeout: 20_000 }, () => {
     expect(result.gate).toMatchObject({
       ok: true,
       issue: 42,
-      reviewerOperatorLabel: "claude",
-      reviewerModelFamily: "claude",
+      risk: { level: "high" },
+      reviewers: [{ family: "anthropic" }, { family: "openai" }],
     });
     expect(result.request).toMatchObject({
       operation: "github.merge_pr",
@@ -48,7 +48,7 @@ describe("provider-free Issue workflow simulation", { timeout: 20_000 }, () => {
     });
 
     expect(Object.keys(result.paths)).toHaveLength(7);
-    for (const artifact of Object.values(result.paths)) {
+    for (const artifact of Object.values(result.paths).flat()) {
       await expect(stat(path.join(root, artifact))).resolves.toBeDefined();
     }
 

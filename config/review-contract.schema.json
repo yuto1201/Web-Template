@@ -1,17 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Opposite-model review result",
+  "title": "Surface-aware account-bound review result",
   "type": "object",
   "additionalProperties": false,
   "allOf": [
-    {
-      "if": { "properties": { "primaryModelFamily": { "const": "gpt" } }, "required": ["primaryModelFamily"] },
-      "then": { "properties": { "reviewerModelFamily": { "const": "claude" } } }
-    },
-    {
-      "if": { "properties": { "primaryModelFamily": { "const": "claude" } }, "required": ["primaryModelFamily"] },
-      "then": { "properties": { "reviewerModelFamily": { "const": "gpt" } } }
-    },
     {
       "if": { "properties": { "verdict": { "const": "unavailable" } }, "required": ["verdict"] },
       "then": { "required": ["unavailableReason"] },
@@ -21,46 +13,29 @@
       "if": { "properties": { "verdict": { "const": "approved" } }, "required": ["verdict"] },
       "then": {
         "properties": {
-          "findings": {
-            "items": { "properties": { "blocking": { "const": false } } }
-          }
+          "primaryModel": { "properties": { "family": { "not": { "const": "unknown" } }, "fallback": { "const": false } } },
+          "reviewerModel": { "properties": { "family": { "not": { "const": "unknown" } }, "fallback": { "const": false } } },
+          "findings": { "items": { "properties": { "severity": { "not": { "enum": ["critical", "high"] } }, "blocking": { "const": false } } } }
         }
       }
     }
   ],
-  "required": [
-    "schemaVersion",
-    "issue",
-    "primaryOperatorLabel",
-    "reviewerOperatorLabel",
-    "primaryModelFamily",
-    "reviewerModelFamily",
-    "headSha",
-    "verifySha",
-    "contractDigest",
-    "verdict",
-    "contracts",
-    "findings",
-    "acceptanceAssessment",
-    "reviewedAt"
-  ],
+  "required": ["schemaVersion", "issue", "executionSurface", "primaryOperatorLabel", "primaryModel", "reviewerModel", "risk", "headSha", "verifySha", "verifyDigest", "diffDigest", "contractDigest", "verdict", "contracts", "findings", "acceptanceAssessment", "reviewedAt"],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "issue": { "type": "integer", "minimum": 1 },
+    "executionSurface": { "enum": ["codex-local", "claude-local", "cursor-cloud"] },
     "primaryOperatorLabel": { "enum": ["codex", "claude"] },
-    "reviewerOperatorLabel": { "enum": ["codex", "claude"] },
-    "primaryModelFamily": { "enum": ["gpt", "claude"] },
-    "reviewerModelFamily": { "enum": ["gpt", "claude"] },
+    "primaryModel": { "$ref": "#/$defs/modelIdentity" },
+    "reviewerModel": { "$ref": "#/$defs/modelIdentity" },
+    "risk": { "$ref": "#/$defs/risk" },
     "headSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "verifySha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "verifyDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "diffDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "contractDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "verdict": { "enum": ["approved", "changes-requested", "unavailable"] },
-    "contracts": {
-      "type": "array",
-      "minItems": 1,
-      "uniqueItems": true,
-      "items": { "enum": ["change-evaluator", "supabase-auditor"] }
-    },
+    "contracts": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["change-evaluator", "supabase-auditor"] } },
     "findings": {
       "type": "array",
       "items": {
@@ -73,12 +48,7 @@
           "location": { "type": "string", "minLength": 1 },
           "summary": { "type": "string", "minLength": 1 }
         },
-        "allOf": [
-          {
-            "if": { "properties": { "severity": { "enum": ["critical", "high"] } }, "required": ["severity"] },
-            "then": { "properties": { "blocking": { "const": true } } }
-          }
-        ]
+        "allOf": [{ "if": { "properties": { "severity": { "enum": ["critical", "high"] } }, "required": ["severity"] }, "then": { "properties": { "blocking": { "const": true } } } }]
       }
     },
     "acceptanceAssessment": {
@@ -96,6 +66,29 @@
       }
     },
     "reviewedAt": { "type": "string", "format": "date-time" },
-    "unavailableReason": { "type": "string", "enum": ["timeout", "command-missing", "invalid-output"] }
+    "unavailableReason": { "enum": ["timeout", "command-missing", "invalid-output"] }
+  },
+  "$defs": {
+    "modelIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configured", "observed", "family", "fallback", "parameters"],
+      "properties": {
+        "configured": { "type": "string", "minLength": 1 },
+        "observed": { "type": "string", "minLength": 1 },
+        "family": { "enum": ["openai", "anthropic", "cursor", "xai", "unknown"] },
+        "fallback": { "type": "boolean" },
+        "parameters": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": false, "required": ["id", "value"], "properties": { "id": { "type": "string", "minLength": 1 }, "value": { "type": "string", "minLength": 1 } } }
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "reasons"],
+      "properties": { "level": { "enum": ["normal", "high"] }, "reasons": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } } }
+    }
   }
 }

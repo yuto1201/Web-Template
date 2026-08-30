@@ -236,7 +236,7 @@ describe("provider-specific guarded adapters", () => {
     expect(unsupportedClient.executionCount()).toBe(0);
 
     const sibling = `${fixture.root}-sibling`;
-    git(fixture.root, ["worktree", "add", "--detach", sibling, "HEAD"]);
+    git(fixture.root, ["worktree", "add", "-b", "codex/42-sibling", sibling, "HEAD"]);
     await mkdir(path.join(sibling, ".artifacts"), { recursive: true });
     await cp(path.join(fixture.root, ".artifacts"), path.join(sibling, ".artifacts"), { recursive: true });
     const firstClient = githubClient(fixture.authority);

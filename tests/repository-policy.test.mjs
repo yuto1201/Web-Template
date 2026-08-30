@@ -14,28 +14,35 @@ describe("repository policy", () => {
   it("keeps the PR template compatible with the exact-Head review body parser", async () => {
     const template = await readFile(path.resolve(".github/pull_request_template.md"), "utf8");
     const workflow = JSON.parse(await readFile(path.resolve("config/workflow.json"), "utf8"));
+    const executionPolicy = JSON.parse(await readFile(path.resolve("config/execution.json"), "utf8"));
     const headSha = "a".repeat(40);
     const completedBody = template
       .replace("Closes #", "Closes #33")
-      .replace(/^- Primary operator:.*$/mu, "- Primary operator: codex")
-      .replace(/^- Reviewer operator:.*$/mu, "- Reviewer operator: claude")
-      .replace(/^- Primary model family:.*$/mu, "- Primary model family: gpt")
-      .replace(/^- Reviewer model family:.*$/mu, "- Reviewer model family: claude")
+      .replace(/^- Execution surface:.*$/mu, "- Execution surface: codex-local")
+      .replace(/^- Primary operator label:.*$/mu, "- Primary operator label: codex")
+      .replace(/^- Primary configured model:.*$/mu, "- Primary configured model: gpt-5.6-sol")
+      .replace(/^- Primary observed model:.*$/mu, "- Primary observed model: gpt-5.6-sol")
+      .replace(/^- Primary family:.*$/mu, "- Primary family: openai")
+      .replace(/^- Primary fallback:.*$/mu, "- Primary fallback: false")
+      .replace(/^- Risk:.*$/mu, "- Risk: normal")
+      .replace(/^- Risk reasons:.*$/mu, "- Risk reasons: none")
       .replace(/^- Reviewed SHA:.*$/mu, `- Reviewed SHA: \`${headSha}\``)
-      .replace(/^- Verdict:.*$/mu, "- Verdict: approved")
-      .replace(/^- Contracts:.*$/mu, "- Contracts: change-evaluator");
+      .replace(/^- Reviewer anthropic:.*$/mu, "- Reviewer anthropic: claude-opus-5[effort=high] | claude-opus-5 | anthropic | false | approved | change-evaluator")
+      .replace(/^- Reviewer openai:.*\n/mu, "");
 
     expect(() => evaluateGitHubReviewGate({
       event: {
         pull_request: {
           body: completedBody,
-          head: { sha: headSha },
+          head: { sha: headSha, ref: "codex/33-template-policy", repo: { full_name: "yuto1201/Web-Template" } },
+          base: { sha: "b".repeat(40), repo: { full_name: "yuto1201/Web-Template" } },
           user: { login: "yuto1201", id: 50611866, type: "User" },
         },
       },
       changedPaths: ["README.md"],
       diff: "",
       workflow,
+      executionPolicy,
     })).not.toThrow();
   });
 

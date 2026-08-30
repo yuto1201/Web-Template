@@ -6,12 +6,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { authorityDigest, authorizeServiceUse, evaluateAccountObservation, parseAuthority } from "./authority-core.mjs";
+import { activationRepositoryBindingChecks, validateActivationEvidence } from "./cursor-cloud-doctor.mjs";
+import {
+  classifyRisk,
+  normalizeModelIdentity,
+  requiredReviewerFamilies,
+  validateBranchForSurface,
+  validateReviewerFamilies,
+} from "./execution-policy.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(moduleDirectory, "..");
 const protectedAuthorityRef = "main";
+const executionPolicy = JSON.parse(readFileSync(path.join(defaultRoot, "config", "execution.json"), "utf8"));
 const workflowConfiguration = /** @type {{
-  reviewerModelFamilyMap: Record<"gpt" | "claude", "gpt" | "claude">,
   baseRef: string,
   states: string[],
   transitions: Record<string, string[]>,
@@ -22,6 +30,34 @@ const shaSchema = z.string().regex(/^[0-9a-f]{40}$/u);
 const digestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 const timestampSchema = z.iso.datetime({ offset: true });
 const modelFamilySchema = z.enum(["gpt", "claude"]);
+const surfaceSchema = z.enum(["codex-local", "claude-local", "cursor-cloud"]);
+const knownFamilySchema = z.enum(["openai", "anthropic", "cursor", "xai"]);
+const familySchema = z.enum(["openai", "anthropic", "cursor", "xai", "unknown"]);
+export const modelIdentitySchema = z.object({
+  configured: z.string().min(1),
+  observed: z.string().min(1),
+  family: familySchema,
+  fallback: z.boolean(),
+  parameters: z.array(z.object({
+    id: z.string().min(1),
+    value: z.string().min(1),
+  }).strict()),
+}).strict().superRefine((value, context) => {
+  const normalized = normalizeModelIdentity(value.configured, value.observed, value.parameters, executionPolicy);
+  if (value.family !== normalized.family) {
+    context.addIssue({ code: "custom", path: ["family"], message: "Model family must be derived from the observed model ID." });
+  }
+  if (value.fallback !== normalized.fallback) {
+    context.addIssue({ code: "custom", path: ["fallback"], message: "Model fallback must be derived from configured and observed model IDs." });
+  }
+  if (JSON.stringify(value.parameters) !== JSON.stringify(normalized.parameters)) {
+    context.addIssue({ code: "custom", path: ["parameters"], message: "Model parameters must use canonical order." });
+  }
+});
+export const riskSchema = z.object({
+  level: z.enum(["normal", "high"]),
+  reasons: z.array(z.string().min(1)),
+}).strict();
 const contractNameSchema = z.enum(["change-evaluator", "supabase-auditor"]);
 const acceptanceIdSchema = z.string().regex(/^AC-[1-9][0-9]*$/u);
 const relativeFileSchema = z.string().min(1).superRefine((value, context) => {
@@ -64,7 +100,7 @@ export const unsupportedOperationNames = [
 ];
 
 const operationSchema = z.enum(operationNames);
-const branchSchema = z.string().regex(/^(?:codex|claude)\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+const branchSchema = z.string().regex(/^(?:codex|claude|cursor)\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const worktreeSchema = z.string().regex(/^\.worktrees\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const repositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
 const projectRefSchema = z.string().regex(/^[a-z0-9]{20}$/u);
@@ -310,6 +346,10 @@ const externalRequestBaseSchema = z.object({
   operatorLabel: operatorLabelSchema,
   executionRole: externalOperatorRoleSchema,
   executionSurface: executionSurfaceSchema,
+  surfaceContext: z.object({
+    runId: z.string().regex(/^bc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
+    activationEvidenceRef: relativeFileSchema.regex(/^\.artifacts\/cursor\/bc-[0-9a-f-]+\.json$/u),
+  }).strict().nullable().optional(),
   intent: z.string().trim().min(1).max(500).regex(/^[^\r\n]+$/u),
   reversibility: z.enum(["read-only", "reversible", "compensating-change", "irreversible"]),
   recovery: z.object({
@@ -671,8 +711,13 @@ const externalChangeEvidenceSchema = z.object({
   }
 });
 const verificationSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   issue: z.number().int().positive(),
+  executionSurface: surfaceSchema,
+  primaryOperatorLabel: operatorLabelSchema,
+  primaryModel: modelIdentitySchema,
+  risk: riskSchema,
+  requiredReviewerFamilies: z.array(knownFamilySchema).min(1),
   baseSha: shaSchema,
   headSha: shaSchema,
   contractDigest: digestSchema,
@@ -691,10 +736,8 @@ const verificationInputSchema = verificationSchema.omit({
   baseSha: true,
   headSha: true,
   contractDigest: true,
-}).extend({
-  primaryOperatorLabel: operatorLabelSchema,
-  reviewerOperatorLabel: operatorLabelSchema,
-  primaryModelFamily: modelFamilySchema,
+  risk: true,
+  requiredReviewerFamilies: true,
 }).strict();
 
 const findingSchema = z.object({
@@ -713,14 +756,17 @@ const reviewAssessmentSchema = z.object({
   evidenceRef: singleLineSchema,
 }).strict();
 const reviewResultObjectSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   issue: z.number().int().positive(),
+  executionSurface: surfaceSchema,
   primaryOperatorLabel: operatorLabelSchema,
-  reviewerOperatorLabel: operatorLabelSchema,
-  primaryModelFamily: modelFamilySchema,
-  reviewerModelFamily: modelFamilySchema,
+  primaryModel: modelIdentitySchema,
+  reviewerModel: modelIdentitySchema,
+  risk: riskSchema,
   headSha: shaSchema,
   verifySha: shaSchema,
+  verifyDigest: digestSchema,
+  diffDigest: digestSchema,
   contractDigest: digestSchema,
   verdict: z.enum(["approved", "changes-requested", "unavailable"]),
   contracts: z.array(contractNameSchema).min(1),
@@ -732,14 +778,24 @@ const reviewResultObjectSchema = z.object({
 export const reviewResultKeys = Object.keys(reviewResultObjectSchema.shape)
   .filter((key) => key !== "unavailableReason");
 const reviewResultSchema = reviewResultObjectSchema.superRefine((value, context) => {
-  if (value.primaryModelFamily === value.reviewerModelFamily) {
-    context.addIssue({ code: "custom", path: ["reviewerModelFamily"], message: "Self-approval by the same model family is forbidden." });
-  }
   if (value.headSha !== value.verifySha) {
     context.addIssue({ code: "custom", path: ["verifySha"], message: "Review Head and verification SHA must match." });
   }
   if (value.verdict === "approved" && value.findings.some(({ blocking }) => blocking)) {
     context.addIssue({ code: "custom", path: ["verdict"], message: "An approved review cannot contain blocking findings." });
+  }
+  if (value.verdict === "approved" && value.findings.some(({ severity }) => ["critical", "high"].includes(severity))) {
+    context.addIssue({ code: "custom", path: ["verdict"], message: "An approved review cannot contain critical or high findings." });
+  }
+  if (value.verdict === "approved") {
+    for (const key of /** @type {Array<"primaryModel" | "reviewerModel">} */ (["primaryModel", "reviewerModel"])) {
+      if (value[key].family === "unknown") {
+        context.addIssue({ code: "custom", path: [key, "family"], message: "An approved review cannot use an unknown model family." });
+      }
+      if (value[key].fallback) {
+        context.addIssue({ code: "custom", path: [key, "fallback"], message: "An approved review cannot use model fallback evidence." });
+      }
+    }
   }
   if (value.verdict === "unavailable" && !value.unavailableReason) {
     context.addIssue({ code: "custom", path: ["unavailableReason"], message: "Unavailable review needs a fixed reason." });
@@ -750,13 +806,14 @@ const reviewResultSchema = reviewResultObjectSchema.superRefine((value, context)
 });
 
 const reviewPacketSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   issue: z.number().int().positive(),
   repository: repositorySchema,
+  executionSurface: surfaceSchema,
   primaryOperatorLabel: operatorLabelSchema,
-  reviewerOperatorLabel: operatorLabelSchema,
-  primaryModelFamily: modelFamilySchema,
-  reviewerModelFamily: modelFamilySchema,
+  primaryModel: modelIdentitySchema,
+  risk: riskSchema,
+  requiredReviewerFamilies: z.array(knownFamilySchema).min(1),
   baseSha: shaSchema,
   headSha: shaSchema,
   verifySha: shaSchema,
@@ -988,6 +1045,32 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
   if (!protectedAuthority.authority.authorization.externalOperatorRoles.includes(request.executionRole)) {
     throw new Error("Operation request execution role is not authorized by protected authority.");
   }
+  let surfaceActivationDigest = null;
+  if (request.executionSurface === "cursor-cloud") {
+    if (!request.surfaceContext) throw new Error("Cursor Cloud operation requires run-bound activation evidence.");
+    const expectedActivationRef = `.artifacts/cursor/${request.surfaceContext.runId}.json`;
+    if (request.surfaceContext.activationEvidenceRef !== expectedActivationRef) {
+      throw new Error("Cursor Cloud operation requires the canonical run-bound activation evidence reference.");
+    }
+    const activationPath = resolveInside(root, request.surfaceContext.activationEvidenceRef, path.join(".artifacts", "cursor"));
+    const actualActivationPath = realpathSync.native(activationPath);
+    resolveInside(root, actualActivationPath, path.join(".artifacts", "cursor"));
+    const executionPolicy = JSON.parse(readFileSync(path.join(root, "config", "execution.json"), "utf8"));
+    const activation = validateActivationEvidence(JSON.parse(readFileSync(actualActivationPath, "utf8")), executionPolicy);
+    if (activation.run.id !== request.surfaceContext.runId) throw new Error("Cursor Cloud activation run ID mismatch.");
+    const repository = {
+      branch: runGit(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]).trim(),
+      headSha: runGit(root, ["rev-parse", "--verify", "HEAD"]).trim(),
+    };
+    const failedBinding = activationRepositoryBindingChecks(activation, repository, protectedAuthority.authority)
+      .find(([, , passed]) => !passed);
+    if (failedBinding) throw new Error(`Cursor Cloud activation ${failedBinding[1]}.`);
+    const branchIssue = /^cursor\/([1-9][0-9]*)-/u.exec(repository.branch)?.[1];
+    if (Number(branchIssue) !== request.issue) throw new Error(`Cursor Cloud activation branch does not belong to Issue ${request.issue}.`);
+    surfaceActivationDigest = digestValue(activation);
+  } else if (request.surfaceContext != null) {
+    throw new Error("Run-bound activation evidence is only valid for the cursor-cloud execution surface.");
+  }
   const serviceUse = authorizeServiceUse(protectedAuthority.authority, {
     service: definition.service,
     operation: request.operation,
@@ -1004,6 +1087,7 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
     resolvedTargetRef: serviceUse.targetRef,
     resolvedTarget: resolveOwnershipTarget(protectedAuthority.authority, definition.service),
     expectedEvidence: definition.evidence,
+    surfaceActivationDigest,
   };
 }
 
@@ -1424,24 +1508,28 @@ export function requiredReviewContracts(changedPaths) {
 
 /** @param {unknown} value */
 export function validateVerification(value) {
-  return verificationSchema.parse(value);
+  const verification = verificationSchema.parse(value);
+  unique(verification.risk.reasons, "Verification risk reasons");
+  unique(verification.requiredReviewerFamilies, "Verification reviewer families");
+  return verification;
 }
 
 /** @param {unknown} value */
 export function validateReviewResult(value) {
   const review = reviewResultSchema.parse(value);
+  unique(review.risk.reasons, "Review risk reasons");
   unique(review.contracts, "Review contracts");
   unique(review.acceptanceAssessment.map(({ id }) => id), "Review acceptance assessment");
   return review;
 }
 
-/** @param {unknown} value @param {string} root */
-export function validateReviewPacket(value, root) {
+/** @param {unknown} value @param {string} root @param {unknown} [contractValue] */
+export function validateReviewPacket(value, root, contractValue) {
   const packet = reviewPacketSchema.parse(value);
-  if (packet.primaryModelFamily === packet.reviewerModelFamily) throw new Error("Review packet cannot request same-model-family self-review.");
-  if (workflowConfiguration.reviewerModelFamilyMap[packet.primaryModelFamily] !== packet.reviewerModelFamily) {
-    throw new Error("Review packet does not use the opposite model family.");
-  }
+  unique(packet.risk.reasons, "Review packet risk reasons");
+  unique(packet.requiredReviewerFamilies, "Review packet reviewer families");
+  if (packet.primaryModel.family === "unknown") throw new Error("unknown primary model family cannot satisfy review policy.");
+  if (packet.primaryModel.fallback) throw new Error("Primary model fallback cannot satisfy review policy.");
   if (packet.headSha !== packet.verifySha) throw new Error("Review packet verification SHA is stale.");
   const issueRoot = path.join(".artifacts", "issues", String(packet.issue));
   const headRoot = path.join(issueRoot, packet.headSha);
@@ -1458,20 +1546,42 @@ export function validateReviewPacket(value, root) {
   if (canonicalJson(packet.requiredContracts.toSorted()) !== canonicalJson(expectedContracts)) {
     throw new Error("Review packet privileged-path contracts are incomplete.");
   }
+  const expectedFamilies = requiredReviewerFamilies({
+    risk: packet.risk.level,
+    primaryFamily: packet.primaryModel.family,
+  });
+  if (canonicalJson(packet.requiredReviewerFamilies.toSorted()) !== canonicalJson(expectedFamilies)) {
+    throw new Error("Review packet reviewer-family requirements do not match execution policy.");
+  }
+  if (contractValue !== undefined) {
+    const contract = validateIssueContract(contractValue);
+    const expectedRisk = classifyRisk({
+      changedPaths: packet.changedPaths,
+      externalOperations: contract.externalAuthorizations.map(({ operation }) => operation),
+    }, executionPolicy);
+    if (canonicalJson(packet.risk) !== canonicalJson(expectedRisk)) {
+      throw new Error("Review packet risk does not match execution policy.");
+    }
+  }
   return packet;
 }
 
-/** @param {unknown} reviewValue @param {unknown} packetValue @param {string} root */
-export function validateReviewAgainstPacket(reviewValue, packetValue, root) {
-  const packet = validateReviewPacket(packetValue, root);
+/** @param {unknown} reviewValue @param {unknown} packetValue @param {string} root @param {unknown} [contractValue] */
+export function validateReviewAgainstPacket(reviewValue, packetValue, root, contractValue) {
+  const packet = validateReviewPacket(packetValue, root, contractValue);
   const review = validateReviewResult(reviewValue);
   if (review.issue !== packet.issue) throw new Error("Review issue does not match the packet.");
+  if (review.executionSurface !== packet.executionSurface) throw new Error("Review executionSurface does not match the packet.");
   if (review.primaryOperatorLabel !== packet.primaryOperatorLabel) throw new Error("Review primaryOperatorLabel does not match the packet.");
-  if (review.reviewerOperatorLabel !== packet.reviewerOperatorLabel) throw new Error("Review reviewerOperatorLabel does not match the packet.");
-  if (review.primaryModelFamily !== packet.primaryModelFamily) throw new Error("Review primaryModelFamily does not match the packet.");
-  if (review.reviewerModelFamily !== packet.reviewerModelFamily) throw new Error("Review reviewerModelFamily does not match the packet.");
+  if (canonicalJson(review.primaryModel) !== canonicalJson(packet.primaryModel)) throw new Error("Review primaryModel does not match the packet.");
+  if (canonicalJson(review.risk) !== canonicalJson(packet.risk)) throw new Error("Review risk does not match the packet.");
+  if (review.reviewerModel.family === "unknown" || !packet.requiredReviewerFamilies.includes(review.reviewerModel.family)) {
+    throw new Error(`Review family ${review.reviewerModel.family} is not required by the packet.`);
+  }
   if (review.headSha !== packet.headSha) throw new Error("Review headSha does not match the packet.");
   if (review.verifySha !== packet.verifySha) throw new Error("Review verifySha does not match the packet.");
+  if (review.verifyDigest !== packet.verifyDigest) throw new Error("Review verifyDigest does not match the packet.");
+  if (review.diffDigest !== packet.diffDigest) throw new Error("Review diffDigest does not match the packet.");
   if (review.contractDigest !== packet.contractDigest) throw new Error("Review contractDigest does not match the packet.");
   if (canonicalJson(review.contracts.toSorted()) !== canonicalJson(packet.requiredContracts.toSorted())) {
     throw new Error("Review did not cover every required privileged-path contract.");
@@ -1837,7 +1947,12 @@ function validateExternalChangeLifecycle(changes, contract, packet, currentHeadS
   for (const change of changes) {
     if (change.serviceMode !== "repository-active") throw new Error("External change service mode is not executable.");
     if (change.evidenceHeadSha !== currentHeadSha) throw new Error("External change evidence Head SHA is stale.");
-    if (change.operatorLabel !== packet.primaryOperatorLabel || change.modelFamily !== packet.primaryModelFamily) {
+    const expectedLegacyFamily = packet.primaryModel.family === "openai"
+      ? "gpt"
+      : packet.primaryModel.family === "anthropic"
+        ? "claude"
+        : null;
+    if (change.operatorLabel !== packet.primaryOperatorLabel || change.modelFamily !== expectedLegacyFamily) {
       throw new Error("External change operator/model metadata does not match the reviewed primary implementation.");
     }
     const phases = /** @type {const} */ (["request", "preflight", "claim", "mutation", "result", "finalized"]);
@@ -1871,49 +1986,61 @@ function validateExternalChangeLifecycle(changes, contract, packet, currentHeadS
 }
 
 /**
- * @param {{currentHeadSha:string, contract:unknown, verification:unknown, packet:unknown, review:unknown, root:string}} input
+ * @param {{currentHeadSha:string, contract:unknown, verification:unknown, packet:unknown, reviews:unknown[], root:string}} input
  */
 export function runPremergeGate(input) {
   const contract = validateIssueContract(input.contract);
   const verification = validateVerification(input.verification);
-  const packet = validateReviewPacket(input.packet, input.root);
-  const review = validateReviewAgainstPacket(input.review, packet, input.root);
+  const packet = validateReviewPacket(input.packet, input.root, contract);
+  const reviewValues = z.array(z.unknown()).min(1).parse(input.reviews);
+  const reviews = reviewValues.map((review) => validateReviewAgainstPacket(review, packet, input.root, contract));
+  const reviewerFamilies = reviews.map(({ reviewerModel }) => reviewerModel.family);
+  validateReviewerFamilies({ risk: packet.risk.level, primaryFamily: packet.primaryModel.family, reviewerFamilies });
+  if (canonicalJson(reviewerFamilies.toSorted()) !== canonicalJson(packet.requiredReviewerFamilies.toSorted())) {
+    throw new Error("Review evidence must contain exactly the required reviewer families.");
+  }
   if (input.currentHeadSha !== verification.headSha) throw new Error("Verification evidence is stale for the current Head SHA.");
-  if (input.currentHeadSha !== review.headSha || input.currentHeadSha !== review.verifySha) {
+  if (reviews.some((review) => input.currentHeadSha !== review.headSha || input.currentHeadSha !== review.verifySha)) {
     throw new Error("Review evidence is stale for the current Head SHA.");
   }
   if (packet.headSha !== input.currentHeadSha || packet.verifySha !== input.currentHeadSha) {
     throw new Error("Review packet is stale for the current Head SHA.");
   }
-  if (verification.issue !== contract.issue || review.issue !== contract.issue) throw new Error("Evidence Issue mismatch.");
+  if (verification.issue !== contract.issue || reviews.some(({ issue }) => issue !== contract.issue)) throw new Error("Evidence Issue mismatch.");
   if (packet.repository !== contract.repository) throw new Error("Review packet repository mismatch.");
   if (packet.baseSha !== verification.baseSha) throw new Error("Review packet base SHA mismatch.");
-  if (verification.contractDigest !== contract.digest || review.contractDigest !== contract.digest) {
+  if (verification.executionSurface !== packet.executionSurface) throw new Error("Verification executionSurface does not match the packet.");
+  if (verification.primaryOperatorLabel !== packet.primaryOperatorLabel) throw new Error("Verification primaryOperatorLabel does not match the packet.");
+  if (canonicalJson(verification.primaryModel) !== canonicalJson(packet.primaryModel)) throw new Error("Verification primaryModel does not match the packet.");
+  if (canonicalJson(verification.risk) !== canonicalJson(packet.risk)) throw new Error("Verification risk does not match the packet.");
+  if (canonicalJson(verification.requiredReviewerFamilies.toSorted()) !== canonicalJson(packet.requiredReviewerFamilies.toSorted())) {
+    throw new Error("Verification reviewer-family requirements do not match the packet.");
+  }
+  if (verification.contractDigest !== contract.digest || reviews.some(({ contractDigest }) => contractDigest !== contract.digest)) {
     throw new Error("Evidence contract digest mismatch.");
   }
   if (verification.status !== "passed" || verification.commands.some(({ status }) => status !== "passed")) {
     throw new Error("Mechanical verification has not passed.");
   }
   if (
-    review.verdict !== "approved" ||
-    review.findings.some(({ blocking, severity }) => blocking || ["critical", "high"].includes(severity))
+    reviews.some((review) => review.verdict !== "approved" ||
+      review.findings.some(({ blocking, severity }) => blocking || ["critical", "high"].includes(severity)))
   ) {
     throw new Error("Independent review has not approved the current Head.");
   }
   if (Date.parse(contract.fetchedAt) > Date.parse(verification.completedAt)) throw new Error("Verification predates the Issue contract.");
-  if (Date.parse(verification.completedAt) > Date.parse(review.reviewedAt)) throw new Error("Review predates verification.");
+  if (reviews.some(({ reviewedAt }) => Date.parse(verification.completedAt) > Date.parse(reviewedAt))) throw new Error("Review predates verification.");
   const ids = contract.acceptanceCriteria.map(({ id }) => id);
   checkExactAcceptanceMappings(ids, verification.acceptanceEvidence, "Verification evidence");
-  checkExactAcceptanceMappings(ids, review.acceptanceAssessment, "Review assessment");
+  for (const review of reviews) checkExactAcceptanceMappings(ids, review.acceptanceAssessment, `Review assessment (${review.reviewerModel.family})`);
   validateExternalChangeLifecycle(verification.externalChanges, contract, packet, input.currentHeadSha, input.root);
   return {
     ok: true,
     issue: contract.issue,
     headSha: input.currentHeadSha,
     contractDigest: contract.digest,
-    reviewerOperatorLabel: review.reviewerOperatorLabel,
-    reviewerModelFamily: review.reviewerModelFamily,
-    reviewedAt: review.reviewedAt,
+    risk: packet.risk,
+    reviewers: reviews.map(({ reviewerModel, reviewedAt }) => ({ family: reviewerModel.family, reviewedAt })),
   };
 }
 
@@ -1942,6 +2069,8 @@ async function readArtifactJson(root, relativePath) {
  */
 export async function prepareReviewArtifacts(root, value) {
   const evidence = verificationInputSchema.parse(value);
+  const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
+  validateBranchForSurface(currentBranch, evidence.issue, evidence.executionSurface, executionPolicy);
   const currentHeadSha = runGit(root, ["rev-parse", "HEAD"]).trim();
   const baseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
   shaSchema.parse(currentHeadSha);
@@ -1957,9 +2086,25 @@ export async function prepareReviewArtifacts(root, value) {
   const packetPath = `${headRoot}/review-packet.json`;
   const contract = validateIssueContract(await readArtifactJson(root, contractPath));
   if (contract.issue !== evidence.issue) throw new Error("Verification input Issue does not match the frozen contract.");
+  const repositoryDiff = runGit(root, ["diff", "--no-ext-diff", "--no-renames", "--binary", baseSha, currentHeadSha, "--"]);
+  const changedPaths = runGit(root, ["-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", "-z", baseSha, currentHeadSha, "--"])
+    .split("\0")
+    .filter(Boolean)
+    .map((candidate) => relativeFileSchema.parse(candidate));
+  if (changedPaths.length === 0) throw new Error("Review preparation requires at least one committed changed path.");
+  const risk = riskSchema.parse(classifyRisk({
+    changedPaths,
+    externalOperations: contract.externalAuthorizations.map(({ operation }) => operation),
+  }, executionPolicy));
+  const reviewerFamilies = requiredReviewerFamilies({ risk: risk.level, primaryFamily: evidence.primaryModel.family });
   const verification = validateVerification({
     schemaVersion: evidence.schemaVersion,
     issue: evidence.issue,
+    executionSurface: evidence.executionSurface,
+    primaryOperatorLabel: evidence.primaryOperatorLabel,
+    primaryModel: evidence.primaryModel,
+    risk,
+    requiredReviewerFamilies: reviewerFamilies,
     baseSha,
     headSha: currentHeadSha,
     contractDigest: contract.digest,
@@ -1970,20 +2115,15 @@ export async function prepareReviewArtifacts(root, value) {
     remainingWork: evidence.remainingWork,
     completedAt: evidence.completedAt,
   });
-  const repositoryDiff = runGit(root, ["diff", "--no-ext-diff", "--no-renames", "--binary", baseSha, currentHeadSha, "--"]);
-  const changedPaths = runGit(root, ["-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", "-z", baseSha, currentHeadSha, "--"])
-    .split("\0")
-    .filter(Boolean)
-    .map((candidate) => relativeFileSchema.parse(candidate));
-  if (changedPaths.length === 0) throw new Error("Review preparation requires at least one committed changed path.");
   const packet = validateReviewPacket({
-    schemaVersion: 1,
+    schemaVersion: 2,
     issue: evidence.issue,
     repository: contract.repository,
+    executionSurface: evidence.executionSurface,
     primaryOperatorLabel: evidence.primaryOperatorLabel,
-    reviewerOperatorLabel: evidence.reviewerOperatorLabel,
-    primaryModelFamily: evidence.primaryModelFamily,
-    reviewerModelFamily: workflowConfiguration.reviewerModelFamilyMap[evidence.primaryModelFamily],
+    primaryModel: evidence.primaryModel,
+    risk,
+    requiredReviewerFamilies: reviewerFamilies,
     baseSha,
     headSha: currentHeadSha,
     verifySha: currentHeadSha,
@@ -1996,7 +2136,7 @@ export async function prepareReviewArtifacts(root, value) {
     changedPaths,
     requiredContracts: requiredReviewContracts(changedPaths),
     createdAt: evidence.completedAt,
-  }, root);
+  }, root, contract);
   await writeJson(path.join(root, verifyPath), verification);
   await writeFile(path.join(root, diffPath), repositoryDiff, "utf8");
   await writeJson(path.join(root, packetPath), packet);
@@ -2008,11 +2148,13 @@ export async function recordReviewResult(root, issue, value) {
   if (!Number.isInteger(issue) || issue < 1) throw new Error("Issue must be a positive integer.");
   const currentHeadSha = runGit(root, ["rev-parse", "HEAD"]).trim();
   const headRoot = `.artifacts/issues/${issue}/${currentHeadSha}`;
+  const contract = await readArtifactJson(root, `.artifacts/issues/${issue}/issue-contract.json`);
   const packet = await readArtifactJson(root, `${headRoot}/review-packet.json`);
-  const review = validateReviewAgainstPacket(value, packet, root);
-  const reviewPath = `${headRoot}/review.json`;
+  const review = validateReviewAgainstPacket(value, packet, root, contract);
+  const reviewPath = `${headRoot}/reviews/${review.reviewerModel.family}.json`;
   await writeJson(path.join(root, reviewPath), review);
-  return { review, reviewPath, nextState: stateForReview(review) };
+  const nextState = review.verdict === "approved" ? "review-requested" : stateForReview(review);
+  return { review, reviewPath, nextState };
 }
 
 /**
@@ -2031,10 +2173,13 @@ export async function loadAuthoritativeGateInput(root, issue) {
   const issueRoot = `.artifacts/issues/${issue}`;
   const headRoot = `${issueRoot}/${currentHeadSha}`;
   const contract = await readArtifactJson(root, `${issueRoot}/issue-contract.json`);
-  const verification = await readArtifactJson(root, `${headRoot}/verify.json`);
   const packet = await readArtifactJson(root, `${headRoot}/review-packet.json`);
-  const review = await readArtifactJson(root, `${headRoot}/review.json`);
-  const validatedPacket = validateReviewPacket(packet, root);
+  const validatedPacket = validateReviewPacket(packet, root, contract);
+  const verification = await readArtifactJson(root, `${headRoot}/verify.json`);
+  const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
+  validateBranchForSurface(currentBranch, issue, validatedPacket.executionSurface, executionPolicy);
+  const reviews = await Promise.all(validatedPacket.requiredReviewerFamilies.map((family) =>
+    readArtifactJson(root, `${headRoot}/reviews/${family}.json`)));
   const authoritativeBaseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
   if (validatedPacket.baseSha !== authoritativeBaseSha) throw new Error("Review packet base SHA does not match the authoritative base ref.");
 
@@ -2058,7 +2203,7 @@ export async function loadAuthoritativeGateInput(root, issue) {
     throw new Error("Review packet changed paths do not match the repository diff.");
   }
 
-  return { currentHeadSha, contract, verification, packet, review, root };
+  return { currentHeadSha, contract, verification, packet, reviews, root };
 }
 
 /** @param {string} root @param {number} issue */
@@ -2108,7 +2253,7 @@ export function renderPullRequestBody(input) {
   const gate = runPremergeGate(input);
   const contract = validateIssueContract(input.contract);
   const verification = validateVerification(input.verification);
-  const review = validateReviewResult(input.review);
+  const reviews = input.reviews.map(validateReviewResult);
   /** @param {string} value */
   const safe = (value) => value
     .replaceAll("`", "\\`")
@@ -2122,7 +2267,9 @@ export function renderPullRequestBody(input) {
   const remainingWork = verification.remainingWork.length === 0
     ? "- None for this Issue."
     : verification.remainingWork.map((item) => `- ${safe(item)}`).join("\n");
-  return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Head SHA: \`${gate.headSha}\`\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Opposite-model review\n- Primary operator: ${review.primaryOperatorLabel}\n- Reviewer operator: ${review.reviewerOperatorLabel}\n- Primary model family: ${review.primaryModelFamily}\n- Reviewer model family: ${review.reviewerModelFamily}\n- Reviewed SHA: \`${review.headSha}\`\n- Verdict: ${review.verdict}\n- Contracts: ${review.contracts.join(", ")}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
+  const reviewLines = reviews.map((review) => `- Reviewer ${review.reviewerModel.family}: ${safe(review.reviewerModel.configured)} | ${safe(review.reviewerModel.observed)} | ${review.reviewerModel.family} | ${review.reviewerModel.fallback} | ${review.verdict} | ${review.contracts.join(", ")}`).join("\n");
+  const riskReasons = verification.risk.reasons.length > 0 ? verification.risk.reasons.map(safe).join(", ") : "none";
+  return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Head SHA: \`${gate.headSha}\`\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Cross-model review\n- Execution surface: ${verification.executionSurface}\n- Primary operator label: ${verification.primaryOperatorLabel}\n- Primary configured model: ${safe(verification.primaryModel.configured)}\n- Primary observed model: ${safe(verification.primaryModel.observed)}\n- Primary family: ${verification.primaryModel.family}\n- Primary fallback: ${verification.primaryModel.fallback}\n- Risk: ${verification.risk.level}\n- Risk reasons: ${riskReasons}\n- Reviewed SHA: \`${gate.headSha}\`\n${reviewLines}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
 }
 
 /** @param {unknown} value @param {string} root */
@@ -2192,15 +2339,16 @@ async function writeJson(outputPath, value) {
 }
 
 const fixtureSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   fetchedAt: timestampSchema,
   completedAt: timestampSchema,
   reviewedAt: timestampSchema,
   issueContract: issueContractInputSchema,
   slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
+  executionSurface: surfaceSchema,
   primaryOperatorLabel: operatorLabelSchema,
-  reviewerOperatorLabel: operatorLabelSchema,
-  primaryModelFamily: modelFamilySchema,
+  primaryModel: modelIdentitySchema,
+  reviewerModels: z.array(modelIdentitySchema).min(1),
   changedPaths: z.array(relativeFileSchema).min(1),
   commands: verificationSchema.shape.commands,
   acceptanceEvidence: verificationSchema.shape.acceptanceEvidence,
@@ -2214,7 +2362,13 @@ const fixtureSchema = z.object({
 /** @param {unknown} fixtureValue @param {string} root */
 export async function simulateWorkflowFixture(fixtureValue, root) {
   const fixture = fixtureSchema.parse(fixtureValue);
-  const branch = `${fixture.primaryOperatorLabel}/${fixture.issueContract.issue}-${fixture.slug}`;
+  const branchPrefix = executionPolicy.surfaces[fixture.executionSurface].branchPrefix;
+  const branch = validateBranchForSurface(
+    `${branchPrefix}/${fixture.issueContract.issue}-${fixture.slug}`,
+    fixture.issueContract.issue,
+    fixture.executionSurface,
+    executionPolicy,
+  );
   await mkdir(path.join(root, "config"), { recursive: true });
   await writeFile(path.join(root, ".gitignore"), ".artifacts/\n", "utf8");
   await writeJson(path.join(root, "config", "ownership.json"), {
@@ -2311,11 +2465,11 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const contractPathRelative = path.join(issueRootRelative, "issue-contract.json").replaceAll("\\", "/");
   await writeJson(path.join(root, contractPathRelative), contract);
   const prepared = await prepareReviewArtifacts(root, {
-    schemaVersion: 1,
+    schemaVersion: 2,
     issue: contract.issue,
+    executionSurface: fixture.executionSurface,
     primaryOperatorLabel: fixture.primaryOperatorLabel,
-    reviewerOperatorLabel: fixture.reviewerOperatorLabel,
-    primaryModelFamily: fixture.primaryModelFamily,
+    primaryModel: fixture.primaryModel,
     status: "passed",
     commands: fixture.commands,
     acceptanceEvidence: fixture.acceptanceEvidence,
@@ -2324,22 +2478,25 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
     completedAt: fixture.completedAt,
   });
   const packet = prepared.packet;
-  const recorded = await recordReviewResult(root, contract.issue, {
-    schemaVersion: 1,
+  const recorded = await Promise.all(fixture.reviewerModels.map((reviewerModel) => recordReviewResult(root, contract.issue, {
+    schemaVersion: 2,
     issue: contract.issue,
+    executionSurface: packet.executionSurface,
     primaryOperatorLabel: packet.primaryOperatorLabel,
-    reviewerOperatorLabel: packet.reviewerOperatorLabel,
-    primaryModelFamily: packet.primaryModelFamily,
-    reviewerModelFamily: packet.reviewerModelFamily,
+    primaryModel: packet.primaryModel,
+    reviewerModel,
+    risk: packet.risk,
     headSha: packet.headSha,
     verifySha: packet.verifySha,
+    verifyDigest: packet.verifyDigest,
+    diffDigest: packet.diffDigest,
     contractDigest: contract.digest,
     verdict: "approved",
     contracts: packet.requiredContracts,
     findings: fixture.findings,
     acceptanceAssessment: fixture.acceptanceAssessment,
     reviewedAt: fixture.reviewedAt,
-  });
+  })));
   /** @type {{ current: string, previous: string, resumeState: string | null }} */
   let state = { current: "approved", previous: "proposed", resumeState: null };
   const transitions = [];
@@ -2364,7 +2521,7 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
     verification: prepared.paths.verification,
     diff: prepared.paths.diff,
     packet: prepared.paths.packet,
-    review: recorded.reviewPath,
+    reviews: recorded.map(({ reviewPath }) => reviewPath),
     pullRequest: path.join(headRootRelative, "pull-request.md").replaceAll("\\", "/"),
     mergeRequest: merge.requestPath,
   } };

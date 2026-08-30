@@ -61,6 +61,8 @@ The following high-risk operations are explicitly unsupported and fail closed un
 
 The repository removes actor-specific external-service restrictions. The application settings retain only exact `.env` and `.env.*` read denials as a secret-file protection layer. No shell, network, MCP, GitHub, Supabase, Vercel, Cloudflare, or provider category is denied by operator label.
 
+Cursor Cloud is a separate execution surface, not a separate authority source. Its parent operator uses the same protected account and target registry as Claude and Codex, but every Cursor provider request must also bind a fresh `.artifacts/cursor/<run-id>.json` activation to the current `cursor/<issue>-<slug>` branch, exact Head, and all configured provider identities. Cursor consultants, evaluators, and auditors remain read-only and cannot inherit the parent connector authority.
+
 ## Common safeguards
 
 - Never expose tokens, cookies, private keys, service-role keys, raw email addresses, complete authentication responses, or secret values.

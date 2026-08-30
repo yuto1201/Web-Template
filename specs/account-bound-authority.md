@@ -56,7 +56,7 @@ The frozen Issue contract records:
 - fully resolved account and target references needed by the Issue;
 - exact external authorizations.
 
-An authority-changing branch cannot use its candidate `config/ownership.json` for external access. Its changes become effective only after opposite-model exact-Head review, required CI, squash merge to protected `main`, and creation of a later Issue contract from the new `main`. Issue #33 itself is delivered using the pre-change v1 authority and base-sourced GitHub gate; candidate v2 authority never authorizes its own push, PR, merge, or cleanup.
+An authority-changing branch cannot use its candidate `config/ownership.json` for external access. Its changes become effective only after policy-required exact-Head cross-model review, required CI, squash merge to protected `main`, and creation of a later Issue contract from the new `main`. Issue #33 itself is delivered using the pre-change authority and base-sourced GitHub gate; candidate v2 authority never authorizes its own push, PR, merge, or cleanup.
 
 ## Ownership schema v2
 
@@ -126,7 +126,7 @@ No retry occurs with unchanged inputs after an ambiguous result. The operator re
 
 ## Risk and review gates
 
-The exact-Head implementation, opposite-model mapping, diff digest, verification digest, contract digest, and reviewer self-approval rejection remain unchanged.
+The exact-Head implementation, diff digest, verification digest, contract digest, and independent review remain enforced. The integrated execution policy requires an opposite-family reviewer for normal risk and both Anthropic and OpenAI for high risk.
 
 Registered repository-content-derived high-risk writes rerun the authoritative gate: GitHub merge, hosted Supabase migrations, Vercel preview/production deployments, and one exact Cloudflare DNS upsert. GitHub ruleset changes, Supabase Auth-policy changes, Vercel configuration or rollback, and Cloudflare rollback are explicitly unsupported. A registered contract is not itself an executable provider integration: until a provider-specific production client exists, that operation also fails closed. Issue #33 adds the GitHub CLI production client for authenticated Issue reads and exact-Head squash merge; the other production clients require later Issues.
 

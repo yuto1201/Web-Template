@@ -20,7 +20,7 @@ Evidence states what was actually observed. Keep these categories separate:
 
 Do not infer one category from another. For example, a local Git remote does not prove which GitHub connector identity is authenticated, and a configured plugin does not prove its account connection works.
 
-Keep operator label, execution role, model family, account identity, service mode, and exact target separate. Claude and Codex have equal account-bound authority in operator roles; evaluator and auditor roles remain read-only, and opposite-model review remains independent. All repository-content-derived high-risk writes must show a fresh authoritative exact-Head gate. Candidate-branch ownership bytes are never accepted as the authority that delivers that branch.
+Keep operator label, execution role, model identity, account identity, service mode, and exact target separate. Claude and Codex have equal account-bound authority in operator roles; evaluator and auditor roles remain read-only. Normal risk needs an independent opposite-family review, while high risk needs both OpenAI and Anthropic. All repository-content-derived high-risk writes must show a fresh authoritative exact-Head gate. Candidate-branch ownership bytes are never accepted as the authority that delivers that branch.
 
 ## Failure handling
 

@@ -14,10 +14,11 @@
 - GitHub Issues define bounded work and acceptance criteria.
 - Claude acting in implementer and external-operator roles has the same account-bound authority as Codex.
 - Operator label (`claude`/`codex`), execution role, model family, authenticated account identity, service mode, and exact target remain independent axes.
-- Evaluator and auditor roles are read-only; model family selects the opposite-model reviewer and cannot grant provider authority.
+- Evaluator and auditor roles are read-only; policy-derived reviewer families establish review independence and cannot grant provider authority.
 - Protected-main authority and the frozen Issue purpose/target authorize guarded request → preflight → one-time claim → result/finalize workflows. Candidate branches cannot authorize themselves.
 - `AGENTS.md` is the canonical shared instruction file.
 - `docs/agent-contracts/` is the canonical source for generated Codex and Claude evaluator definitions.
+- `.cursor/`, `config/execution.json`, and `specs/cursor-cloud.md` define the additive Cursor Cloud execution surface. Cursor model identity, execution surface, operator label, and provider account remain separate axes.
 - CI repeats deterministic generation, static checks, unit tests, and later application/database/browser tests.
 
 ## Trust boundaries
@@ -37,4 +38,5 @@
 - Cross-model execution wrappers and resumable workflow automation are completed in Issue #5.
 - Vercel and Cloudflare external setup are handled independently in Issues #6 and #7.
 - Issue #8 keeps this repository as the guarded golden template: initialization replaces only reviewed identity values, while provider activation remains a separate guarded workflow.
+- Issue #29 adds Cursor Cloud environment, model/risk evidence, generated read-only evaluators, and live activation boundaries without changing the protected account owner.
 - Issue #33 establishes account-bound operator parity, protected-main authority snapshots, strict external authorizations, receipt continuity, Linear denial, and template source-identity leakage checks.

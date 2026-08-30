@@ -186,14 +186,29 @@ async function gitAuthorityFixture(mainAuthority, candidateAuthority) {
 
 function review(overrides = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     issue: 5,
+    executionSurface: "codex-local",
     primaryOperatorLabel: "codex",
-    reviewerOperatorLabel: "claude",
-    primaryModelFamily: "gpt",
-    reviewerModelFamily: "claude",
+    primaryModel: {
+      configured: "gpt-5.6-sol[effort=high]",
+      observed: "gpt-5.6-sol",
+      family: "openai",
+      fallback: false,
+      parameters: [{ id: "effort", value: "high" }],
+    },
+    reviewerModel: {
+      configured: "claude-opus-5[effort=high]",
+      observed: "claude-opus-5",
+      family: "anthropic",
+      fallback: false,
+      parameters: [{ id: "effort", value: "high" }],
+    },
+    risk: { level: "high", reasons: ["path:tools/"] },
     headSha,
     verifySha: headSha,
+    verifyDigest: digestValue({ verification: "fixture" }),
+    diffDigest: digestValue({ diff: "fixture" }),
     contractDigest,
     verdict: "approved",
     contracts: ["change-evaluator"],
@@ -836,13 +851,21 @@ describe("workflow contracts", () => {
     expect(requiredReviewContracts(["SRC/LIB/AUTH/actions.ts"])).toContain("supabase-auditor");
   });
 
-  it("blocks unavailable review and forbids self-approval", () => {
+  it("blocks unavailable or untrusted review model evidence", () => {
     expect(stateForReview(review({ verdict: "unavailable", unavailableReason: "timeout" }))).toBe("blocked:review");
-    expect(() => validateReviewResult(review({ reviewerOperatorLabel: "claude", reviewerModelFamily: "gpt" }))).toThrow(/Self-approval|same model family/u);
-    expect(validateReviewResult(review({ reviewerOperatorLabel: "codex" }))).toMatchObject({
-      reviewerOperatorLabel: "codex",
-      reviewerModelFamily: "claude",
+    expect(validateReviewResult(review())).toMatchObject({
+      executionSurface: "codex-local",
+      reviewerModel: { family: "anthropic", fallback: false },
     });
+    expect(() => validateReviewResult(review({
+      reviewerModel: {
+        configured: "claude-opus-5[effort=high]",
+        observed: "gpt-5.6-sol",
+        family: "openai",
+        fallback: true,
+        parameters: [{ id: "effort", value: "high" }],
+      },
+    }))).toThrow(/fallback/iu);
     expect(() => validateReviewResult(review({ verdict: "unavailable" }))).toThrow(/fixed reason/u);
     expect(() => validateReviewResult(review({ verifySha: "9".repeat(40) }))).toThrow(/must match/u);
     expect(() => validateReviewResult(review({

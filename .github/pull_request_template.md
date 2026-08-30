@@ -14,15 +14,19 @@ Closes #
 
 - AC-1: pending
 
-## Opposite-model review
+## Cross-model review
 
-- Primary operator: `codex` or `claude`
-- Reviewer operator: `codex` or `claude`
-- Primary model family: `gpt` or `claude`
-- Reviewer model family: the opposite model family
+- Execution surface: codex-local, claude-local, or cursor-cloud
+- Primary operator label: codex or claude
+- Primary configured model: exact configured model ID
+- Primary observed model: exact observed model ID
+- Primary family: openai, anthropic, cursor, or xai
+- Primary fallback: false
+- Risk: normal or high
+- Risk reasons: none, or the canonical comma-separated derived reasons
 - Reviewed SHA: `current-head-sha`
-- Verdict: pending
-- Contracts: `change-evaluator` and any privileged-path auditors
+- Reviewer anthropic: exact configured model ID | exact observed model ID | anthropic | false | approved | change-evaluator, and any privileged-path auditors
+- Reviewer openai: exact configured model ID | exact observed model ID | openai | false | approved | change-evaluator, and any privileged-path auditors
 
 ## External changes
 
