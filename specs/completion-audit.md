@@ -1,6 +1,6 @@
 # Completion audit trace
 
-`config/acceptance.json` が機械可読な正本です。この文書は Issue #1–#8・#19・#33 の受け入れ条件が、現在の実装とどの検証に接続されるかを人が読める形で示します。
+`config/acceptance.json` が機械可読な正本です。この文書は Issue #1–#8・#19・#29・#33・#35 の受け入れ条件が、現在の実装とどの検証に接続されるかを人が読める形で示します。
 
 | Issue | 現在の責務 | 主な実装証拠 | 実行証拠 |
 |---|---|---|---|
@@ -14,5 +14,6 @@
 | #8 | 一度だけの安全な初期化、clean-room、リンク、完了監査 | template config/core/tests、activation runbook | source check、clean-room verify、completion audit |
 | #19 | Mac作業環境へのfresh-clone移行、秘密情報非移送、実macOS検証 | macOS onboarding、workstation doctor/tests、macOS CI | doctor、full check、desktop/mobile browser smoke |
 | #33 | account-bound authority、operator parity、protected-main scope、service mode、receipt continuity、clean-room identity | authority core、workflow receipts、operator parity、template initializer、設計仕様 | policy、generated drift、trace、unit、template source/clean-room verify |
+| #35 | protected-base の3段階リスク、低リスク zero-review、必須 CI context を保つ条件分岐、bounded review cadence | execution policy、CI change planner、GitHub/local review gates、workflow/verification guidance | `check:fast`、`check:docs`、policy、unit、final full check |
 
 ライブ成功はコードだけから推測しません。Vercel、Cloudflare、TLS、HTTP のライブ証拠は対象 PR に記録し、生成後の各アプリでは protected-main authority と Issue purpose に基づく provider preflight/claim/result をやり直します。Supabase hosted project が未作成なら `readiness` はローカル準備完了とライブ未準備を分けて表示します。Linear は操作自体が未登録なので、user purpose と stable IDs が揃っても read/write とも fail closed です。

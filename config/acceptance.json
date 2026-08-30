@@ -66,6 +66,12 @@
       "title": "Account-bound authority and equal operator policy",
       "evidence": ["specs/account-bound-authority.md", "docs/authority.md", "tools/authority-core.mjs", "tools/issue-workflow.mjs", "tools/provider-guarded-adapter.mjs", "tools/github-review-gate.mjs", "tools/repository-policy.mjs", "tools/verify-template-instantiation.mjs", "tests/authority-core.test.mjs", "tests/provider-guarded-adapter.test.mjs", "tests/github-review-gate.test.mjs", "tests/workflow-contract.test.mjs", "tests/domain-workflow.test.mjs", "tests/deployment-release.test.mjs", "tests/operator-parity.test.mjs", "tests/template-initializer.test.mjs"],
       "commands": ["policy", "check:generated", "audit:trace", "template:source-check", "template:verify"]
+    },
+    {
+      "issue": 35,
+      "title": "Risk-tiered verification and bounded delivery cadence",
+      "evidence": ["specs/risk-tiered-verification.md", "config/execution.json", "config/workflow.json", "tools/execution-policy.mjs", "tools/ci-change-plan.mjs", "tools/github-review-gate.mjs", "tools/workflow-core.mjs", ".github/workflows/ci.yml", "docs/workflow.md", "docs/verification.md", "tests/execution-policy.test.mjs", "tests/ci-change-plan.test.mjs", "tests/github-review-gate.test.mjs", "tests/workflow-gate.test.mjs", "tests/repository-policy.test.mjs"],
+      "commands": ["check:fast", "check:docs", "policy", "test", "check"]
     }
   ]
 }
