@@ -35,7 +35,7 @@ Closes #
 - Execution role: `implementer` or `external-operator`
 - Model family: `gpt` or `claude`
 - Account ref: protected-main authority reference
-- Service mode: `repository-active` or `explicit-user-purpose-only`
+- Service mode: `repository-active`; Linear is `explicit-user-purpose-only` but has no registered operation and cannot produce operation evidence
 - Exact target ref: protected-main authority reference
 - Redacted preflight receipt ID: `receipt-...`
 - Redacted execution claim reference: `<mutation-digest>.claim.json`

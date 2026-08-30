@@ -29,7 +29,7 @@ Email identity is normalized and compared locally by SHA-256 fingerprint. Commit
 
 ## Frozen Issue authorization
 
-The Issue contract schema v2 records the protected-main authority commit and digest plus strict `externalAuthorizations`. Each authorization binds service, operation, purpose code and text, account and target references, environment, operation-specific constraints, and whether authoritative exact-Head review is required. Examples include repository/branch/PR/Head for GitHub, project ref and migration digests for Supabase, project/environment/commit for Vercel, zone/hostname/record/routing source for Cloudflare, and workspace/team/object/filter/result limit for Linear.
+The Issue contract schema v2 records the protected-main authority commit and digest plus strict `externalAuthorizations`. Each authorization binds service, operation, purpose code and text, account and target references, environment, operation-specific constraints, and whether authoritative exact-Head review is required. Registered examples include repository/branch/PR/Head for GitHub, project ref and migration digests for Supabase, project/environment/commit for Vercel, and zone/hostname/record/routing source for Cloudflare. Linear has no authorization shape because no Linear operation is registered.
 
 An operator request declares only its operator label, eligible execution role and surface, authorization reference, intent, reversibility, recovery strategy, and exact operation inputs. It cannot inject a free-form account or target, token, approval claim, or evidence. Linear has no request constraint because no Linear operation is registered. For a merge request, generate every required field from the gated Issue evidence and then validate it:
 
