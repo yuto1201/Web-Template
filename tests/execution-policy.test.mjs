@@ -15,6 +15,7 @@ import {
 } from "../tools/execution-policy.mjs";
 
 const policy = await loadExecutionPolicy(path.resolve("."));
+const lowDoc = "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md";
 
 describe("execution policy", () => {
   it("maps every executable review family to operation evidence metadata", () => {
@@ -80,9 +81,9 @@ describe("execution policy", () => {
   });
 
   it("grants low risk only when every changed path is allowlisted and no external operation exists", () => {
-    expect(classifyRisk({ changedPaths: ["README.md"], externalOperations: [] }, policy)).toEqual({
+    expect(classifyRisk({ changedPaths: [lowDoc], externalOperations: [] }, policy)).toEqual({
       level: "low",
-      reasons: ["path:README.md"],
+      reasons: [`path:${lowDoc}`],
     });
     expect(classifyRisk({ changedPaths: ["README.md", "src/app/page.tsx"], externalOperations: [] }, policy)).toEqual({
       level: "normal",
@@ -105,6 +106,22 @@ describe("execution policy", () => {
       .toEqual({ level: "normal", reasons: [] });
   });
 
+  it("keeps normative specifications and new documentation out of the no-review tier", () => {
+    for (const changedPath of ["specs/account-bound-authority.md", "specs/architecture.md", "specs/acceptance.md", "specs/risk-tiered-verification.md", "specs/new-security-contract.md"]) {
+      expect(classifyRisk({ changedPaths: [changedPath], externalOperations: [] }, policy), changedPath)
+        .toEqual({ level: "high", reasons: ["path:specs/"] });
+    }
+    for (const changedPath of ["README.md", "docs/new-guide.md", "docs/new-script.mjs"]) {
+      expect(classifyRisk({ changedPaths: [changedPath], externalOperations: [] }, policy), changedPath)
+        .toEqual({ level: "normal", reasons: [] });
+    }
+  });
+
+  it.each(["package.json", "package-lock.json"])("runs database/Auth integration when %s can change Supabase dependencies", (changedPath) => {
+    expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: [changedPath], externalOperations: [] }, policy))
+      .toMatchObject({ databaseAuth: true });
+  });
+
   it.each([
     ["docs/authority.md", "docs/authority.md"],
     ["docs/security.md", "docs/security.md"],
@@ -112,8 +129,8 @@ describe("execution policy", () => {
     ["docs/activation.md", "docs/activation.md"],
     ["docs/verification.md", "docs/verification.md"],
     ["docs/onboarding-cursor-cloud.md", "docs/onboarding-cursor-cloud.md"],
-    ["specs/decisions.md", "specs/decisions.md"],
-    ["specs/cursor-cloud.md", "specs/cursor-cloud.md"],
+    ["specs/decisions.md", "specs/"],
+    ["specs/cursor-cloud.md", "specs/"],
     ["docs/agent-contracts/change-evaluator.md", "docs/agent-contracts/"],
     ["docs/authentication.md", "docs/authentication.md"],
     ["docs/database.md", "docs/database.md"],
@@ -155,8 +172,8 @@ describe("execution policy", () => {
   });
 
   it("routes expensive verification from derived risk and relevant paths", () => {
-    expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: ["README.md"], externalOperations: [] }, policy)).toEqual({
-      risk: { level: "low", reasons: ["path:README.md"] },
+    expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: [lowDoc], externalOperations: [] }, policy)).toEqual({
+      risk: { level: "low", reasons: [`path:${lowDoc}`] },
       repository: "docs",
       databaseAuth: false,
       browser: false,
@@ -174,7 +191,7 @@ describe("execution policy", () => {
     expect(executionPolicyModule.deriveVerificationPlan({ changedPaths: ["package-lock.json"], externalOperations: [] }, policy)).toEqual({
       risk: { level: "normal", reasons: [] },
       repository: "full",
-      databaseAuth: false,
+      databaseAuth: true,
       browser: true,
       macos: true,
       template: true,

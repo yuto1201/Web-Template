@@ -88,7 +88,7 @@ describe("repository policy", () => {
       .replace(/^- Primary family:.*$/mu, "- Primary family: openai")
       .replace(/^- Primary fallback:.*$/mu, "- Primary fallback: false")
       .replace(/^- Risk:.*$/mu, "- Risk: low")
-      .replace(/^- Risk reasons:.*$/mu, "- Risk reasons: path:README.md")
+      .replace(/^- Risk reasons:.*$/mu, "- Risk reasons: path:docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md")
       .replace(/^- Reviewed SHA:.*$/mu, `- Reviewed SHA: \`${headSha}\``)
       .replace(/^- Reviewer anthropic:.*\n/mu, "")
       .replace(/^- Reviewer openai:.*\n/mu, "");
@@ -102,7 +102,7 @@ describe("repository policy", () => {
           user: { login: "yuto1201", id: 50611866, type: "User" },
         },
       },
-      changedPaths: ["README.md"],
+      changedPaths: ["docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md"],
       diff: "",
       workflow,
       executionPolicy,

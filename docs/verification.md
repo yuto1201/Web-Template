@@ -4,7 +4,7 @@
 
 Risk is derived from the protected-base policy and the actual merge-base diff. It cannot be selected in the PR body or lowered by editing candidate configuration.
 
-- Low: narrowly allowlisted non-operational documentation only, `npm run check:docs` once at final Head, no independent reviewer.
+- Low: only the exact historical-plan Markdown files allowlisted in protected policy, `npm run check:docs` once at final Head, no independent reviewer. README and new documentation default to normal; normative `specs/**` stays high.
 - Normal: focused tests or `npm run check:fast` during editing, then one final `npm run check`, Issue-specific acceptance checks, and one different observed reviewer family at the exact Head.
 - High: the full normal gate plus every relevant database/auth, browser, macOS, template, deployment, or domain integration and approved OpenAI and Anthropic family reviews at the exact Head.
 

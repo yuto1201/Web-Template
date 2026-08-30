@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createCiChangePlan, fullCiChangePlan } from "../tools/ci-change-plan.mjs";
 
 const trustedPolicy = JSON.parse(await readFile(path.resolve("config/execution.json"), "utf8"));
+const lowDoc = "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md";
 
 /** @param {string} root @param {string[]} args */
 function git(root, args) {
@@ -36,7 +37,9 @@ async function repositoryWithChanges(changes) {
 
 describe("CI change plan", () => {
   it.each([
-    [[{ path: "README.md", content: "# Clarified\n" }], { risk: { level: "low" }, repository: "docs", databaseAuth: false }],
+    [[{ path: lowDoc, content: "# Clarified\n" }], { risk: { level: "low" }, repository: "docs", databaseAuth: false }],
+    [[{ path: "specs/account-bound-authority.md", content: "# Normative authority\n" }], { risk: { level: "high" }, repository: "full", databaseAuth: true }],
+    [[{ path: "package-lock.json", content: "{}\n" }], { risk: { level: "normal" }, repository: "full", databaseAuth: true }],
     [[{ path: "src/app/page.tsx", content: "export default function Page() { return null; }\n" }], { risk: { level: "normal" }, repository: "full", browser: true }],
     [[{ path: "supabase/migrations/20260830000000_x.sql", content: "select 1;\n" }], { risk: { level: "high" }, repository: "full", databaseAuth: true, macos: true, template: true }],
   ])("derives a protected-base plan for %j", async (changes, expected) => {
@@ -69,7 +72,7 @@ describe("CI change plan", () => {
   });
 
   it("writes canonical GitHub outputs and exits nonzero for invalid policy", async () => {
-    const repository = await repositoryWithChanges([{ path: "README.md", content: "# Changed\n" }]);
+    const repository = await repositoryWithChanges([{ path: lowDoc, content: "# Changed\n" }]);
     const outputPath = path.join(repository.root, "github-output.txt");
     const validPolicyPath = path.join(repository.root, "trusted-policy.json");
     const invalidPolicyPath = path.join(repository.root, "invalid-policy.json");

@@ -92,7 +92,7 @@ export function requiredReviewerFamilies({ risk, primaryFamily }) {
 }
 ```
 
-Add `lowRiskPathRules` to `config/execution.json`. Use broad documentation prefixes only because high-risk rules run first. Add `docs/agent-contracts/`, `docs/authentication.md`, `docs/database.md`, `docs/deployment.md`, and `docs/domain.md` to high-risk rules.
+Add `lowRiskPathRules` to `config/execution.json`. Final-review correction: name only the two historical plan Markdown files under `docs/superpowers/plans/`; do not allow broad documentation prefixes. All normative `specs/**` and operational-security/reviewer guidance remain high risk. New documentation and README changes require normal review unless high-risk rules apply.
 
 - [ ] **Step 4: Add and test verification-plan routing**
 

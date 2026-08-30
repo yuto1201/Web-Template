@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { deriveReviewRisk, evaluateGitHubReviewGate, parseReviewBody } from "../tools/github-review-gate.mjs";
 
 const headSha = "a".repeat(40);
+const lowDoc = "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md";
 const executionPolicy = JSON.parse(await readFile(path.resolve("config/execution.json"), "utf8"));
 const workflow = {
   reviewerMap: { codex: "claude", claude: "codex" },
@@ -62,7 +63,7 @@ function highRiskBody(override = {}) {
 function lowRiskBody(override = {}) {
   return reviewBody({
     risk: "low",
-    riskReasons: "path:README.md",
+    riskReasons: `path:${lowDoc}`,
     reviewers: [],
     ...override,
   });
@@ -140,13 +141,13 @@ describe("GitHub exact-Head review gate", () => {
 
   it("accepts canonical low-risk evidence without an independent reviewer", () => {
     expect(parseReviewBody(lowRiskBody())).toMatchObject({
-      risk: { level: "low", reasons: ["path:README.md"] },
+      risk: { level: "low", reasons: [`path:${lowDoc}`] },
       reviews: [],
       reviewedSha: headSha,
     });
     expect(evaluateGitHubReviewGate({
       event: event(lowRiskBody()),
-      changedPaths: ["README.md"],
+      changedPaths: [lowDoc],
       diff: "",
       workflow,
       executionPolicy,
@@ -167,7 +168,7 @@ describe("GitHub exact-Head review gate", () => {
   });
 
   it("rejects low-risk claims outside the protected allowlist or with extra reviewer evidence", () => {
-    for (const changedPath of ["src/app/page.tsx", "docs/agent-contracts/change-evaluator.md", ".github/workflows/ci.yml"]) {
+    for (const changedPath of ["README.md", "specs/account-bound-authority.md", "specs/architecture.md", "src/app/page.tsx", "docs/agent-contracts/change-evaluator.md", ".github/workflows/ci.yml"]) {
       expect(() => evaluateGitHubReviewGate({
         event: event(lowRiskBody()),
         changedPaths: [changedPath],
@@ -178,7 +179,7 @@ describe("GitHub exact-Head review gate", () => {
     }
     expect(() => evaluateGitHubReviewGate({
       event: event(lowRiskBody({ reviewers: [{ family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] })),
-      changedPaths: ["README.md"],
+      changedPaths: [lowDoc],
       diff: "",
       workflow,
       executionPolicy,
@@ -354,11 +355,12 @@ describe("GitHub exact-Head review gate", () => {
       git("init", "-b", "main");
       git("config", "user.name", "Template Test");
       git("config", "user.email", "template-test@example.invalid");
-      await writeFile(path.join(root, "README.md"), "base\n", "utf8");
-      git("add", "README.md");
+      await mkdir(path.dirname(path.join(root, lowDoc)), { recursive: true });
+      await writeFile(path.join(root, lowDoc), "base\n", "utf8");
+      git("add", lowDoc);
       git("commit", "-m", "base");
       git("switch", "-c", "feature");
-      await writeFile(path.join(root, "README.md"), "base\nfeature\n", "utf8");
+      await writeFile(path.join(root, lowDoc), "base\nfeature\n", "utf8");
       git("commit", "-am", "feature");
       const featureSha = git("rev-parse", "HEAD");
       git("switch", "main");

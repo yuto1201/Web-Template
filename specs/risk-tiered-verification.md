@@ -36,9 +36,9 @@ The solution must reduce routine work without creating a candidate-controlled es
 3. Every other change is `normal`.
 4. Invalid policy, empty/invalid paths, unknown operations, or an unavailable protected policy fail upward rather than producing `low`.
 
-The initial low-risk allowlist is documentation-only. High-risk rules take precedence and include authority/security/workflow/verification/activation/authentication/database/deployment/domain guidance, `specs/decisions.md`, Cursor authority specifications, and all `docs/agent-contracts/**`. Therefore editing reviewer instructions cannot qualify as low risk.
+The initial low-risk allowlist names only the two historical implementation-plan Markdown files under `docs/superpowers/plans/`; it does not allow a whole documentation directory. New documentation and `README.md` remain normal unless a high-risk rule applies. All normative `specs/**`, authority/security/workflow/verification/activation/authentication/database/deployment/domain guidance, and `docs/agent-contracts/**` are high risk. Therefore new or edited trust-boundary instructions cannot qualify as low risk.
 
-Candidate PR text, labels, operator input, or candidate-edited configuration cannot lower risk. GitHub continues to run the review gate from the checked-out protected base. Local workflow preparation loads the policy from the protected `main` ref; the migration PR itself is evaluated under the old policy and remains high risk.
+Candidate PR text, labels, operator input, or candidate-edited configuration cannot lower risk. GitHub continues to run the review gate from the checked-out protected base. Local workflow preparation loads the policy from the fixed protected `main` ref, never candidate `config/workflow.json` baseRef or another local branch; the migration PR itself is evaluated under the old policy and remains high risk.
 
 ## Review behavior
 
@@ -67,6 +67,7 @@ Routing rules:
 
 - High risk runs the current full repository, database/auth, macOS/browser, and clean-room checks.
 - Normal risk always runs the full repository check. Database/Auth, macOS/browser, and clean-room steps run only when matching relevant paths.
+- `package.json` and `package-lock.json` run Database/Auth integration as well as browser/macOS/template checks because their dependency changes can affect Supabase sessions, migrations, JWTs, and RLS.
 - Low risk runs a documentation policy/link/generated-drift check. The other required contexts start and report a validated lightweight result without installing or starting unrelated services.
 - `deployment:lint` and `domain:lint` are removed as duplicate CI steps because `npm run check` already contains both.
 - The macOS context may use an Ubuntu runner only for a classified irrelevant lightweight result; its required check name remains unchanged. Classification failure selects macOS and the full path.

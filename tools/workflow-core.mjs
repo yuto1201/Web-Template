@@ -2092,11 +2092,11 @@ function runGit(root, args) {
  * @param {string} root
  * @param {string} [ref]
  */
-export function loadProtectedExecutionPolicy(root, ref = workflowConfiguration.baseRef) {
-  if (typeof ref !== "string" || (ref.startsWith("refs/") && !ref.startsWith("refs/heads/"))) {
-    throw new Error("Protected execution policy requires a protected branch ref.");
+export function loadProtectedExecutionPolicy(root, ref = protectedAuthorityRef) {
+  if (ref !== protectedAuthorityRef && ref !== `refs/heads/${protectedAuthorityRef}`) {
+    throw new Error("Protected execution policy requires protected main; candidate-configured refs are not trusted.");
   }
-  const branchRef = ref.startsWith("refs/heads/") ? ref : `refs/heads/${ref}`;
+  const branchRef = `refs/heads/${protectedAuthorityRef}`;
   const source = runGit(root, ["show", `${branchRef}:config/execution.json`]);
   return parseProtectedExecutionPolicy(JSON.parse(source));
 }
@@ -2120,7 +2120,7 @@ export async function prepareReviewArtifacts(root, value) {
   const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
   validateBranchForSurface(currentBranch, evidence.issue, evidence.executionSurface, protectedExecutionPolicy);
   const currentHeadSha = runGit(root, ["rev-parse", "HEAD"]).trim();
-  const baseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
+  const baseSha = runGit(root, ["merge-base", `refs/heads/${protectedAuthorityRef}`, currentHeadSha]).trim();
   shaSchema.parse(currentHeadSha);
   shaSchema.parse(baseSha);
   if (runGit(root, ["status", "--porcelain=v1", "--untracked-files=no"]).trim()) {
@@ -2228,7 +2228,7 @@ export async function loadAuthoritativeGateInput(root, issue) {
   validateBranchForSurface(currentBranch, issue, validatedPacket.executionSurface, loadProtectedExecutionPolicy(root));
   const reviews = await Promise.all(validatedPacket.requiredReviewerFamilies.map((family) =>
     readArtifactJson(root, `${headRoot}/reviews/${family}.json`)));
-  const authoritativeBaseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
+  const authoritativeBaseSha = runGit(root, ["merge-base", `refs/heads/${protectedAuthorityRef}`, currentHeadSha]).trim();
   if (validatedPacket.baseSha !== authoritativeBaseSha) throw new Error("Review packet base SHA does not match the authoritative base ref.");
 
   const verifyDigest = digestValue(verification);
