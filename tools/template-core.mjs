@@ -5,28 +5,28 @@ import path from "node:path";
 
 export const providerPlaceholders = Object.freeze({
   githubUserId: 1,
-  githubNodeId: "REPLACEWITHCODEX",
+  githubNodeId: "REPLACEWITHOPERATOR",
   githubRepositoryId: 1,
-  githubRepositoryNodeId: "REPLACEWITHCODEX_REPOSITORY",
-  supabaseOrganizationName: "REPLACE WITH CODEX",
-  supabaseOrganizationId: "replacewithcodex0000",
-  vercelTeamName: "REPLACE WITH CODEX",
-  vercelTeamSlug: "replace-with-codex",
-  vercelScope: "team_REPLACEWITHCODEX",
-  vercelProjectId: "prj_REPLACEWITHCODEX",
+  githubRepositoryNodeId: "REPLACEWITHOPERATOR_REPOSITORY",
+  supabaseOrganizationName: "REPLACE WITH OPERATOR",
+  supabaseOrganizationId: "replacewithoperator0",
+  vercelTeamName: "REPLACE WITH OPERATOR",
+  vercelTeamSlug: "replace-with-operator",
+  vercelScope: "team_REPLACEWITHOPERATOR",
+  vercelProjectId: "prj_REPLACEWITHOPERATOR",
   cloudflareAccountId: "00000000000000000000000000000000",
-  cloudflareAccountName: "REPLACE WITH CODEX",
+  cloudflareAccountName: "REPLACE WITH OPERATOR",
   cloudflareLoginEmailHint: "not configured",
   cloudflareLoginEmailSha256: "0".repeat(64),
-  cloudflareRequiredRole: "REPLACE WITH CODEX",
+  cloudflareRequiredRole: "REPLACE WITH OPERATOR",
   cloudflareZoneId: "11111111111111111111111111111111",
-  linearWorkspaceName: "REPLACE WITH CODEX",
-  linearWorkspaceSlug: "replace-with-codex",
-  linearWorkspaceUrl: "https://linear.app/replace-with-codex",
-  linearUserName: "REPLACE WITH CODEX",
+  linearWorkspaceName: "REPLACE WITH OPERATOR",
+  linearWorkspaceSlug: "replace-with-operator",
+  linearWorkspaceUrl: "https://linear.app/replace-with-operator",
+  linearUserName: "REPLACE WITH OPERATOR",
   linearUserEmailHint: "not configured",
   linearUserEmailSha256: "0".repeat(64),
-  linearRequiredRole: "REPLACE WITH CODEX",
+  linearRequiredRole: "REPLACE WITH OPERATOR",
   linearTeamKey: "TBD",
 });
 
@@ -92,6 +92,13 @@ function nullablePositiveInteger(value, label) {
 function rejectPartialAuthority(values, label) {
   const configured = values.filter((value) => value !== null).length;
   assert(configured === 0 || configured === values.length, `${label} contains partial authority; provide every field or null placeholders.`);
+}
+
+/** @param {unknown[]} accountValues @param {unknown[]} targetValues @param {string} label */
+function rejectPartialServiceGroup(accountValues, targetValues, label) {
+  const accountActive = accountValues.every((value) => value !== null);
+  const targetActive = targetValues.every((value) => value !== null);
+  assert(accountActive === targetActive, `${label} service group contains partial authority; account and target must both be active or both use inactive placeholders.`);
 }
 
 /** @param {unknown} value @param {string} label */
@@ -257,6 +264,18 @@ export function normalizeInitializationConfig(value) {
   rejectPartialAuthority(linearStableIdentity, "Linear stable identity");
   assert(linearStableIdentity.every((item) => item === null) || linearReadableIdentity.every((item) => item !== null), "Linear identity contains partial authority.");
 
+  rejectPartialServiceGroup([githubUserId, githubNodeId], [githubRepositoryId, githubRepositoryNodeId], "GitHub");
+  rejectPartialServiceGroup([supabaseOrganizationName, supabaseOrganizationId], [supabaseProjectRef], "Supabase");
+  rejectPartialServiceGroup([vercelTeamName, vercelTeamSlug, vercelTeamId, vercelRequiredPlan], [vercelProjectId], "Vercel");
+  rejectPartialServiceGroup([
+    cloudflareAccountId,
+    cloudflareAccountName,
+    cloudflareLoginEmailHint,
+    cloudflareLoginEmailSha256,
+    cloudflareRequiredRole,
+    cloudflareAllowedZonePlans,
+  ], [cloudflareZoneId], "Cloudflare");
+
   const project = {
     schemaVersion: 2,
     appName,
@@ -362,6 +381,8 @@ export function projectTokens(project) {
     githubNodeId: project.accounts.github.nodeId,
     githubRepositoryId: String(project.resourceTargets.github.repositoryId),
     githubRepositoryNodeId: project.resourceTargets.github.repositoryNodeId,
+    githubDisplayName: project.observations.github.displayName,
+    githubCreatedAt: project.observations.github.createdAt,
     githubRepository: project.resourceTargets.github.repository,
     githubOwner: project.resourceTargets.github.owner,
     appName: project.appName,

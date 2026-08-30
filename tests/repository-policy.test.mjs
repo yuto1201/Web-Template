@@ -211,12 +211,41 @@ describe("repository policy", () => {
     ]));
 
     expect(operatorParityErrors({
-      claudeSettings: { $schema: "https://json.schemastore.org/claude-code-settings.json" },
+      claudeSettings: {
+        $schema: "https://json.schemastore.org/claude-code-settings.json",
+        permissions: { deny: ["Read(./.env)", "Read(./.env.*)"] },
+      },
       generatorSource: "Claude has the same account-bound authority as Codex.",
       generatedAssets: new Map([
         ["CLAUDE.md", "Claude has the same account-bound authority as Codex."],
       ]),
     })).toEqual([]);
+  });
+
+  it("allows only reviewed actor-neutral secret-path denies and scans every generated wrapper", () => {
+    const equality = "Claude acting in implementer and external-operator roles has the same account-bound authority as Codex.";
+    expect(operatorParityErrors({
+      claudeSettings: {
+        $schema: "https://json.schemastore.org/claude-code-settings.json",
+        permissions: { deny: ["Read(./.env)", "Read(./.env.*)"] },
+      },
+      generatorSource: equality,
+      generatedAssets: new Map([
+        ["CLAUDE.md", equality],
+        [".codex/agents/supabase-auditor.toml", "Remote evidence must be delegated to Codex."],
+      ]),
+    })).toEqual(expect.arrayContaining([
+      expect.stringMatching(/supabase-auditor.*actor-specific/iu),
+    ]));
+
+    expect(operatorParityErrors({
+      claudeSettings: {
+        $schema: "https://json.schemastore.org/claude-code-settings.json",
+        permissions: { deny: ["Read(./.env)", "Bash"] },
+      },
+      generatorSource: equality,
+      generatedAssets: new Map([["CLAUDE.md", equality]]),
+    })).toEqual(expect.arrayContaining([expect.stringMatching(/deny rules/iu)]));
   });
 
   it.each([

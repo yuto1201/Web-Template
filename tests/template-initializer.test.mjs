@@ -257,11 +257,11 @@ describe("template initialization", () => {
       accounts: {
         github: { login: "target-owner" },
         linear: { workspaceId: null, userId: null },
-        vercel: { teamId: "team_REPLACEWITHCODEX" },
+        vercel: { teamId: "team_REPLACEWITHOPERATOR" },
       },
       resourceTargets: {
         github: { owner: "target-owner", repository: "clean-room-app" },
-        vercel: { projectId: "prj_REPLACEWITHCODEX" },
+        vercel: { projectId: "prj_REPLACEWITHOPERATOR" },
         cloudflare: { domains: ["clean-room-app.example.invalid"] },
       },
     });
@@ -299,6 +299,36 @@ describe("template initialization", () => {
     const partial = configuration();
     partial.accounts.vercel.teamId = "team_PARTIAL";
     expect(() => normalizeInitializationConfig(partial)).toThrow(/partial authority/u);
+  });
+
+  it("rejects cross-group provider initialization when only the account or target is active", () => {
+    const accountOnly = configuration();
+    accountOnly.accounts.vercel = {
+      teamName: "Target Team",
+      teamSlug: "target-team",
+      teamId: "team_TARGET",
+      requiredPlan: "Hobby",
+    };
+    expect(() => normalizeInitializationConfig(accountOnly)).toThrow(/Vercel service group|partial authority/iu);
+
+    const targetOnly = configuration();
+    targetOnly.resourceTargets.vercel.projectId = "prj_TARGET";
+    expect(() => normalizeInitializationConfig(targetOnly)).toThrow(/Vercel service group|partial authority/iu);
+
+    const supabaseAccountOnly = configuration();
+    supabaseAccountOnly.accounts.supabase = {
+      organizationName: "Target Org",
+      organizationId: "targetsupabaseorg001",
+    };
+    expect(() => normalizeInitializationConfig(supabaseAccountOnly)).toThrow(/Supabase service group|partial authority/iu);
+  });
+
+  it("tracks string-valued warning observations as source identity tokens", () => {
+    const project = sourceProject();
+    expect(projectTokens(project)).toMatchObject({
+      githubDisplayName: project.observations.github.displayName,
+      githubCreatedAt: project.observations.github.createdAt,
+    });
   });
 
   it("allows complete Linear metadata with an explicitly incomplete stable identity", () => {

@@ -5,7 +5,7 @@ import { providerPlaceholders, readTemplateState } from "./template-core.mjs";
 
 /** @param {string} value */
 function configured(value) {
-  return typeof value === "string" && value.length > 0 && !value.includes("REPLACEWITHCODEX") && value !== "REPLACE WITH CODEX";
+  return typeof value === "string" && value.length > 0 && !value.includes("REPLACEWITHOPERATOR") && value !== "REPLACE WITH OPERATOR";
 }
 
 /** @param {unknown} value @returns {unknown} */
@@ -38,7 +38,7 @@ try {
   const providers = {
     github: {
       status: configured(ownership.accounts.github.login) && configured(ownership.resourceTargets.github.owner) && configured(ownership.resourceTargets.github.repository) ? "identity-recorded" : "needs-codex",
-      reason: "Repository existence and permissions require a live Codex check.",
+      reason: "Repository existence and permissions require a live external-operator check.",
     },
     supabase: {
       status: configured(ownership.accounts.supabase.organizationName) && Boolean(ownership.resourceTargets.supabase.projectRef) ? "configured" : "needs-codex",

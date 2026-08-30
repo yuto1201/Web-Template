@@ -404,6 +404,9 @@ export function authorizeServiceUse(authorityValue, inputValue) {
     throw new Error("user-directed purpose is reserved for explicit-user-purpose-only services.");
   }
   if (mode === "explicit-user-purpose-only") {
+    if (input.purposeCode !== "user-directed") {
+      throw new Error("Linear use requires purposeCode user-directed.");
+    }
     if (!input.explicitUserPurpose || input.explicitUserPurpose.trim().length === 0 || /[\r\n]/u.test(input.explicitUserPurpose)) {
       throw new Error("Linear use requires an explicit user purpose on one line.");
     }
@@ -412,6 +415,7 @@ export function authorizeServiceUse(authorityValue, inputValue) {
     if (!account.workspaceId || !account.userId || !target.teamId) {
       throw new Error("Linear use requires recorded stable IDs and a stable target ID.");
     }
+    throw new Error("Unsupported Linear operation: no Linear operation is registered; a later Issue must define a strict user-directed operation.");
   }
   return { ...references(authority, input.service), mode };
 }

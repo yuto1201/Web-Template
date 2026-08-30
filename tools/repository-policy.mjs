@@ -172,20 +172,23 @@ export function operatorParityErrors({
   const hooks = claudeSettings.hooks && typeof claudeSettings.hooks === "object"
     ? /** @type {Record<string, unknown>} */ (claudeSettings.hooks)
     : {};
-  if (Array.isArray(permissions.deny) && permissions.deny.length > 0) {
+  const allowedSecretDenies = ["Read(./.env)", "Read(./.env.*)"];
+  if (
+    Array.isArray(permissions.deny) &&
+    (permissions.deny.length !== allowedSecretDenies.length || permissions.deny.some((value, index) => value !== allowedSecretDenies[index]))
+  ) {
     errors.push("Claude project settings must not contain model-specific deny rules.");
   }
   if (Array.isArray(hooks.PreToolUse) && hooks.PreToolUse.length > 0) {
     errors.push("Claude project settings must not contain a PreToolUse policy hook.");
   }
 
-  const generatedClaude = generatedAssets.get("CLAUDE.md");
   /** @type {Map<string, string>} */
   const sources = new Map([
     [".claude/settings.json", JSON.stringify(claudeSettings)],
     ["tools/generate-agent-wrappers.mjs", generatorSource],
   ]);
-  if (typeof generatedClaude === "string") sources.set("CLAUDE.md", generatedClaude);
+  for (const [relativePath, content] of generatedAssets) sources.set(relativePath, content);
   for (const [relativePath, content] of canonicalSurfaces) sources.set(relativePath, content);
   for (const [relativePath, content] of sources) {
     const asymmetry = detectActorAsymmetry(content);

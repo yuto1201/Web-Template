@@ -211,23 +211,34 @@ describe("canonical account authority", () => {
       purposeCode: "issue-contract",
       explicitUserPurpose: null,
     };
-    expect(() => authorizeServiceUse(authority, input)).toThrow(/explicit user purpose/u);
+    expect(() => authorizeServiceUse(authority, input)).toThrow(/user-directed|explicit user purpose/u);
 
-    expect(() => authorizeServiceUse(authority, { ...input, explicitUserPurpose: "Read the Issue contract" })).toThrow(/stable.*id|identity|target/i);
+    expect(() => authorizeServiceUse(authority, {
+      ...input,
+      purposeCode: "user-directed",
+      explicitUserPurpose: "Read the Issue contract",
+    })).toThrow(/stable.*id|identity|target/i);
   });
 
-  it("authorizes Linear only after explicit purpose and all stable IDs are recorded", () => {
+  it("keeps Linear denied for repository purposes and requires user-directed purpose even after stable IDs are recorded", () => {
     const configured = copy(canonicalAuthority);
     configured.accounts.linear.workspaceId = "workspace_123";
     configured.accounts.linear.userId = "user_123";
     configured.resourceTargets.linear.teamId = "team_123";
     const authority = parseAuthority(configured);
 
-    expect(authorizeServiceUse(authority, {
+    expect(() => authorizeServiceUse(authority, {
       service: "linear",
       operation: "linear.read_issue",
       purposeCode: "issue-contract",
       explicitUserPurpose: "Read the Issue contract",
-    })).toMatchObject({ mode: "explicit-user-purpose-only" });
+    })).toThrow(/user-directed|unsupported Linear operation/iu);
+
+    expect(() => authorizeServiceUse(authority, {
+      service: "linear",
+      operation: "linear.read_issue",
+      purposeCode: "user-directed",
+      explicitUserPurpose: "Read the user-requested Linear issue",
+    })).toThrow(/unsupported Linear operation/iu);
   });
 });

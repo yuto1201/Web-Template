@@ -25,6 +25,7 @@ describe("Claude and Codex operator parity", () => {
       await readFile(path.join(root, ".claude", "settings.json"), "utf8"),
     );
 
+    expect(settings.permissions?.deny).toEqual(["Read(./.env)", "Read(./.env.*)"]);
     expect(settings.permissions?.deny ?? []).not.toContain("Bash");
     expect(JSON.stringify(settings)).not.toContain("guard-claude-tool.mjs");
     expect(detectActorAsymmetry(JSON.stringify(settings))).toBeNull();

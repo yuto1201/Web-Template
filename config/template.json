@@ -113,7 +113,7 @@
     },
     "observations": {
       "github": {
-        "displayName": " Yuuuuuuuto",
+        "displayName": "Yuuuuuuuto",
         "createdAt": "2019-05-14T06:31:57Z",
         "publicRepositories": 9,
         "observedAt": "2026-08-29T00:00:00+09:00"
@@ -287,6 +287,17 @@
       "config/template.json": 1,
       "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 2,
       "tests/authority-core.test.mjs": 1
+    },
+    "githubDisplayName": {
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 1
+    },
+    "githubCreatedAt": {
+      "config/ownership.json": 1,
+      "config/template.json": 1,
+      "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 1,
+      "tests/template-initializer.test.mjs": 1
     },
     "githubRepository": {
       "README.md": 1,
