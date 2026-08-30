@@ -65,7 +65,7 @@ Authentication state is machine-specific. Verify each surface independently on t
 - GitHub, Supabase, Vercel, and Cloudflare are `repository-active` within frozen Issue purpose. Linear remains denied until a user-stated purpose and non-null protected-main stable workspace/user/team IDs exist.
 - The committed `.codex/` and `.claude/` project files are repository policy. Home-directory `.codex`, `.claude`, `.config/gh`, Supabase, Vercel, and Cloudflare credential directories are not project files and must not be copied from the old workstation.
 
-Before the first authenticated use from the Mac, the active operator must recheck the live identity, exact target, Issue purpose, service mode, and intended operation as required by [the authority runbook](authority.md). High-risk writes additionally require exact-Head review and the preflight → one-time claim → result/finalize receipt sequence.
+Before the first authenticated use from the Mac, the active operator must recheck the live identity, exact target, Issue purpose, service mode, and intended operation as required by [the authority runbook](authority.md). Every repository-approved authenticated operation uses the request → preflight → one-time claim → result/finalize receipt flow. High-risk writes additionally rerun the authoritative exact-Head gate.
 
 ## 5. Complete the migration gate
 

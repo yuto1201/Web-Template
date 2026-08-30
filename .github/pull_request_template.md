@@ -16,8 +16,9 @@ Closes #
 
 ## Opposite-model review
 
+- Primary: `codex` or `claude`
+- Reviewer: the configured opposite model
 - Primary model family: `gpt` or `claude`
-- Primary operator label: `codex` or `claude`
 - Reviewer model family: the opposite model family
 - Reviewed SHA: `current-head-sha`
 - Verdict: pending
@@ -26,9 +27,17 @@ Closes #
 ## External changes
 
 - None, or list the exact service, declared purpose, environment, operation, and target.
-- External operator label / execution role: `codex|claude` / `implementer|external-operator`
-- Verified account reference / target reference: protected-main authority references only
-- Preflight receipt / mutation claim / finalized result: redacted IDs or digests only
+- Operator label: `codex` or `claude`
+- Execution role: `implementer` or `external-operator`
+- Model family: `gpt` or `claude`
+- Account ref: protected-main authority reference
+- Service mode: `repository-active` or `explicit-user-purpose-only`
+- Exact target ref: protected-main authority reference
+- Redacted receipt ID: receipt identifier only; no provider credentials
+- Authority digest: `sha256:...`
+- Issue contract digest: `sha256:...`
+- Request digest: `sha256:...`
+- Mutation digest: `sha256:...`
 - Exact-Head gate SHA: `current-head-sha`, when required
 - Destructive or rollback scope: none, or the exact reviewed recovery boundary
 

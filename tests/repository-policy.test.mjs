@@ -8,8 +8,57 @@ import {
   operatorParityErrors,
   validateRepository,
 } from "../tools/repository-policy.mjs";
+import { evaluateGitHubReviewGate } from "../tools/github-review-gate.mjs";
 
 describe("repository policy", () => {
+  it("keeps the PR template compatible with the exact-Head review body parser", async () => {
+    const template = await readFile(path.resolve(".github/pull_request_template.md"), "utf8");
+    const workflow = JSON.parse(await readFile(path.resolve("config/workflow.json"), "utf8"));
+    const headSha = "a".repeat(40);
+    const completedBody = template
+      .replace("Closes #", "Closes #33")
+      .replace(/^- Primary:.*$/mu, "- Primary: codex")
+      .replace(/^- Reviewer:.*$/mu, "- Reviewer: claude")
+      .replace(/^- Reviewed SHA:.*$/mu, `- Reviewed SHA: \`${headSha}\``)
+      .replace(/^- Verdict:.*$/mu, "- Verdict: approved")
+      .replace(/^- Contracts:.*$/mu, "- Contracts: change-evaluator");
+
+    expect(() => evaluateGitHubReviewGate({
+      event: {
+        pull_request: {
+          body: completedBody,
+          head: { sha: headSha },
+          user: { login: "yuto1201", id: 50611866, type: "User" },
+        },
+      },
+      changedPaths: ["README.md"],
+      diff: "",
+      workflow,
+    })).not.toThrow();
+  });
+
+  it("records external-operation evidence axes as distinct PR fields", async () => {
+    const template = await readFile(path.resolve(".github/pull_request_template.md"), "utf8");
+    for (const label of [
+      "Operator label",
+      "Execution role",
+      "Model family",
+      "Account ref",
+      "Service mode",
+      "Exact target ref",
+      "Redacted receipt ID",
+    ]) {
+      expect(template, `missing separate ${label} field`).toMatch(new RegExp(`^- ${label}:`, "mu"));
+    }
+    expect(template).not.toMatch(/Operator label\s*\/\s*Execution role/iu);
+  });
+
+  it("requires receipts for every approved authenticated operation on a new Mac", async () => {
+    const onboarding = await readFile(path.resolve("docs/onboarding-macos.md"), "utf8");
+    expect(onboarding).toMatch(/Every repository-approved authenticated operation[^.]*request[^.]*preflight[^.]*claim[^.]*result/iu);
+    expect(onboarding).toMatch(/High-risk writes[^.]*additionally[^.]*exact-Head/iu);
+  });
+
   it("migrates normative policy to account-bound operator parity", async () => {
     const normativePaths = [
       "AGENTS.md",
