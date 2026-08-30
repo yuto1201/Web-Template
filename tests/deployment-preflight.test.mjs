@@ -7,6 +7,9 @@ import {
   DeploymentCheckpointError,
   validateDeploymentPreflight,
 } from "../tools/deployment-core.mjs";
+import { readAuthority } from "../tools/authority-core.mjs";
+
+const canonicalAuthority = readAuthority();
 
 const requiredKeys = [
   "APP_ORIGIN",
@@ -33,8 +36,8 @@ async function fixture({ link = true } = {}) {
   if (link) {
     await mkdir(path.join(root, ".vercel"), { recursive: true });
     await writeFile(path.join(root, ".vercel", "project.json"), JSON.stringify({
-      orgId: canonicalVercelOwnership.scope,
-      projectId: canonicalVercelOwnership.projectId,
+      orgId: canonicalAuthority.accounts.vercel.teamId,
+      projectId: canonicalAuthority.resourceTargets.vercel.projectId,
       settings: { framework: "nextjs" },
     }), "utf8");
   }
@@ -42,6 +45,12 @@ async function fixture({ link = true } = {}) {
 }
 
 describe("Vercel deployment preflight", () => {
+  it("keeps the compatibility export aligned with canonical authority paths", () => {
+    expect(canonicalVercelOwnership).toEqual({
+      scope: canonicalAuthority.accounts.vercel.teamId,
+      projectId: canonicalAuthority.resourceTargets.vercel.projectId,
+    });
+  });
   it("accepts exact linkage and names-only environment coverage", async () => {
     const root = await fixture();
     await expect(validateDeploymentPreflight(snapshot(), root)).resolves.toMatchObject({

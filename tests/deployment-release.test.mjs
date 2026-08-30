@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  canonicalVercelOwnership,
   validateReleaseEvidence,
   validateRemoteSchemaOrder,
 } from "../tools/deployment-core.mjs";
+import { readAuthority } from "../tools/authority-core.mjs";
+
+const canonicalAuthority = readAuthority();
 
 const commitSha = "a".repeat(40);
 const verificationTime = new Date("2026-08-21T02:10:00+09:00");
@@ -13,8 +15,8 @@ function evidence(overrides = {}) {
     schemaVersion: 1,
     source: "vercel-api",
     environment: "production",
-    teamId: canonicalVercelOwnership.scope,
-    projectId: canonicalVercelOwnership.projectId,
+    teamId: canonicalAuthority.accounts.vercel.teamId,
+    projectId: canonicalAuthority.resourceTargets.vercel.projectId,
     deploymentId: "dpl_WEBTEMPLATE123",
     url: "https://web-template-yuto16.vercel.app",
     status: "READY",
@@ -33,8 +35,8 @@ describe("Vercel release evidence", () => {
     expect(validateReleaseEvidence(evidence(), commitSha, verificationTime)).toMatchObject({
       ok: true,
       commitSha,
-      teamId: canonicalVercelOwnership.scope,
-      projectId: canonicalVercelOwnership.projectId,
+      teamId: canonicalAuthority.accounts.vercel.teamId,
+      projectId: canonicalAuthority.resourceTargets.vercel.projectId,
     });
   });
 

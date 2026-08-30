@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   discoverOccurrences,
   initializeTemplate,
+  normalizeInitializationConfig,
   projectTokens,
   readTemplateState,
 } from "../tools/template-core.mjs";
@@ -19,9 +20,9 @@ afterEach(async () => {
 
 function sourceProject() {
   return {
+    schemaVersion: 2,
     appName: "Starter Source",
     slug: "starter-source",
-    github: { owner: "source-owner", repository: "Starter-Source" },
     localPorts: {
       app: 4510,
       supabaseBase: 45320,
@@ -38,14 +39,55 @@ function sourceProject() {
       loopback: "http://127.0.0.1:4510",
       production: "https://starter-source.example.test",
     },
-    ownership: {
-      supabase: { organizationName: "Source Org", projectRef: null },
-      vercel: { scope: "team_SOURCE1", projectId: "prj_SOURCE1" },
+    authorization: {
+      operatorLabels: ["codex", "claude"],
+      externalOperatorRoles: ["implementer", "external-operator"],
+      allowAutomaticAccountSwitch: false,
+    },
+    accounts: {
+      github: { login: "source-owner", userId: 123456, nodeId: "SOURCE_GITHUB_NODE" },
+      supabase: { organizationName: "Source Org", organizationId: "sourcesupabaseorg001" },
+      vercel: { teamName: "Source Team", teamSlug: "source-team", teamId: "team_SOURCE1", requiredPlan: "Hobby" },
       cloudflare: {
-        accountId: "a".repeat(32),
+        accountId: ["7ea8e713d76506f9e303f", "58624829aa5"].join(""),
         accountName: "Source Cloudflare",
-        zoneId: "b".repeat(32),
-        zoneName: "example.test",
+        loginEmailHint: "s***@example.test",
+        loginEmailSha256: "c".repeat(64),
+        requiredRole: "Super Administrator",
+        allowedZonePlans: ["Free"],
+      },
+      linear: {
+        workspaceName: "Source Workspace",
+        workspaceSlug: "source-workspace",
+        workspaceUrl: "https://linear.app/source-workspace",
+        workspaceId: "source-workspace-id",
+        userName: "Source User",
+        userEmailHint: "u***@example.test",
+        userEmailSha256: "d".repeat(64),
+        userId: "source-user-id",
+        requiredRole: "Admin",
+      },
+    },
+    servicePolicies: {
+      github: { mode: "repository-active" },
+      supabase: { mode: "repository-active" },
+      vercel: { mode: "repository-active" },
+      cloudflare: { mode: "repository-active" },
+      linear: { mode: "explicit-user-purpose-only" },
+    },
+    resourceTargets: {
+      github: { owner: "source-owner", repository: "Starter-Source", repositoryId: 654321, repositoryNodeId: "SOURCE_REPOSITORY_NODE" },
+      supabase: { projectRef: null },
+      vercel: { projectId: "prj_SOURCE1" },
+      cloudflare: { zoneId: "b".repeat(32), domains: ["starter-source.example.test"] },
+      linear: { teamKey: "SRC", teamId: "source-team-id" },
+    },
+    observations: {
+      github: {
+        displayName: "Source Display Name",
+        createdAt: "2019-05-14T06:31:57Z",
+        publicRepositories: 9,
+        observedAt: "2026-08-30T00:00:00+09:00",
       },
     },
   };
@@ -59,24 +101,20 @@ async function sourceFixture() {
   await writeFile(path.join(root, "package.json"), `${JSON.stringify({ name: project.slug }, null, 2)}\n`, "utf8");
   await writeFile(path.join(root, "README.md"), `# ${project.appName}\n`, "utf8");
   await writeFile(path.join(root, "config", "ownership.json"), `${JSON.stringify({
-    schemaVersion: 1,
-    github: project.github,
-    supabase: project.ownership.supabase,
-    vercel: project.ownership.vercel,
-    cloudflare: {
-      accountId: project.ownership.cloudflare.accountId,
-      accountName: project.ownership.cloudflare.accountName,
-      zoneId: project.ownership.cloudflare.zoneId,
-      domains: [new URL(project.publicUrls.production).hostname],
-    },
+    schemaVersion: project.schemaVersion,
+    authorization: project.authorization,
+    accounts: project.accounts,
+    servicePolicies: project.servicePolicies,
+    resourceTargets: project.resourceTargets,
+    observations: project.observations,
   }, null, 2)}\n`, "utf8");
   await writeFile(path.join(root, "config", "domain.json"), `${JSON.stringify({
     schemaVersion: 1,
     hostname: new URL(project.publicUrls.production).hostname,
-    zoneName: project.ownership.cloudflare.zoneName,
+    zoneName: "example.test",
     recordName: project.slug,
   }, null, 2)}\n`, "utf8");
-  const initialState = { schemaVersion: 1, status: "template-source", project, occurrences: {} };
+  const initialState = { schemaVersion: 2, status: "template-source", project, occurrences: {} };
   await writeFile(path.join(root, "config", "template.json"), `${JSON.stringify(initialState, null, 2)}\n`, "utf8");
   initialState.occurrences = await discoverOccurrences(root, projectTokens(project));
   await writeFile(path.join(root, "config", "template.json"), `${JSON.stringify(initialState, null, 2)}\n`, "utf8");
@@ -99,16 +137,48 @@ async function initializedVerifierFixture() {
 
 function configuration() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     appName: "Clean Room App",
     slug: "clean-room-app",
-    github: { owner: "example-owner", repository: "clean-room-app" },
     localPorts: { app: 4310, supabaseBase: 56320 },
     publicUrls: { production: "https://clean-room-app.example.invalid" },
-    ownership: {
-      supabase: { organizationName: null, projectRef: null },
-      vercel: { scope: null, projectId: null },
-      cloudflare: { accountId: null, accountName: null, zoneId: null, zoneName: "example.invalid" },
+    accounts: {
+      github: { login: "target-owner", userId: null, nodeId: null },
+      supabase: { organizationName: null, organizationId: null },
+      vercel: { teamName: null, teamSlug: null, teamId: null, requiredPlan: null },
+      cloudflare: {
+        accountId: null,
+        accountName: null,
+        loginEmailHint: null,
+        loginEmailSha256: null,
+        requiredRole: null,
+        allowedZonePlans: null,
+      },
+      linear: {
+        workspaceName: null,
+        workspaceSlug: null,
+        workspaceUrl: null,
+        workspaceId: null,
+        userName: null,
+        userEmailHint: null,
+        userEmailSha256: null,
+        userId: null,
+        requiredRole: null,
+      },
+    },
+    servicePolicies: {
+      github: { mode: "repository-active" },
+      supabase: { mode: "repository-active" },
+      vercel: { mode: "repository-active" },
+      cloudflare: { mode: "repository-active" },
+      linear: { mode: "explicit-user-purpose-only" },
+    },
+    resourceTargets: {
+      github: { owner: "target-owner", repository: "clean-room-app", repositoryId: null, repositoryNodeId: null },
+      supabase: { projectRef: null },
+      vercel: { projectId: null },
+      cloudflare: { zoneId: null, domains: ["clean-room-app.example.invalid"] },
+      linear: { teamKey: null, teamId: null },
     },
   };
 }
@@ -117,8 +187,8 @@ describe("template initialization", () => {
   it("ignores Git administrative files while retaining ordinary project files in source scans", async () => {
     const root = await sourceFixture();
     const project = sourceProject();
-    await writeFile(path.join(root, ".git"), `gitdir: /workspace/${project.github.repository}/.git/worktrees/fixture\n`, "utf8");
-    await writeFile(path.join(root, "ordinary.txt"), `${project.github.repository}\n`, "utf8");
+    await writeFile(path.join(root, ".git"), `gitdir: /workspace/${project.resourceTargets.github.repository}/.git/worktrees/fixture\n`, "utf8");
+    await writeFile(path.join(root, "ordinary.txt"), `${project.resourceTargets.github.repository}\n`, "utf8");
 
     const occurrences = await discoverOccurrences(root, projectTokens(project));
 
@@ -154,11 +224,21 @@ describe("template initialization", () => {
     expect(Object.values(remaining).every((files) => Object.keys(files).length === 0)).toBe(true);
     await expect(initializeTemplate(target, configuration())).resolves.toEqual({ ok: true, status: "idempotent", changedFiles: [] });
     expect(JSON.parse(await readFile(path.join(target, "package.json"), "utf8")).name).toBe("clean-room-app");
-    expect(JSON.parse(await readFile(path.join(target, "config", "ownership.json"), "utf8"))).toMatchObject({
-      github: { owner: "example-owner", repository: "clean-room-app" },
-      vercel: { scope: "team_REPLACEWITHCODEX", projectId: "prj_REPLACEWITHCODEX" },
-      cloudflare: { domains: ["clean-room-app.example.invalid"] },
+    const initializedAuthority = JSON.parse(await readFile(path.join(target, "config", "ownership.json"), "utf8"));
+    expect(initializedAuthority).toMatchObject({
+      schemaVersion: 2,
+      accounts: {
+        github: { login: "target-owner" },
+        linear: { workspaceId: null, userId: null },
+        vercel: { teamId: "team_REPLACEWITHCODEX" },
+      },
+      resourceTargets: {
+        github: { owner: "target-owner", repository: "clean-room-app" },
+        vercel: { projectId: "prj_REPLACEWITHCODEX" },
+        cloudflare: { domains: ["clean-room-app.example.invalid"] },
+      },
     });
+    expect(JSON.stringify(initializedAuthority)).not.toContain(["7ea8e713d76506f9e303f", "58624829aa5"].join(""));
     await writeFile(path.join(target, "package.json"), `${JSON.stringify({ name: "edited-after-init" }, null, 2)}\n`, "utf8");
     await expect(initializeTemplate(target, configuration())).rejects.toThrow(/managed file changed/u);
   });
@@ -180,11 +260,17 @@ describe("template initialization", () => {
     wrongHost.publicUrls.production = "https://different.example.invalid";
     await expect(initializeTemplate(target, wrongHost)).rejects.toThrow(/slug\.cloudflareZoneName/u);
     const unsafeOrganization = /** @type {any} */ (configuration());
-    unsafeOrganization.ownership.supabase.organizationName = "unsafe\norganization";
+    unsafeOrganization.accounts.supabase.organizationName = "unsafe\norganization";
     await expect(initializeTemplate(target, unsafeOrganization)).rejects.toThrow(/organizationName is invalid/u);
     const unsafeCloudflareName = /** @type {any} */ (configuration());
-    unsafeCloudflareName.ownership.cloudflare.accountName = 'unsafe "account"';
+    unsafeCloudflareName.accounts.cloudflare.accountName = 'unsafe "account"';
     await expect(initializeTemplate(target, unsafeCloudflareName)).rejects.toThrow(/accountName is invalid/u);
+  });
+
+  it("rejects a partially specified provider authority group", () => {
+    const partial = configuration();
+    partial.accounts.vercel.teamId = "team_PARTIAL";
+    expect(() => normalizeInitializationConfig(partial)).toThrow(/partial authority/u);
   });
 
   it("refuses a different configuration after successful initialization", async () => {

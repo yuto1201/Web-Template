@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseAuthority, readAuthority } from "./authority-core.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const defaultRoot = path.resolve(path.dirname(modulePath), "..");
@@ -101,32 +102,43 @@ export async function validateRepository(root = defaultRoot) {
     }
   }
 
-  const ownership = JSON.parse(await readFile(path.join(root, "config", "ownership.json"), "utf8"));
+  const ownership = readAuthority(root);
   const template = JSON.parse(await readFile(path.join(root, "config", "template.json"), "utf8"));
   const project = template.project ?? {};
-  if (!equal(ownership.github, project.github)) {
-    errors.push("config/ownership.json GitHub ownership does not match config/template.json.");
+  let templateAuthority;
+  try {
+    templateAuthority = parseAuthority({
+      schemaVersion: project.schemaVersion,
+      authorization: project.authorization,
+      accounts: project.accounts,
+      servicePolicies: project.servicePolicies,
+      resourceTargets: project.resourceTargets,
+      observations: project.observations,
+    });
+  } catch {
+    errors.push("config/template.json contains invalid authority configuration.");
   }
-  if (!equal(ownership.supabase, project.ownership?.supabase)) {
-    errors.push("config/ownership.json Supabase ownership does not match config/template.json.");
+  if (templateAuthority && !equal(ownership.authorization, templateAuthority.authorization)) {
+    errors.push("config/ownership.json authorization does not match config/template.json.");
   }
-  if (!equal(ownership.vercel, project.ownership?.vercel)) {
-    errors.push("config/ownership.json Vercel ownership does not match config/template.json.");
+  for (const service of ["github", "supabase", "vercel", "cloudflare", "linear"]) {
+    if (templateAuthority && !equal(ownership.accounts[service], templateAuthority.accounts[service])) {
+      errors.push(`config/ownership.json ${service} account does not match config/template.json.`);
+    }
+    if (templateAuthority && !equal(ownership.servicePolicies[service], templateAuthority.servicePolicies[service])) {
+      errors.push(`config/ownership.json ${service} service policy does not match config/template.json.`);
+    }
+    if (templateAuthority && !equal(ownership.resourceTargets[service], templateAuthority.resourceTargets[service])) {
+      errors.push(`config/ownership.json ${service} resource target does not match config/template.json.`);
+    }
   }
-  const expectedCloudflare = project.ownership?.cloudflare;
   let expectedHostname;
   try {
     expectedHostname = new URL(project.publicUrls?.production).hostname;
   } catch {
     errors.push("config/template.json has an invalid production URL.");
   }
-  if (
-    ownership.cloudflare?.accountId !== expectedCloudflare?.accountId ||
-    ownership.cloudflare?.accountName !== expectedCloudflare?.accountName ||
-    ownership.cloudflare?.zoneId !== expectedCloudflare?.zoneId ||
-    ownership.cloudflare?.domains?.length !== 1 ||
-    ownership.cloudflare.domains[0] !== expectedHostname
-  ) {
+  if (ownership.resourceTargets.cloudflare.domains.length !== 1 || ownership.resourceTargets.cloudflare.domains[0] !== expectedHostname) {
     errors.push("config/ownership.json Cloudflare ownership does not match config/template.json.");
   }
 

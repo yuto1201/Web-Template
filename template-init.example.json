@@ -1,11 +1,7 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "appName": "My App",
   "slug": "my-app",
-  "github": {
-    "owner": "your-github-user",
-    "repository": "my-app"
-  },
   "localPorts": {
     "app": 3100,
     "supabaseBase": 56320
@@ -13,20 +9,62 @@
   "publicUrls": {
     "production": "https://my-app.example.com"
   },
-  "ownership": {
+  "accounts": {
+    "github": {
+      "login": "your-github-user",
+      "userId": null,
+      "nodeId": null
+    },
     "supabase": {
       "organizationName": null,
-      "projectRef": null
+      "organizationId": null
     },
     "vercel": {
-      "scope": null,
-      "projectId": null
+      "teamName": null,
+      "teamSlug": null,
+      "teamId": null,
+      "requiredPlan": null
     },
     "cloudflare": {
       "accountId": null,
       "accountName": null,
-      "zoneId": null,
-      "zoneName": "example.com"
+      "loginEmailHint": null,
+      "loginEmailSha256": null,
+      "requiredRole": null,
+      "allowedZonePlans": null
+    },
+    "linear": {
+      "workspaceName": null,
+      "workspaceSlug": null,
+      "workspaceUrl": null,
+      "workspaceId": null,
+      "userName": null,
+      "userEmailHint": null,
+      "userEmailSha256": null,
+      "userId": null,
+      "requiredRole": null
     }
+  },
+  "servicePolicies": {
+    "github": { "mode": "repository-active" },
+    "supabase": { "mode": "repository-active" },
+    "vercel": { "mode": "repository-active" },
+    "cloudflare": { "mode": "repository-active" },
+    "linear": { "mode": "explicit-user-purpose-only" }
+  },
+  "resourceTargets": {
+    "github": {
+      "owner": "your-github-user",
+      "repository": "my-app",
+      "repositoryId": null,
+      "repositoryNodeId": null
+    },
+    "supabase": { "projectRef": null },
+    "vercel": { "projectId": null },
+    "cloudflare": {
+      "zoneId": null,
+      "domains": ["my-app.example.com"]
+    },
+    "linear": { "teamKey": null, "teamId": null }
   }
 }

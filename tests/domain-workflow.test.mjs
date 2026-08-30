@@ -10,8 +10,10 @@ import {
   verifyDnsChange,
   verifyDomainRelease,
 } from "../tools/domain-core.mjs";
+import { readAuthority } from "../tools/authority-core.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const canonicalAuthority = readAuthority(repositoryRoot);
 const workflowPath = path.join(repositoryRoot, "tools", "domain-workflow.mjs");
 const planTime = new Date("2026-08-21T07:31:00.000Z");
 const unrelatedRecords = [
@@ -26,9 +28,9 @@ function liveInput() {
     source: "codex-live-inspection",
     cloudflare: {
       observedAt: "2026-08-21T07:30:00.000Z",
-      accountId: "7ea8e713d76506f9e303f58624829aa5",
-      accountName: "Yuto Dev",
-      zoneId: "df938e9c196edf952ff26e95f02edf49",
+      accountId: canonicalAuthority.accounts.cloudflare.accountId,
+      accountName: canonicalAuthority.accounts.cloudflare.accountName,
+      zoneId: canonicalAuthority.resourceTargets.cloudflare.zoneId,
       zoneName: "yutodev.com",
       zoneStatus: "active",
       caaStatus: "absent",
@@ -38,8 +40,8 @@ function liveInput() {
     vercel: {
       source: "vercel-api",
       observedAt: "2026-08-21T07:30:30.000Z",
-      teamId: "team_ANEUn6gVL8dccPaY08wkvxFt",
-      projectId: "prj_KCauT0Bgq4PBZjrxuA1PO3J0Q3Q8",
+      teamId: canonicalAuthority.accounts.vercel.teamId,
+      projectId: canonicalAuthority.resourceTargets.vercel.projectId,
       hostname: "web-template.yutodev.com",
       ownershipVerified: true,
       configurationStatus: "pending",
