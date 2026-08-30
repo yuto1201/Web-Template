@@ -7,6 +7,16 @@ const familySchema = z.enum([...knownFamilies, "unknown"]);
 const riskSchema = z.enum(["normal", "high"]);
 const surfaceSchema = z.enum(["codex-local", "claude-local", "cursor-cloud"]);
 
+/** @param {string} family */
+export function operationModelFamily(family) {
+  return ({
+    openai: "gpt",
+    anthropic: "claude",
+    cursor: "cursor",
+    xai: "xai",
+  })[family] ?? null;
+}
+
 /** @param {string} left @param {string} right */
 function compareCodePoints(left, right) {
   const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);

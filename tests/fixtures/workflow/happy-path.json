@@ -28,6 +28,7 @@
           "issue": 42,
           "repository": "yuto1201/Web-Template",
           "prNumber": 77,
+          "baseBranch": "main",
           "headSha": "0000000000000000000000000000000000000000",
           "method": "squash"
         },

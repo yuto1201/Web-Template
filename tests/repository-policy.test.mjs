@@ -6,11 +6,23 @@ import {
   detectActorAsymmetry,
   hasCanonicalOperatorParityStatement,
   operatorParityErrors,
+  validateCursorHookPolicy,
   validateRepository,
 } from "../tools/repository-policy.mjs";
 import { evaluateGitHubReviewGate } from "../tools/github-review-gate.mjs";
 
 describe("repository policy", () => {
+  it("requires every supported Cursor hook to remain finite and fail closed", async () => {
+    const hooksConfig = JSON.parse(await readFile(path.resolve(".cursor/hooks.json"), "utf8"));
+    const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
+    expect(validateCursorHookPolicy({ hooksConfig, packageJson })).toEqual([]);
+
+    const weakened = structuredClone(hooksConfig);
+    weakened.hooks.beforeShellExecution[0].failClosed = false;
+    expect(validateCursorHookPolicy({ hooksConfig: weakened, packageJson })).toContain(
+      "Cursor hook beforeShellExecution must be a finite fail-closed project command.",
+    );
+  });
   it("keeps the PR template compatible with the exact-Head review body parser", async () => {
     const template = await readFile(path.resolve(".github/pull_request_template.md"), "utf8");
     const workflow = JSON.parse(await readFile(path.resolve("config/workflow.json"), "utf8"));

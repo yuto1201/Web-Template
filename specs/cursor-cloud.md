@@ -32,7 +32,7 @@ Cursor is an execution surface and orchestration product, not a model family. Th
 - Treating the Cursor product name as proof of a model provider.
 - Treating a configured model ID as proof of the model that actually served a turn.
 - Claiming that two subagents inside Cursor are independent platforms or authenticated organizations.
-- Giving local Claude additional shell, network, credential, or provider authority.
+- Changing the shared account-bound authority that already gives local Claude and Codex the same implementation and provider rights.
 - Supporting arbitrary providers beyond GitHub, Supabase, Vercel, and Cloudflare.
 - Storing personal provider credentials in the repository or a reusable environment image.
 

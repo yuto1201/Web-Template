@@ -73,10 +73,10 @@ Review findings return to `changes-requested -> in-progress`. Blocked states rec
 
 ## Account-bound external-operation transport
 
-An implementer or external-operator creates a strict request under `.artifacts/ops-requests/<request-id>.json`. The request records `operatorLabel`, `executionRole`, execution surface, frozen authorization, intent, reversibility, recovery, and exact operation inputs; it does not grant authority. For a merge, use the complete generator and validate the resulting request:
+An implementer or external-operator creates a strict request under `.artifacts/ops-requests/<request-id>.json`. The request records `operatorLabel`, `executionRole`, development `executionSurface`, fixed authenticated `providerSurface`, frozen authorization, intent, reversibility, recovery, and exact operation inputs; it does not grant authority. This separation ensures a Cursor run still needs run-bound activation even when the provider transport is `github-cli`. For a merge, use the complete generator and validate the resulting request:
 
 ```bash
-npm run workflow -- request-merge --issue 33 --pr-number 123 --operator-label codex --execution-role external-operator --surface codex-cli
+npm run workflow -- request-merge --issue 33 --pr-number 123 --operator-label codex --execution-role external-operator --surface codex-local
 npm run workflow -- validate-request --file .artifacts/ops-requests/issue-33-github-merge-pr-1.json
 npm run provider:github -- --request .artifacts/ops-requests/issue-33-github-merge-pr-1.json --model-family gpt
 ```
@@ -112,7 +112,7 @@ npm run workflow -- gate --issue <issue>
 npm run workflow -- render-pr --issue <issue> --output .artifacts/issues/<issue>/<head>/pull-request.md
 
 # Create a strict squash-merge request only after the same authoritative gate passes
-npm run workflow -- request-merge --issue <issue> --pr-number <pr-number> --operator-label <codex-or-claude> --execution-role <implementer-or-external-operator> --surface <provider-surface>
+npm run workflow -- request-merge --issue <issue> --pr-number <pr-number> --operator-label <codex-or-claude> --execution-role <implementer-or-external-operator> --surface <codex-local-or-claude-local>
 
 # Validate an exact-target cleanup plan; this command does not delete anything
 npm run workflow -- cleanup-check --file <cleanup-plan.json>

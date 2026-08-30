@@ -266,8 +266,8 @@ function evaluateIdentity(authority, service, accountValue, targetValue) {
     requireEqual(target.repositoryNodeId, configuredTarget.repositoryNodeId, "GitHub target identity mismatch.");
     if (target.owner !== undefined) requireEqual(target.owner, configuredTarget.owner, "GitHub target identity mismatch.");
     if (target.repository !== undefined) requireEqual(target.repository, configuredTarget.repository, "GitHub target identity mismatch.");
-    /** @type {Array<["displayName" | "createdAt" | "publicRepositories" | "observedAt", string]>} */
-    const observationFields = [["displayName", "display name"], ["createdAt", "creation date"], ["publicRepositories", "public repository count"], ["observedAt", "observation timestamp"]];
+    /** @type {Array<["displayName" | "createdAt" | "publicRepositories", string]>} */
+    const observationFields = [["displayName", "display name"], ["createdAt", "creation date"], ["publicRepositories", "public repository count"]];
     for (const [key, label] of observationFields) {
       if (account[key] !== undefined && account[key] !== authority.observations.github[key]) {
         warnings.push(`GitHub ${label} differs from the configured observation.`);

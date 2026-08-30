@@ -37,7 +37,9 @@ describe("provider-free Issue workflow simulation", { timeout: 20_000 }, () => {
     });
     expect(result.request).toMatchObject({
       operation: "github.merge_pr",
-      inputs: { issue: 42, method: "squash", headSha: result.headSha },
+      executionSurface: "codex-local",
+      providerSurface: "github-cli",
+      inputs: { issue: 42, baseBranch: "main", method: "squash", headSha: result.headSha },
       resolvedTarget: "yuto1201/Web-Template",
       authorization: {
         purposeCode: "reviewed-release",

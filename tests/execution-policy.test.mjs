@@ -6,6 +6,7 @@ import {
   executionOperationNames,
   loadExecutionPolicy,
   normalizeModelIdentity,
+  operationModelFamily,
   requiredReviewerFamilies,
   validateBranchForSurface,
   validateReviewerFamilies,
@@ -14,6 +15,10 @@ import {
 const policy = await loadExecutionPolicy(path.resolve("."));
 
 describe("execution policy", () => {
+  it("maps every executable review family to operation evidence metadata", () => {
+    expect(["openai", "anthropic", "cursor", "xai"].map(operationModelFamily)).toEqual(["gpt", "claude", "cursor", "xai"]);
+    expect(operationModelFamily("unknown")).toBeNull();
+  });
   it("keeps execution surface separate from observed model family", () => {
     expect(normalizeModelIdentity(
       "claude-opus-5[effort=high]",

@@ -87,7 +87,7 @@ export function validateLiveOperationObservation(operation, request, observation
     "github.read_issue": ["repository", "issue"],
     "github.push_branch": ["repository"],
     "github.create_pr": ["repository"],
-    "github.merge_pr": ["repository", "prNumber", "headSha"],
+    "github.merge_pr": ["repository", "prNumber", "baseBranch", "headSha"],
     "github.delete_branch": ["repository", "branch", "headSha"],
     "supabase.inspect_project": ["projectRef"],
     "supabase.apply_migrations": ["projectRef"],
@@ -148,20 +148,20 @@ function executeGuardedProviderOperation(configuration) {
   }
 
   return {
-    /** @param {{root: string, requestPath: string, modelFamily?: "gpt" | "claude"}} input */
+    /** @param {{root: string, requestPath: string, modelFamily?: "gpt" | "claude" | "cursor" | "xai"}} input */
     async execute(input) {
       const loaded = await readExternalOperationRequest(input.root, input.requestPath);
       const request = loaded.request;
       if (request.authorization.service !== service) throw new Error("Guarded adapter service mismatch.");
       if (!request.operation.startsWith(`${service}.`)) throw new Error("Guarded adapter operation does not belong to its provider.");
-      if (request.executionSurface !== providerClient.surface) throw new Error("Operation request surface does not match the provider adapter surface.");
+      if (request.providerSurface !== providerClient.surface) throw new Error("Operation request provider surface does not match the provider adapter surface.");
       const rawRequest = JSON.parse(await readFile(path.resolve(input.root, input.requestPath), "utf8"));
       const contract = JSON.parse(await readFile(path.join(input.root, ".artifacts", "issues", String(request.issue), "issue-contract.json"), "utf8"));
       const authority = authorityAt(input.root, contract.authority.commitSha);
       const isWrite = !readOnlyOperations.has(request.operation);
       const modelFamily = input.modelFamily;
-      if (isWrite && !["gpt", "claude"].includes(/** @type {string} */ (modelFamily))) {
-        throw new Error("Write execution requires an explicit gpt or claude model family for review evidence.");
+      if (isWrite && !["gpt", "claude", "cursor", "xai"].includes(/** @type {string} */ (modelFamily))) {
+        throw new Error("Write execution requires an explicit recognized model family for review evidence.");
       }
       const executionHeadSha = git(input.root, ["rev-parse", "HEAD"]);
       if (isWrite && providerClient.idempotencyMode(request.operation) !== "provider-enforced") {
@@ -180,7 +180,8 @@ function executeGuardedProviderOperation(configuration) {
         service,
         operatorLabel: request.operatorLabel,
         executionRole: request.executionRole,
-        executionSurface: providerClient.surface,
+        executionSurface: request.executionSurface,
+        providerSurface: providerClient.surface,
         authorityDigest: contract.authority.digest,
         issueContractDigest: contract.digest,
         authorizationDigest: digestValue(request.authorization),
@@ -195,7 +196,7 @@ function executeGuardedProviderOperation(configuration) {
         root: input.root,
         contract,
         request: rawRequest,
-        executionSurface: providerClient.surface,
+        providerSurface: providerClient.surface,
         now: observedAt.toISOString(),
         receiptState,
       });
@@ -261,6 +262,7 @@ function executeGuardedProviderOperation(configuration) {
         operatorLabel: receipt.operatorLabel,
         executionRole: receipt.executionRole,
         executionSurface: receipt.executionSurface,
+        providerSurface: receipt.providerSurface,
         authorityDigest: receipt.authorityDigest,
         issueContractDigest: receipt.issueContractDigest,
         authorizationDigest: receipt.authorizationDigest,
@@ -282,7 +284,7 @@ function executeGuardedProviderOperation(configuration) {
         root: input.root,
         contract,
         request: rawRequest,
-        executionSurface: providerClient.surface,
+        providerSurface: providerClient.surface,
         now: date(clock()).toISOString(),
         receiptState,
       });
@@ -295,7 +297,8 @@ function executeGuardedProviderOperation(configuration) {
           operatorLabel: request.operatorLabel,
           executionRole: request.executionRole,
           modelFamily,
-          executionSurface: providerClient.surface,
+          executionSurface: request.executionSurface,
+          providerSurface: providerClient.surface,
           executionHeadSha,
           authorityDigest: receipt.authorityDigest,
           issueContractDigest: receipt.issueContractDigest,
@@ -394,7 +397,7 @@ function executeGuardedProviderOperation(configuration) {
   };
 }
 
-/** @param {{service:"github"|"supabase"|"vercel"|"cloudflare",root:string,requestPath:string,modelFamily:"gpt"|"claude",clock?:()=>Date}} input */
+/** @param {{service:"github"|"supabase"|"vercel"|"cloudflare",root:string,requestPath:string,modelFamily:"gpt"|"claude"|"cursor"|"xai",clock?:()=>Date}} input */
 export async function executeRegisteredProviderOperation(input) {
   if (input.service !== "github") {
     throw new Error(`No registered production provider client exists for ${input.service}; execution fails closed.`);

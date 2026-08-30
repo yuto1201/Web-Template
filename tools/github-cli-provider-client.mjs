@@ -1,4 +1,10 @@
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+
+/** @param {unknown} value */
+function detailDigest(value) {
+  return `sha256:${createHash("sha256").update(String(value), "utf8").digest("hex")}`;
+}
 
 /** @param {string[]} args */
 function invokeGitHubCli(args) {
@@ -65,6 +71,7 @@ export function createGitHubCliProviderClient(configuration = {}) {
         operation: {
           repository,
           prNumber: pullRequest.number,
+          baseBranch: pullRequest.base?.ref,
           headSha: pullRequest.head?.sha,
           method: request.inputs.method,
         },
@@ -81,25 +88,60 @@ export function createGitHubCliProviderClient(configuration = {}) {
         };
       }
       if (operation !== "github.merge_pr") throw new Error(`GitHub CLI guarded client does not implement ${operation}.`);
-      const merged = invoke([
-        "api", "--method", "PUT", `${repositoryPath(repository)}/pulls/${request.inputs.prNumber}/merge`,
-        "-f", `merge_method=${request.inputs.method}`,
-        "-f", `sha=${request.inputs.headSha}`,
-      ]);
+      const pullRequest = invoke(["api", `${repositoryPath(repository)}/pulls/${request.inputs.prNumber}`]);
+      if (
+        pullRequest.number !== request.inputs.prNumber ||
+        pullRequest.base?.ref !== request.inputs.baseBranch ||
+        pullRequest.head?.sha !== request.inputs.headSha
+      ) {
+        throw new Error("GitHub pull request target, base branch, or Head changed before the exact-Head merge.");
+      }
+      let merged;
+      try {
+        merged = invoke([
+          "api", "--method", "PUT", `${repositoryPath(repository)}/pulls/${request.inputs.prNumber}/merge`,
+          "-f", `merge_method=${request.inputs.method}`,
+          "-f", `sha=${request.inputs.headSha}`,
+        ]);
+      } catch (error) {
+        return {
+          status: "ambiguous",
+          retryPolicy: "inspect-provider-state-only",
+          evidence: {
+            operation,
+            reasonCode: "MERGE_RESPONSE_UNKNOWN",
+            providerState: "unknown",
+            detailDigest: detailDigest(error instanceof Error ? error.message : error),
+          },
+        };
+      }
       if (merged.merged !== true || !/^[0-9a-f]{40}$/u.test(String(merged.sha ?? ""))) {
         throw new Error("GitHub refused the exact-Head merge; inspect provider state before any retry.");
       }
       const issue = invoke(["api", `${repositoryPath(repository)}/issues/${request.inputs.issue}`]);
+      if (String(issue.state).toUpperCase() !== "CLOSED") {
+        return {
+          status: "ambiguous",
+          retryPolicy: "inspect-provider-state-only",
+          evidence: {
+            operation,
+            reasonCode: "MERGE_SUCCEEDED_ISSUE_NOT_CLOSED",
+            providerState: "unknown",
+            detailDigest: detailDigest(merged.sha),
+          },
+        };
+      }
       return {
         status: "succeeded",
         evidence: {
           issue: request.inputs.issue,
           repository,
           prNumber: request.inputs.prNumber,
+          baseBranch: request.inputs.baseBranch,
           headSha: request.inputs.headSha,
           method: request.inputs.method,
           mergeCommitSha: merged.sha,
-          issueClosed: String(issue.state).toUpperCase() === "CLOSED",
+          issueClosed: true,
         },
       };
     },

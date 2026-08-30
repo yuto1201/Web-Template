@@ -39,9 +39,11 @@ Codex additionally identified source-account leakage during template initializat
 
 Authorization separates three axes:
 
-- `modelFamily`: `gpt` or `claude`; used only for cross-model review independence.
+- Operation `modelFamily`: `gpt`, `claude`, `cursor`, or `xai`; mapped from the observed primary family and used only to bind execution evidence to review identity.
 - `executionRole`: `implementer`, `external-operator`, `change-evaluator`, or `security-auditor`.
 - `operatorLabel`: `codex` or `claude`; audit metadata describing the active development surface, not an authentication factor.
+- `executionSurface`: `codex-local`, `claude-local`, or `cursor-cloud`; development provenance that also activates Cursor run binding.
+- `providerSurface`: the fixed authenticated transport registered for the operation, such as `github-cli`.
 
 `codex` and `claude` may both hold `implementer` and `external-operator`. Evaluator and auditor roles remain read-only regardless of model family and cannot create operation receipts, access secrets, execute external operations, or approve their own implementation.
 
@@ -117,7 +119,7 @@ Examples of frozen constraints include repository/branch/PR/Head for GitHub, pro
 
 ### Request, preflight, execution, result
 
-1. A strict request declares operator label, execution role/surface, frozen authorization reference, intent, reversibility, and mutation inputs. It cannot supply free-form accounts, targets, approval claims, tokens, or evidence.
+1. A strict request declares operator label, execution role, development surface, fixed provider surface, frozen authorization reference, intent, reversibility, and mutation inputs. It cannot supply free-form accounts, targets, approval claims, tokens, or evidence.
 2. A provider-specific guarded adapter reads the current authenticated identity and target, then creates a fresh preflight receipt. The receipt binds authority, Issue, request, mutation, account, target, surface, timestamp, and expiry digests.
 3. Execution consumes the receipt once, re-reads account and target through the same authenticated surface, rejects any switch, and performs only the frozen mutation.
 4. A strict result receipt records redacted provider-derived result and post-state. The same in-process adapter checks account continuity, target continuity, expected result shape, and receipt linkage; legacy caller-authored receipt CLI commands fail closed.

@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createGitHubCliProviderClient } from "../tools/github-cli-provider-client.mjs";
-import { executeRegisteredProviderOperation } from "../tools/provider-guarded-adapter.mjs";
+import { executeRegisteredProviderOperation, validateLiveOperationObservation } from "../tools/provider-guarded-adapter.mjs";
 import {
   digestValue,
   loadProtectedAuthority,
@@ -26,7 +26,7 @@ function createTestGitHubGuardedAdapter(configuration) {
     /** @type {ReturnType<typeof createGitHubCliProviderClient>} */ (configuration.providerClient),
   );
   return {
-    /** @param {{root:string,requestPath:string,modelFamily?:"gpt"|"claude"}} input */
+    /** @param {{root:string,requestPath:string,modelFamily?:"gpt"|"claude"|"cursor"|"xai"}} input */
     execute(input) {
       return executeRegisteredProviderOperation({
         service: "github",
@@ -88,6 +88,7 @@ function githubClient(authority, options = {}) {
           : {
               repository: `${authority.resourceTargets.github.owner}/${authority.resourceTargets.github.repository}`,
               prNumber: request.inputs.prNumber,
+              baseBranch: request.inputs.baseBranch,
               headSha: phase === "claim" && options.wrongHeadAtClaim ? "9".repeat(40) : request.inputs.headSha,
               method: request.inputs.method,
             },
@@ -109,6 +110,7 @@ function githubClient(authority, options = {}) {
           issue: request.inputs.issue,
           repository: request.inputs.repository,
           prNumber: request.inputs.prNumber,
+          baseBranch: request.inputs.baseBranch,
           headSha: request.inputs.headSha,
           method: request.inputs.method,
           mergeCommitSha: "7".repeat(40),
@@ -131,7 +133,7 @@ describe("provider-specific guarded adapters", () => {
     const calls = [];
     const request = {
       operation: "github.merge_pr",
-      inputs: { issue: 33, repository: "yuto1201/Web-Template", prNumber: 44, headSha: "a".repeat(40), method: "squash" },
+      inputs: { issue: 33, repository: "yuto1201/Web-Template", prNumber: 44, baseBranch: "main", headSha: "a".repeat(40), method: "squash" },
     };
     const client = createActualGitHubClient({
       now: () => new Date("2026-08-30T01:00:00Z"),
@@ -141,20 +143,72 @@ describe("provider-specific guarded adapters", () => {
         const joined = args.join(" ");
         if (joined === "api user") return { login: authority.accounts.github.login, id: authority.accounts.github.userId, node_id: authority.accounts.github.nodeId, name: "Yuuuuuuuto", created_at: "2019-05-14T00:00:00Z", public_repos: 9 };
         if (joined === "api repos/yuto1201/Web-Template") return { owner: { login: "yuto1201" }, name: "Web-Template", id: authority.resourceTargets.github.repositoryId, node_id: authority.resourceTargets.github.repositoryNodeId };
-        if (joined === "api repos/yuto1201/Web-Template/pulls/44") return { number: 44, head: { sha: request.inputs.headSha } };
+        if (joined === "api repos/yuto1201/Web-Template/pulls/44") return { number: 44, base: { ref: "main" }, head: { sha: request.inputs.headSha } };
         if (joined.includes("--method PUT") && joined.includes(`sha=${request.inputs.headSha}`)) return { merged: true, sha: "b".repeat(40) };
         if (joined === "api repos/yuto1201/Web-Template/issues/33") return { state: "closed", updated_at: "2026-08-30T01:00:10Z" };
         throw new Error(`Unexpected fake GitHub call: ${joined}`);
       },
     });
 
-    await expect(client.collectObservation({ request })).resolves.toMatchObject({ operation: { headSha: request.inputs.headSha } });
+    await expect(client.collectObservation({ request })).resolves.toMatchObject({ operation: { baseBranch: "main", headSha: request.inputs.headSha } });
     await expect(client.execute({ request, operation: request.operation })).resolves.toMatchObject({
       status: "succeeded",
       evidence: { mergeCommitSha: "b".repeat(40), issueClosed: true },
     });
     expect(calls.flat()).not.toContain("auth");
     expect(calls.flat()).not.toContain("login");
+  });
+
+  it("refuses to merge a pull request whose live base is not protected main", async () => {
+    const { createGitHubCliProviderClient: createActualGitHubClient } = /** @type {typeof import("../tools/github-cli-provider-client.mjs")} */ (
+      await vi.importActual("../tools/github-cli-provider-client.mjs")
+    );
+    const authority = JSON.parse(await readFile(path.resolve("config/ownership.json"), "utf8"));
+    const request = {
+      operation: "github.merge_pr",
+      inputs: { issue: 33, repository: "yuto1201/Web-Template", prNumber: 44, baseBranch: "main", headSha: "a".repeat(40), method: "squash" },
+    };
+    const client = createActualGitHubClient({
+      invoke(args) {
+        const joined = args.join(" ");
+        if (joined === "api user") return { login: authority.accounts.github.login, id: authority.accounts.github.userId, node_id: authority.accounts.github.nodeId, created_at: "2019-05-14T00:00:00Z", public_repos: 9 };
+        if (joined === "api repos/yuto1201/Web-Template") return { owner: { login: "yuto1201" }, name: "Web-Template", id: authority.resourceTargets.github.repositoryId, node_id: authority.resourceTargets.github.repositoryNodeId };
+        if (joined === "api repos/yuto1201/Web-Template/pulls/44") return { number: 44, base: { ref: "unprotected-target" }, head: { sha: request.inputs.headSha } };
+        throw new Error(`Unexpected fake GitHub call: ${joined}`);
+      },
+    });
+
+    const observation = await client.collectObservation({ request });
+    expect(() => validateLiveOperationObservation(request.operation, request, observation.operation, "claim")).toThrow(/base.?branch/iu);
+    await expect(client.execute({ request, operation: request.operation })).rejects.toThrow(/base branch/iu);
+  });
+
+  it("returns terminal ambiguous evidence when the merge succeeded before Issue closure is observed", async () => {
+    const { createGitHubCliProviderClient: createActualGitHubClient } = /** @type {typeof import("../tools/github-cli-provider-client.mjs")} */ (
+      await vi.importActual("../tools/github-cli-provider-client.mjs")
+    );
+    const authority = JSON.parse(await readFile(path.resolve("config/ownership.json"), "utf8"));
+    const request = {
+      operation: "github.merge_pr",
+      inputs: { issue: 33, repository: "yuto1201/Web-Template", prNumber: 44, baseBranch: "main", headSha: "a".repeat(40), method: "squash" },
+    };
+    const client = createActualGitHubClient({
+      invoke(args) {
+        const joined = args.join(" ");
+        if (joined === "api repos/yuto1201/Web-Template/pulls/44") return { number: 44, base: { ref: "main" }, head: { sha: request.inputs.headSha } };
+        if (joined.includes("--method PUT")) return { merged: true, sha: "b".repeat(40) };
+        if (joined === "api repos/yuto1201/Web-Template/issues/33") return { state: "open" };
+        if (joined === "api user") return { login: authority.accounts.github.login };
+        if (joined === "api repos/yuto1201/Web-Template") return { owner: { login: "yuto1201" }, name: "Web-Template" };
+        throw new Error(`Unexpected fake GitHub call: ${joined}`);
+      },
+    });
+
+    await expect(client.execute({ request, operation: request.operation })).resolves.toMatchObject({
+      status: "ambiguous",
+      retryPolicy: "inspect-provider-state-only",
+      evidence: { reasonCode: "MERGE_SUCCEEDED_ISSUE_NOT_CLOSED", providerState: "unknown" },
+    });
   });
 
   it("collects preflight, claim, and postflight from one provider surface and executes only the frozen mutation", async () => {
@@ -203,6 +257,22 @@ describe("provider-specific guarded adapters", () => {
       mutationDigest: expect.stringMatching(/^sha256:/u),
       outcome: "succeeded",
     });
+  }, 15_000);
+
+  it("keeps Cursor activation reachable while using the fixed GitHub provider surface", async () => {
+    const { root, simulated, authority } = await repositoryFixture();
+    const requestPath = path.join(root, simulated.paths.mergeRequest);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    request.executionSurface = "cursor-cloud";
+    await writeFile(requestPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
+    const client = githubClient(authority);
+
+    await expect(createTestGitHubGuardedAdapter({ providerClient: client, clock: clock() }).execute({
+      root,
+      requestPath,
+      modelFamily: "cursor",
+    })).rejects.toThrow(/Cursor Cloud.*activation evidence/iu);
+    expect(client.executionCount()).toBe(0);
   }, 15_000);
 
   it("rejects an account or live PR Head switch immediately before mutation", async () => {
@@ -286,7 +356,8 @@ describe("provider-specific guarded adapters", () => {
       reasonCode: "issue-contract",
       operatorLabel: "codex",
       executionRole: "external-operator",
-      executionSurface: "github-cli",
+      executionSurface: "codex-local",
+      providerSurface: "github-cli",
       intent: `Read Issue ${issue} from the frozen repository target.`,
       reversibility: "read-only",
       recovery: { strategy: "none", instructions: "No mutation is performed; repeat only while the authorization remains fresh." },
@@ -353,6 +424,7 @@ describe("provider-specific guarded adapters", () => {
       operatorLabel: request.operatorLabel,
       executionRole: request.executionRole,
       executionSurface: request.executionSurface,
+      providerSurface: request.providerSurface,
       authorityDigest: contract.authority.digest,
       issueContractDigest: contract.digest,
       authorizationDigest: digestValue(contract.externalAuthorizations[0]),

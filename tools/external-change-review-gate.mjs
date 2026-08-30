@@ -3,6 +3,7 @@ import {
   schemas,
   validateExternalLifecycleArtifactSet,
 } from "./workflow-core.mjs";
+import { operationModelFamily } from "./execution-policy.mjs";
 
 const shaPattern = /^[0-9a-f]{40}$/u;
 
@@ -85,12 +86,8 @@ export function validateExternalChangesAgainstCommittedState(input) {
   ) {
     throw new Error("Structured external changes require committed artifact, protected-authority, and evidence-commit loaders.");
   }
-  const expectedModelFamily = input.primaryModelFamily === "openai"
-    ? "gpt"
-    : input.primaryModelFamily === "anthropic"
-      ? "claude"
-      : null;
-  assert(expectedModelFamily, "External changes require an OpenAI or Anthropic primary model family.");
+  const expectedModelFamily = operationModelFamily(input.primaryModelFamily);
+  assert(expectedModelFamily, "External changes require a recognized primary model family.");
   const referencedPaths = new Set();
   for (const change of changes) {
     const changeRecord = /** @type {Record<string, any>} */ (change);

@@ -44,7 +44,7 @@ function externalAuthorization(issue = 5, repositoryValue = repository) {
     accountRef: "accounts.github",
     targetRef: "resourceTargets.github",
     environment: "production",
-    constraints: { issue, repository: repositoryValue, prNumber: 15, headSha, method: "squash" },
+    constraints: { issue, repository: repositoryValue, prNumber: 15, baseBranch: "main", headSha, method: "squash" },
     requiresExactHead: true,
   };
 }
@@ -72,14 +72,15 @@ function mergeRequest(issue = 5) {
     reasonCode: "reviewed-release",
     operatorLabel: "codex",
     executionRole: "external-operator",
-    executionSurface: "github-cli",
+    executionSurface: "codex-local",
+    providerSurface: "github-cli",
     intent: `Merge pull request 15 for Issue ${issue} at its exact reviewed Head.`,
     reversibility: "compensating-change",
     recovery: {
       strategy: "separate-reviewed-operation",
       instructions: "Inspect the merged repository state; any revert requires a later reviewed authorization.",
     },
-    inputs: { issue, repository, prNumber: 15, headSha, method: "squash" },
+    inputs: { issue, repository, prNumber: 15, baseBranch: "main", headSha, method: "squash" },
   };
 }
 
@@ -101,6 +102,7 @@ function preflightReceipt(contract, request, overrides = {}) {
     operatorLabel: request.operatorLabel,
     executionRole: request.executionRole,
     executionSurface: request.executionSurface,
+    providerSurface: request.providerSurface,
     authorityDigest: contract.authority.digest,
     issueContractDigest: contract.digest,
     authorizationDigest: digestValue(externalAuthorization()),
@@ -121,6 +123,7 @@ function operationResult(receipt, overrides = {}) {
     issue: 5,
     repository,
     prNumber: 15,
+    baseBranch: "main",
     headSha,
     method: "squash",
     mergeCommitSha: "7".repeat(40),
@@ -134,6 +137,7 @@ function operationResult(receipt, overrides = {}) {
     operatorLabel: receipt.operatorLabel,
     executionRole: receipt.executionRole,
     executionSurface: receipt.executionSurface,
+    providerSurface: receipt.providerSurface,
     authorityDigest: receipt.authorityDigest,
     issueContractDigest: receipt.issueContractDigest,
     authorizationDigest: receipt.authorizationDigest,
@@ -270,7 +274,7 @@ describe("workflow contracts", () => {
       root,
       contract,
       request,
-      executionSurface: "github-cli",
+      providerSurface: "github-cli",
       now: "2026-08-30T01:01:00Z",
       receiptState,
     });
@@ -290,7 +294,7 @@ describe("workflow contracts", () => {
       root,
       contract,
       request,
-      executionSurface: "github-cli",
+      providerSurface: "github-cli",
       now: "2026-08-30T01:01:00Z",
       receiptState,
     })).toThrow(/reused|already been validated/u);
@@ -322,12 +326,12 @@ describe("workflow contracts", () => {
       root,
       contract,
       request,
-      executionSurface: "github-cli",
+      providerSurface: "github-cli",
       now: "2026-08-30T01:01:00Z",
     };
     const cases = [
       [preflightReceipt(contract, request, { expiresAt: "2026-08-30T01:00:30Z" }), /expired|stale/u],
-      [preflightReceipt(contract, request, { executionSurface: "browser" }), /surface/u],
+      [preflightReceipt(contract, request, { providerSurface: "browser" }), /provider surface/u],
       [preflightReceipt(contract, request, { authorityDigest: `sha256:${"9".repeat(64)}` }), /authority digest/u],
       [preflightReceipt(contract, request, { issueContractDigest: `sha256:${"9".repeat(64)}` }), /Issue contract digest/u],
       [preflightReceipt(contract, request, { authorizationDigest: `sha256:${"9".repeat(64)}` }), /authorization digest/u],
@@ -354,7 +358,7 @@ describe("workflow contracts", () => {
       root,
       contract,
       request,
-      executionSurface: "github-cli",
+      providerSurface: "github-cli",
       now: "2026-08-30T01:01:45Z",
     };
 
@@ -410,7 +414,7 @@ describe("workflow contracts", () => {
     const first = preflightReceipt(contract, request);
     const second = preflightReceipt(contract, request, { receiptId: "receipt-issue-5-github-merge-pr-2" });
     const receiptState = createOperationReceiptState();
-    const context = { root, contract, request, executionSurface: "github-cli", receiptState };
+    const context = { root, contract, request, providerSurface: "github-cli", receiptState };
 
     validatePreflightReceipt(first, { ...context, now: "2026-08-30T01:01:00Z" });
     validatePreflightReceipt(second, { ...context, now: "2026-08-30T01:01:00Z" });
@@ -454,7 +458,7 @@ describe("workflow contracts", () => {
       root,
       contract,
       request,
-      executionSurface: "github-cli",
+      providerSurface: "github-cli",
       receiptState: expiredState,
       now: "2026-08-30T01:01:00Z",
     });
@@ -464,7 +468,7 @@ describe("workflow contracts", () => {
     })).toThrow(/expired|stale/u);
 
     const receiptState = createOperationReceiptState();
-    const context = { root, contract, request, executionSurface: "github-cli", receiptState };
+    const context = { root, contract, request, providerSurface: "github-cli", receiptState };
     validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z" });
     claimOperationExecution(receipt.receiptId, { receiptState, now: "2026-08-30T01:01:05Z" });
 
@@ -580,8 +584,8 @@ describe("workflow contracts", () => {
       },
       {
         operation: "github.merge_pr",
-        inputs: { issue: 5, repository, prNumber: 34, headSha: sha, method: "squash" },
-        evidence: { issue: 5, repository, prNumber: 34, headSha: sha, method: "squash", mergeCommitSha: "7".repeat(40), issueClosed: true },
+        inputs: { issue: 5, repository, prNumber: 34, baseBranch: "main", headSha: sha, method: "squash" },
+        evidence: { issue: 5, repository, prNumber: 34, baseBranch: "main", headSha: sha, method: "squash", mergeCommitSha: "7".repeat(40), issueClosed: true },
       },
       {
         operation: "github.delete_branch",

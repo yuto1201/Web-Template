@@ -9,7 +9,7 @@ import {
   validateBranchForSurface,
   validateReviewerFamilies,
 } from "./execution-policy.mjs";
-import { validateExternalChangesAgainstCommittedState } from "./external-change-review-gate.mjs";
+import { parseExternalChanges, validateExternalChangesAgainstCommittedState } from "./external-change-review-gate.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const shaPattern = /^[0-9a-f]{40}$/u;
@@ -254,6 +254,12 @@ function validateDependabotDiff(diff, policy) {
   assert(added.toSorted().join("\n") === removed.toSorted().join("\n"), "Dependabot diff must preserve action identities.");
 }
 
+/** @param {string} body @param {string[]} changedPaths @param {ExecutionPolicy} executionPolicy */
+export function deriveReviewRisk(body, changedPaths, executionPolicy) {
+  const externalOperations = parseExternalChanges(body).map(({ operation }) => operation);
+  return classifyRisk({ changedPaths, externalOperations }, executionPolicy);
+}
+
 /**
  * @param {{event: unknown, changedPaths: string[], diff: string, workflow: WorkflowPolicy, executionPolicy?: ExecutionPolicy, artifactLoader?: (reference: string) => unknown, authorityLoader?: (commitSha: string) => unknown, evidenceCommit?: {headSha:string,parentSha:string,changedPaths:string[]}, isAuthorityProtected?: (authorityCommitSha:string)=>boolean}} input
  */
@@ -327,7 +333,7 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
       assert(review.configured === executionPolicy.cursorModels[review.family], `Reviewer configured reviewer model must match trusted Cursor policy for ${review.family}.`);
     }
   }
-  const derivedRisk = classifyRisk({ changedPaths, externalOperations: [] }, executionPolicy);
+  const derivedRisk = deriveReviewRisk(String(pullRequest.body ?? ""), changedPaths, executionPolicy);
   if (derivedRisk.level === "high") {
     assert(evidence.risk.level === "high", "Risk claim cannot reduce the risk derived from changed paths.");
     for (const reason of derivedRisk.reasons) assert(evidence.risk.reasons.includes(reason), `Risk reasons must include derived reason ${reason}.`);

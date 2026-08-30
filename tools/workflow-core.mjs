@@ -10,6 +10,7 @@ import { activationRepositoryBindingChecks, validateActivationEvidence } from ".
 import {
   classifyRisk,
   normalizeModelIdentity,
+  operationModelFamily,
   requiredReviewerFamilies,
   validateBranchForSurface,
   validateReviewerFamilies,
@@ -29,7 +30,7 @@ const workflowConfiguration = /** @type {{
 const shaSchema = z.string().regex(/^[0-9a-f]{40}$/u);
 const digestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 const timestampSchema = z.iso.datetime({ offset: true });
-const modelFamilySchema = z.enum(["gpt", "claude"]);
+const modelFamilySchema = z.enum(["gpt", "claude", "cursor", "xai"]);
 const surfaceSchema = z.enum(["codex-local", "claude-local", "cursor-cloud"]);
 const knownFamilySchema = z.enum(["openai", "anthropic", "cursor", "xai"]);
 const familySchema = z.enum(["openai", "anthropic", "cursor", "xai", "unknown"]);
@@ -199,8 +200,8 @@ const operationDefinitions = /** @type {Record<Operation, {
     targetIdentifier: targetSources.github,
     environments: ["production"],
     reasonCodes: ["reviewed-release"],
-    inputs: z.object({ issue: z.number().int().positive(), repository: repositorySchema, prNumber: z.number().int().positive(), headSha: shaSchema, method: z.literal("squash") }).strict(),
-    constraints: z.object({ issue: z.number().int().positive(), repository: repositorySchema, prNumber: z.number().int().positive(), headSha: shaSchema, method: z.literal("squash") }).strict(),
+    inputs: z.object({ issue: z.number().int().positive(), repository: repositorySchema, prNumber: z.number().int().positive(), baseBranch: z.literal("main"), headSha: shaSchema, method: z.literal("squash") }).strict(),
+    constraints: z.object({ issue: z.number().int().positive(), repository: repositorySchema, prNumber: z.number().int().positive(), baseBranch: z.literal("main"), headSha: shaSchema, method: z.literal("squash") }).strict(),
     requiresExactHead: true,
     evidence: ["authenticated GitHub login", "matched PR Head SHA", "squash merge commit", "closed Issue"],
   },
@@ -345,7 +346,8 @@ const externalRequestBaseSchema = z.object({
   reasonCode: z.enum(["issue-contract", "acceptance-evidence", "reviewed-release", "verified-cleanup", "user-directed"]),
   operatorLabel: operatorLabelSchema,
   executionRole: externalOperatorRoleSchema,
-  executionSurface: executionSurfaceSchema,
+  executionSurface: surfaceSchema,
+  providerSurface: executionSurfaceSchema,
   surfaceContext: z.object({
     runId: z.string().regex(/^bc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u),
     activationEvidenceRef: relativeFileSchema.regex(/^\.artifacts\/cursor\/bc-[0-9a-f-]+\.json$/u),
@@ -434,7 +436,8 @@ const receiptBindingSchema = z.object({
   service: z.enum(["github", "supabase", "vercel", "cloudflare"]),
   operatorLabel: operatorLabelSchema,
   executionRole: externalOperatorRoleSchema,
-  executionSurface: executionSurfaceSchema,
+  executionSurface: surfaceSchema,
+  providerSurface: executionSurfaceSchema,
   authorityDigest: digestSchema,
   issueContractDigest: digestSchema,
   authorizationDigest: digestSchema,
@@ -498,6 +501,7 @@ const operationSuccessEvidenceSchemas = {
     issue: z.number().int().positive(),
     repository: repositorySchema,
     prNumber: z.number().int().positive(),
+    baseBranch: z.literal("main"),
     headSha: shaSchema,
     method: z.literal("squash"),
     mergeCommitSha: shaSchema,
@@ -564,7 +568,7 @@ const operationResultInputBindings = {
   "github.read_issue": [["repository", "repository", "repository"], ["issue", "issue", "Issue"]],
   "github.push_branch": [["repository", "repository", "repository"], ["branch", "branch", "branch"], ["headSha", "headSha", "Head SHA"]],
   "github.create_pr": [["issue", "issue", "Issue"], ["repository", "repository", "repository"], ["branch", "branch", "branch"], ["baseBranch", "baseBranch", "base branch"], ["headSha", "headSha", "Head SHA"]],
-  "github.merge_pr": [["issue", "issue", "Issue"], ["repository", "repository", "repository"], ["prNumber", "prNumber", "PR number"], ["headSha", "headSha", "Head SHA"], ["method", "method", "merge method"]],
+  "github.merge_pr": [["issue", "issue", "Issue"], ["repository", "repository", "repository"], ["prNumber", "prNumber", "PR number"], ["baseBranch", "baseBranch", "base branch"], ["headSha", "headSha", "Head SHA"], ["method", "method", "merge method"]],
   "github.delete_branch": [["repository", "repository", "repository"], ["branch", "branch", "branch"], ["mergedPrNumber", "mergedPrNumber", "merged PR number"], ["headSha", "headSha", "Head SHA"]],
   "supabase.inspect_project": [["projectRef", "projectRef", "Supabase project reference"]],
   "supabase.apply_migrations": [["projectRef", "projectRef", "Supabase project reference"], ["migrations", "appliedMigrations", "migration list"]],
@@ -645,7 +649,8 @@ const lifecycleArtifactSchema = z.object({
   operatorLabel: operatorLabelSchema,
   executionRole: externalOperatorRoleSchema,
   modelFamily: modelFamilySchema,
-  executionSurface: executionSurfaceSchema,
+  executionSurface: surfaceSchema,
+  providerSurface: executionSurfaceSchema,
   executionHeadSha: shaSchema,
   authorityDigest: digestSchema,
   issueContractDigest: digestSchema,
@@ -1132,7 +1137,7 @@ function resolveReceiptContext(contextValue) {
   if (!contextValue || typeof contextValue !== "object") throw new Error("Receipt validation context is required.");
   const context = /** @type {Record<string, any>} */ (contextValue);
   if (typeof context.root !== "string" || context.root.length === 0) throw new Error("Receipt validation root is required.");
-  const executionSurface = executionSurfaceSchema.parse(context.executionSurface);
+  const providerSurface = executionSurfaceSchema.parse(context.providerSurface);
   const now = receiptTimestamp(context.now ?? new Date().toISOString(), "Receipt validation time");
   const receiptState = parseReceiptState(context.receiptState);
   const contract = validateIssueContract(context.contract);
@@ -1144,7 +1149,7 @@ function resolveReceiptContext(contextValue) {
   }
   return {
     root: context.root,
-    executionSurface,
+    providerSurface,
     now,
     receiptState,
     contract,
@@ -1163,6 +1168,7 @@ function expectedReceiptBinding(context) {
     operatorLabel: context.request.operatorLabel,
     executionRole: context.request.executionRole,
     executionSurface: context.request.executionSurface,
+    providerSurface: context.request.providerSurface,
     authorityDigest: context.contract.authority.digest,
     issueContractDigest: context.contract.digest,
     authorizationDigest: digestValue(context.validatedRequest.authorization),
@@ -1180,6 +1186,7 @@ function assertReceiptBinding(actual, expected, actualSurface) {
     operatorLabel: "operator label",
     executionRole: "execution role",
     executionSurface: "execution surface",
+    providerSurface: "provider surface",
     authorityDigest: "authority digest",
     issueContractDigest: "Issue contract digest",
     authorizationDigest: "authorization digest",
@@ -1189,7 +1196,7 @@ function assertReceiptBinding(actual, expected, actualSurface) {
   for (const [key, expectedValue] of Object.entries(expected)) {
     if (actual[key] !== expectedValue) throw new Error(`Receipt ${labels[key]} mismatch.`);
   }
-  if (actual.executionSurface !== actualSurface) throw new Error("Receipt execution surface does not match the live adapter surface.");
+  if (actual.providerSurface !== actualSurface) throw new Error("Receipt provider surface does not match the live adapter surface.");
 }
 
 /** @param {unknown} value @param {unknown} contextValue */
@@ -1202,7 +1209,7 @@ export function validatePreflightReceipt(value, contextValue) {
   if (context.receiptState.validatedPreflights.has(receipt.receiptId)) {
     throw new Error("Preflight receipt ID has already been validated and cannot be reused.");
   }
-  assertReceiptBinding(receipt, expectedReceiptBinding(context), context.executionSurface);
+  assertReceiptBinding(receipt, expectedReceiptBinding(context), context.providerSurface);
   const observedAt = receiptTimestamp(receipt.observedAt, "Preflight observedAt");
   const expiresAt = receiptTimestamp(receipt.expiresAt, "Preflight expiresAt");
   if (observedAt.milliseconds > context.now.milliseconds) throw new Error("Preflight receipt observation is dated in the future.");
@@ -1226,6 +1233,7 @@ export function validatePreflightReceipt(value, contextValue) {
     operatorLabel: receipt.operatorLabel,
     executionRole: receipt.executionRole,
     executionSurface: receipt.executionSurface,
+    providerSurface: receipt.providerSurface,
     authorityDigest: receipt.authorityDigest,
     issueContractDigest: receipt.issueContractDigest,
     authorizationDigest: receipt.authorizationDigest,
@@ -1377,7 +1385,7 @@ export function validateOperationResult(value, contextValue) {
   }
   const claim = context.receiptState.executionClaims.get(result.receiptId);
   if (!claim) throw new Error("Operation result requires an atomic execution claim before mutation.");
-  assertReceiptBinding(result, expectedReceiptBinding(context), context.executionSurface);
+  assertReceiptBinding(result, expectedReceiptBinding(context), context.providerSurface);
   if (result.requestDigest !== claim.requestDigest || result.mutationDigest !== claim.mutationDigest) {
     throw new Error("Operation result does not match the claimed request and mutation digests.");
   }
@@ -1417,6 +1425,7 @@ export function validateOperationResult(value, contextValue) {
     operatorLabel: result.operatorLabel,
     executionRole: result.executionRole,
     executionSurface: result.executionSurface,
+    providerSurface: result.providerSurface,
     authorityDigest: result.authorityDigest,
     issueContractDigest: result.issueContractDigest,
     authorizationDigest: result.authorizationDigest,
@@ -1669,7 +1678,7 @@ function assertLifecycleOperationObservation(operation, request, observationValu
     "github.read_issue": ["repository", "issue"],
     "github.push_branch": ["repository"],
     "github.create_pr": ["repository"],
-    "github.merge_pr": ["repository", "prNumber", "headSha"],
+    "github.merge_pr": ["repository", "prNumber", "baseBranch", "headSha"],
     "github.delete_branch": ["repository", "branch", "headSha"],
     "supabase.inspect_project": ["projectRef"],
     "supabase.apply_migrations": ["projectRef"],
@@ -1745,6 +1754,7 @@ export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue
     operatorLabel: request.operatorLabel,
     executionRole: request.executionRole,
     executionSurface: request.executionSurface,
+    providerSurface: request.providerSurface,
     executionHeadSha: change.executionHeadSha,
     authorityDigest: contract.authority.digest,
     issueContractDigest: contract.digest,
@@ -1782,7 +1792,7 @@ export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue
   }
   for (const [key, value] of Object.entries(expected)) {
     if (key === "executionHeadSha") continue;
-    if (["service", "operatorLabel", "executionRole", "executionSurface", "authorityDigest", "issueContractDigest", "authorizationDigest", "requestDigest", "mutationDigest", "requestId"].includes(key) && receipt[key] !== value) {
+    if (["service", "operatorLabel", "executionRole", "executionSurface", "providerSurface", "authorityDigest", "issueContractDigest", "authorizationDigest", "requestDigest", "mutationDigest", "requestId"].includes(key) && receipt[key] !== value) {
       throw new Error(`Preflight receipt ${key} linkage mismatch.`);
     }
   }
@@ -1821,7 +1831,7 @@ export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue
   ) throw new Error("Mutation lifecycle does not match the atomic claim.");
 
   const result = artifacts.result.payload.result;
-  for (const key of ["receiptId", "requestId", "service", "operatorLabel", "executionRole", "executionSurface", "authorityDigest", "issueContractDigest", "authorizationDigest", "requestDigest", "mutationDigest"]) {
+  for (const key of ["receiptId", "requestId", "service", "operatorLabel", "executionRole", "executionSurface", "providerSurface", "authorityDigest", "issueContractDigest", "authorizationDigest", "requestDigest", "mutationDigest"]) {
     if (result[key] !== (key === "receiptId" ? receiptId : expected[key])) throw new Error(`Result receipt ${key} linkage mismatch.`);
   }
   if (
@@ -1947,11 +1957,7 @@ function validateExternalChangeLifecycle(changes, contract, packet, currentHeadS
   for (const change of changes) {
     if (change.serviceMode !== "repository-active") throw new Error("External change service mode is not executable.");
     if (change.evidenceHeadSha !== currentHeadSha) throw new Error("External change evidence Head SHA is stale.");
-    const expectedLegacyFamily = packet.primaryModel.family === "openai"
-      ? "gpt"
-      : packet.primaryModel.family === "anthropic"
-        ? "claude"
-        : null;
+    const expectedLegacyFamily = operationModelFamily(packet.primaryModel.family);
     if (change.operatorLabel !== packet.primaryOperatorLabel || change.modelFamily !== expectedLegacyFamily) {
       throw new Error("External change operator/model metadata does not match the reviewed primary implementation.");
     }
@@ -2223,7 +2229,8 @@ export async function createMergeOperationRequest(root, issue, prNumber, operato
   const operator = z.object({
     operatorLabel: operatorLabelSchema,
     executionRole: externalOperatorRoleSchema,
-    executionSurface: executionSurfaceSchema,
+    executionSurface: surfaceSchema,
+    surfaceContext: externalRequestBaseSchema.shape.surfaceContext,
   }).strict().parse(operatorMetadata);
   const request = {
     schemaVersion: 1,
@@ -2234,13 +2241,14 @@ export async function createMergeOperationRequest(root, issue, prNumber, operato
     environment: "production",
     reasonCode: "reviewed-release",
     ...operator,
+    providerSurface: "github-cli",
     intent: `Merge pull request ${prNumber} for Issue ${issue} at its exact reviewed Head.`,
     reversibility: "compensating-change",
     recovery: {
       strategy: "separate-reviewed-operation",
       instructions: "Inspect the merged repository state; any revert requires a later reviewed authorization.",
     },
-    inputs: { issue, repository: input.contract.repository, prNumber, headSha: gate.headSha, method: "squash" },
+    inputs: { issue, repository: input.contract.repository, prNumber, baseBranch: "main", headSha: gate.headSha, method: "squash" },
   };
   const validated = validateExternalOperationRequest(request, root, input.contract);
   const requestPath = `.artifacts/ops-requests/${request.requestId}.json`;
@@ -2513,7 +2521,7 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const merge = await createMergeOperationRequest(root, contract.issue, fixture.prNumber, {
     operatorLabel: fixture.primaryOperatorLabel,
     executionRole: "implementer",
-    executionSurface: "github-cli",
+    executionSurface: fixture.executionSurface,
   });
 
   return { gate, state, branch, baseSha, headSha, request: merge.request, paths: {

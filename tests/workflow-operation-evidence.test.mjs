@@ -96,6 +96,7 @@ function request(executionSurface, surfaceContext) {
     operatorLabel: "codex",
     executionRole: "implementer",
     executionSurface,
+    providerSurface: "github-cli",
     ...(surfaceContext === undefined ? {} : { surfaceContext }),
     intent: "Read the frozen Issue from the protected personal repository.",
     reversibility: "read-only",

@@ -258,6 +258,56 @@ const canonicalCursorEnvironment = {
   install: "npm ci && npm exec -- playwright install --with-deps chromium && npm run cursor:doctor -- --build",
   start: "sudo service docker start",
 };
+const requiredCursorHookEvents = [
+  "afterFileEdit",
+  "beforeShellExecution",
+  "preToolUse",
+  "subagentStart",
+  "subagentStop",
+];
+
+/** @param {{ hooksConfig: unknown, packageJson: unknown }} input */
+export function validateCursorHookPolicy(input) {
+  const errors = [];
+  const hooksConfig = input.hooksConfig && typeof input.hooksConfig === "object"
+    ? /** @type {Record<string, any>} */ (input.hooksConfig)
+    : {};
+  const hooks = hooksConfig.hooks && typeof hooksConfig.hooks === "object" && !Array.isArray(hooksConfig.hooks)
+    ? /** @type {Record<string, unknown>} */ (hooksConfig.hooks)
+    : {};
+  const hookNames = Object.keys(hooks);
+  if (hooksConfig.version !== 1 || !equal(hookNames.toSorted(), requiredCursorHookEvents.toSorted())) {
+    errors.push("Cursor Cloud project hooks must contain exactly the supported hook events.");
+  }
+  for (const event of requiredCursorHookEvents) {
+    const entries = hooks[event];
+    const entry = Array.isArray(entries) && entries.length === 1 && entries[0] && typeof entries[0] === "object"
+      ? /** @type {Record<string, unknown>} */ (entries[0])
+      : null;
+    if (
+      !entry ||
+      !Object.keys(entry).every((key) => ["command", "failClosed", "timeout", "type"].includes(key)) ||
+      entry.type !== "command" ||
+      entry.command !== "node tools/guard-cursor-hook.mjs" ||
+      !Number.isInteger(entry.timeout) ||
+      Number(entry.timeout) <= 0 ||
+      Number(entry.timeout) > 60 ||
+      entry.failClosed !== true
+    ) {
+      errors.push(`Cursor hook ${event} must be a finite fail-closed project command.`);
+    }
+  }
+  if (containsPotentialSecret(JSON.stringify(hooksConfig))) {
+    errors.push("Cursor hook configuration must not contain credential values.");
+  }
+  const packageJson = input.packageJson && typeof input.packageJson === "object"
+    ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
+    : {};
+  if (packageJson.scripts?.["cursor:hook-check"] !== "node tools/guard-cursor-hook.mjs --check") {
+    errors.push("package.json must expose the deterministic Cursor hook check.");
+  }
+  return errors;
+}
 const canonicalCursorDockerfile = `FROM node:24.13.0-bookworm
 
 RUN apt-get update \\
@@ -455,6 +505,10 @@ export async function validateRepository(root = defaultRoot) {
   const nodeVersion = (await readFile(path.join(root, ".node-version"), "utf8")).trim();
   const nvmVersion = (await readFile(path.join(root, ".nvmrc"), "utf8")).trim();
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  errors.push(...validateCursorHookPolicy({
+    hooksConfig: JSON.parse(await readFile(path.join(root, ".cursor", "hooks.json"), "utf8")),
+    packageJson,
+  }));
   errors.push(...validateCursorEnvironmentPolicy({
     environmentConfig: JSON.parse(await readFile(path.join(root, ".cursor", "environment.json"), "utf8")),
     dockerfile: await readFile(path.join(root, ".cursor", "Dockerfile"), "utf8"),

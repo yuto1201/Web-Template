@@ -429,6 +429,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   if (command === "request-merge") {
+    const executionSurface = required(options, "surface");
     printJson(await createMergeOperationRequest(
       root,
       positiveInteger(options, "issue"),
@@ -436,7 +437,13 @@ export async function runCli(argv = process.argv.slice(2)) {
       {
         operatorLabel: required(options, "operator-label"),
         executionRole: required(options, "execution-role"),
-        executionSurface: required(options, "surface"),
+        executionSurface,
+        ...(executionSurface === "cursor-cloud" ? {
+          surfaceContext: {
+            runId: required(options, "run-id"),
+            activationEvidenceRef: required(options, "activation-evidence-ref"),
+          },
+        } : {}),
       },
     ));
     return;

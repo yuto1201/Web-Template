@@ -18,12 +18,12 @@ export async function runCli(argv = process.argv.slice(2)) {
   const requestPath = options.request;
   const modelFamily = options["model-family"];
   if (!requestPath) throw new Error("Missing --request.");
-  if (!modelFamily || !["gpt", "claude"].includes(modelFamily)) throw new Error("Missing or invalid --model-family gpt|claude.");
+  if (!modelFamily || !["gpt", "claude", "cursor", "xai"].includes(modelFamily)) throw new Error("Missing or invalid --model-family gpt|claude|cursor|xai.");
   const result = await executeRegisteredProviderOperation({
     service: "github",
     root,
     requestPath,
-    modelFamily: /** @type {"gpt" | "claude"} */ (modelFamily),
+    modelFamily: /** @type {"gpt" | "claude" | "cursor" | "xai"} */ (modelFamily),
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

@@ -8,7 +8,9 @@ Claude acting in implementer and external-operator roles has the same account-bo
 | --- | --- | --- |
 | `operatorLabel` | `claude` or `codex`, identifying the active development surface | Audit metadata; grants no authority |
 | `executionRole` | `implementer`, `external-operator`, `change-evaluator`, or `security-auditor` | Only the first two may request external operations |
-| `modelFamily` | `gpt` or `claude` | Selects cross-model review independence; grants no operator authority |
+| `executionSurface` | `codex-local`, `claude-local`, or `cursor-cloud` | Binds development provenance and Cursor activation; grants no provider authority |
+| `providerSurface` | Fixed authenticated transport such as `github-cli` | Must match the registered guarded provider client |
+| Operation `modelFamily` | `gpt`, `claude`, `cursor`, or `xai`, mapped from the observed primary family | Review/evidence metadata; grants no operator authority |
 | Account identity | Provider-derived stable account fields | Must match protected-main authority |
 | Service mode | Repository policy for the provider | Determines whether the requested purpose is eligible |
 | Exact target | Repository, project, zone/hostname, or workspace/team/object | Must match the frozen Issue authorization and live observation |
@@ -31,14 +33,14 @@ Email identity is normalized and compared locally by SHA-256 fingerprint. Commit
 
 The Issue contract schema v2 records the protected-main authority commit and digest plus strict `externalAuthorizations`. Each authorization binds service, operation, purpose code and text, account and target references, environment, operation-specific constraints, and whether authoritative exact-Head review is required. Registered examples include repository/branch/PR/Head for GitHub, project ref and migration digests for Supabase, project/environment/commit for Vercel, and zone/hostname/record/routing source for Cloudflare. Linear has no authorization shape because no Linear operation is registered.
 
-An operator request declares only its operator label, eligible execution role and surface, authorization reference, intent, reversibility, recovery strategy, and exact operation inputs. It cannot inject a free-form account or target, token, approval claim, or evidence. Linear has no request constraint because no Linear operation is registered. For a merge request, generate every required field from the gated Issue evidence and then validate it:
+An operator request declares only its operator label, eligible execution role and development surface, fixed provider surface, authorization reference, intent, reversibility, recovery strategy, and exact operation inputs. It cannot inject a free-form account or target, token, approval claim, or evidence. Linear has no request constraint because no Linear operation is registered. For a merge request, generate every required field from the gated Issue evidence and then validate it:
 
 ```bash
-npm run workflow -- request-merge --issue 33 --pr-number 123 --operator-label codex --execution-role external-operator --surface codex-cli
+npm run workflow -- request-merge --issue 33 --pr-number 123 --operator-label codex --execution-role external-operator --surface codex-local
 npm run workflow -- validate-request --file .artifacts/ops-requests/issue-33-github-merge-pr-1.json
 ```
 
-The request generator supplies `intent`, `reversibility`, `recovery`, repository, PR number, reviewed Head, and squash method. Replace the example Issue, PR, operator label, and surface with the active run; do not hand-author provider observations.
+The request generator supplies `intent`, `reversibility`, `recovery`, repository, PR number, protected base branch `main`, reviewed Head, squash method, and the fixed provider surface `github-cli`. Replace the example Issue, PR, operator label, and development surface with the active run; use `codex-local`, `claude-local`, or a run-bound `cursor-cloud` request as appropriate. Do not hand-author provider observations.
 
 ## Request, receipt, claim, and result
 
