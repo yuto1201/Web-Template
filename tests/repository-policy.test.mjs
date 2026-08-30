@@ -12,6 +12,30 @@ import {
 import { evaluateGitHubReviewGate } from "../tools/github-review-gate.mjs";
 
 describe("repository policy", () => {
+  it("routes stable required CI contexts from a trusted-base classifier with full fallback", async () => {
+    const ci = await readFile(path.resolve(".github/workflows/ci.yml"), "utf8");
+    for (const name of ["Repository checks", "Database and Auth policy checks", "macOS onboarding and browser checks"]) {
+      expect(ci).toContain(`name: ${name}`);
+    }
+    expect(ci).toMatch(/^  classify:\s*$/mu);
+    expect(ci).toContain("path: trusted");
+    expect(ci).toContain("path: candidate");
+    expect(ci).toContain("github.event.pull_request.base.sha");
+    expect(ci).toContain("github.event.pull_request.head.sha");
+    expect(ci).toContain("trusted/tools/ci-change-plan.mjs");
+    for (const fallback of ["risk=high", "repository=full", "database_auth=true", "browser=true", "macos=true", "template=true"]) {
+      expect(ci).toContain(fallback);
+    }
+    expect(ci).toMatch(/if:\s*always\(\)/u);
+    expect(ci).toContain("needs.classify.result != 'success'");
+    for (const output of ["database_auth", "browser", "macos", "template"]) {
+      expect(ci).toContain(`needs.classify.outputs.${output} != 'false'`);
+    }
+    expect(ci.match(/npm run deployment:lint/gu)).toBeNull();
+    expect(ci.match(/npm run domain:lint/gu)).toBeNull();
+    expect(ci).not.toContain("pull_request_target");
+  });
+
   it("requires every supported Cursor hook to remain finite and fail closed", async () => {
     const hooksConfig = JSON.parse(await readFile(path.resolve(".cursor/hooks.json"), "utf8"));
     const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));

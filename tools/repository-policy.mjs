@@ -531,7 +531,7 @@ export async function validateRepository(root = defaultRoot) {
     errors.push("package.json must expose the cross-platform workstation doctor.");
   }
   const ciWorkflow = await readFile(path.join(root, ".github", "workflows", "ci.yml"), "utf8");
-  if (!ciWorkflow.includes("runs-on: macos-latest") || !ciWorkflow.includes("npm run workstation:doctor")) {
+  if (!/runs-on:\s*(?:macos-latest|\$\{\{[^\n]*'macos-latest')/u.test(ciWorkflow) || !ciWorkflow.includes("npm run workstation:doctor")) {
     errors.push("CI must verify the workstation contract on a real macOS runner.");
   }
   const reviewWorkflow = await readFile(path.join(root, ".github", "workflows", "review-gate.yml"), "utf8");
