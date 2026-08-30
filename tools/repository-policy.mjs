@@ -70,10 +70,25 @@ const jointActorSpanPatterns = [
 ];
 const reviewerActorSource = String.raw`(?:claude|codex)(?:['’]s)?\s+(?:reviewers?|evaluators?|auditors?)`;
 const reviewerRestrictionSource = String.raw`(?:cannot|can['’]t|may\s+not|must\s+not|mustn['’]t|shall\s+not)`;
+const reviewerAuthoredWorkSource = String.raw`(?:claude|codex)[- ]authored\s+(?:changes?|implementations?)`;
+const reviewerWorkSource = String.raw`(?:${reviewerAuthoredWorkSource}|changes?|implementations?)`;
+const reviewerRestrictedActionSource = `(?:${[
+  String.raw`approve(?:\s+${reviewerWorkSource})?`,
+  String.raw`deploy(?:\s+(?:deployments?|production))?`,
+  String.raw`edit(?:\s+(?:repository\s+files?|${reviewerWorkSource}))?`,
+  String.raw`merge(?:\s+(?:pull\s+requests?|${reviewerWorkSource}))?`,
+  String.raw`modify(?:\s+(?:repository\s+files?|${reviewerWorkSource}))?`,
+  String.raw`mutate(?:\s+(?:external\s+systems?|repository\s+(?:files?|state)|${reviewerWorkSource}))?`,
+  String.raw`run(?:\s+(?:commands?|shell\s+commands?))?`,
+  String.raw`self[- ]approve(?:\s+${reviewerWorkSource})?`,
+  String.raw`use(?:\s+(?:external\s+tools?|provider\s+apis?|the\s+shell))?`,
+  String.raw`write(?:\s+(?:repository\s+files?|${reviewerWorkSource}))?`,
+].join("|")})`;
+const reviewerOnlyActionSource = String.raw`(?:audit|evaluate|review)(?:\s+${reviewerWorkSource})?`;
 const reviewerRoleStatementPatterns = [
   new RegExp(String.raw`\b${reviewerActorSource}\s+(?:(?:remain(?:s)?|is|are)|must\s+remain)\s+read[- ]only\b`, "giu"),
-  new RegExp(String.raw`\b${reviewerActorSource}\s+${reviewerRestrictionSource}\s+(?:approve|deploy|edit|merge|modify|mutate|run|self[- ]approve|use|write)\b(?:\s+(?!(?:although|but|whereas|while)\b)[A-Za-z0-9'’_-]+){0,6}`, "giu"),
-  new RegExp(String.raw`\b${reviewerActorSource}\s+may\s+only\s+(?:audit|evaluate|review)\b(?:\s+(?!(?:although|but|whereas|while)\b)[A-Za-z0-9'’_-]+){0,6}`, "giu"),
+  new RegExp(String.raw`\b${reviewerActorSource}\s+${reviewerRestrictionSource}\s+${reviewerRestrictedActionSource}\b`, "giu"),
+  new RegExp(String.raw`\b${reviewerActorSource}\s+may\s+only\s+${reviewerOnlyActionSource}\b`, "giu"),
 ];
 const reviewerActorSpanPattern = /\b(?:claude|codex)(?:['’]s)?\s+(?:reviewers?|evaluators?|auditors?)\b/giu;
 const actorRestrictionPattern = /\b(?:alone|barred|belongs?\s+to|cannot|can(?:['’]t)|delegat(?:e|es|ed|ing|ion|ions)|den(?:y|ies|ied)|disallow(?:ed|s)?|exclusive|exclusively|forbid(?:den|s)?|hand[- ]?off|limited\s+to|may\s+not|must\s+not|mustn(?:['’]t)|not\s+allowed|only|owned|owner|ownership|owns|prohibit(?:ed|s|ion)?|remains?\s+(?:an?\s+)?(?:claude|codex)\s+(?:operation|operator|work)|reserved|restricted|shall\s+not|sole|stays?\s+with)\b/iu;

@@ -98,6 +98,31 @@ describe("repository policy", () => {
   });
 
   it.each([
+    "Claude reviewer cannot approve changes and Codex cannot merge pull requests.",
+    "Codex reviewer cannot approve changes and Claude cannot merge pull requests.",
+    "Claude auditor may not edit repository files and Codex cannot use external tools.",
+    "Codex auditor may not edit repository files and Claude cannot use external tools.",
+    "Claude reviewer may only review Codex-authored implementations and Codex cannot merge pull requests.",
+    "Codex reviewer may only review Claude-authored implementations and Claude cannot merge pull requests.",
+    "Claude reviewer cannot approve changes or Codex cannot merge pull requests.",
+    "Codex reviewer cannot approve changes or Claude cannot merge pull requests.",
+    "Claude reviewer cannot approve changes yet Codex cannot merge pull requests.",
+    "Codex reviewer cannot approve changes yet Claude cannot merge pull requests.",
+    "Claude reviewer cannot approve changes then Codex cannot merge pull requests.",
+    "Codex reviewer cannot approve changes then Claude cannot merge pull requests.",
+    "Claude reviewer cannot approve changes but Codex cannot merge pull requests.",
+    "Codex reviewer cannot approve changes but Claude cannot merge pull requests.",
+    "Claude reviewer cannot approve changes while Codex cannot merge pull requests.",
+    "Codex reviewer cannot approve changes while Claude cannot merge pull requests.",
+    "Claude reviewer cannot approve changes although Codex cannot merge pull requests.",
+    "Codex reviewer cannot approve changes although Claude cannot merge pull requests.",
+    "Claude reviewer cannot approve changes whereas Codex cannot merge pull requests.",
+    "Codex reviewer cannot approve changes whereas Claude cannot merge pull requests.",
+  ])("detects a no-punctuation actor restriction after reviewer coordination: %s", (content) => {
+    expect(detectActorAsymmetry(content)).toMatch(/actor-specific/iu);
+  });
+
+  it.each([
     "Claude acting in implementer and external-operator roles has the same account-bound authority as Codex.",
     "Claude and Codex reviewers remain read-only.",
     "Claude reviews Codex implementations, and Codex reviews Claude implementations to preserve cross-model review independence.",
@@ -113,6 +138,8 @@ describe("repository policy", () => {
     "Claude reviewer and Codex auditor remain read-only.",
     "Claude reviewer must not self-approve changes.",
     "Codex auditor cannot approve Codex-authored changes.",
+    "Claude reviewer cannot approve changes.",
+    "Codex auditor may not edit repository files.",
     "Claude reviewer may only review Codex-authored changes.",
     "Codex evaluator may only evaluate Claude-authored implementations.",
   ])("allows shared authority and read-only independent review policy: %s", (content) => {
@@ -126,6 +153,12 @@ describe("repository policy", () => {
     expect(hasCanonicalOperatorParityStatement(
       "Claude and Codex may both perform some work.",
     )).toBe(false);
+    expect(detectActorAsymmetry(
+      "Claude has the same account-bound authority as Codex and Codex cannot merge pull requests.",
+    )).toMatch(/actor-specific/iu);
+    expect(detectActorAsymmetry(
+      "Claude has the same account-bound authority as Codex and Claude cannot use external tools.",
+    )).toMatch(/actor-specific/iu);
 
     expect(operatorParityErrors({
       claudeSettings: { $schema: "https://json.schemastore.org/claude-code-settings.json" },
