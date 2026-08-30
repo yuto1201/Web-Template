@@ -13,7 +13,7 @@ Cursor Cloud is a third execution surface for this template. It lets the owner c
 This mode is additive. It does not weaken or replace the existing local modes:
 
 - `codex-local` remains a primary developer and personal-provider operator.
-- `claude-local` remains a guarded implementation or evaluation partner and cannot operate personal external services.
+- `claude-local` has the same account-bound implementation and provider authority as `codex-local`; evaluator and auditor roles remain read-only on every surface.
 - `cursor-cloud` is an independently configured cloud execution surface that may implement, verify, review through subagents, deliver GitHub changes, and run Issue-allowlisted provider operations.
 
 Cursor is an execution surface and orchestration product, not a model family. The workflow must represent where work ran separately from which model served each parent or subagent turn.
@@ -32,7 +32,7 @@ Cursor is an execution surface and orchestration product, not a model family. Th
 - Treating the Cursor product name as proof of a model provider.
 - Treating a configured model ID as proof of the model that actually served a turn.
 - Claiming that two subagents inside Cursor are independent platforms or authenticated organizations.
-- Giving local Claude additional shell, network, credential, or provider authority.
+- Changing the shared account-bound authority that already gives local Claude and Codex the same implementation and provider rights.
 - Supporting arbitrary providers beyond GitHub, Supabase, Vercel, and Cloudflare.
 - Storing personal provider credentials in the repository or a reusable environment image.
 
@@ -125,7 +125,7 @@ Machine-readable authority is surface-specific:
 | Surface | Local files | GitHub | Supabase | Vercel | Cloudflare |
 | --- | --- | --- | --- | --- | --- |
 | `codex-local` | allowed | allowed after preflight | allowed after preflight | allowed after preflight | allowed after preflight |
-| `claude-local` | assigned application files only | denied | denied | denied | denied |
+| `claude-local` | allowed | allowed after preflight | allowed after preflight | allowed after preflight | allowed after preflight |
 | `cursor-cloud` | allowed in its cloud branch | allowed after preflight | allowed after preflight | allowed after preflight | allowed after preflight |
 
 Cursor uses the owner's authenticated connectors or plugins. Tool availability is not evidence of the authenticated identity. Before each external write, Cursor records:

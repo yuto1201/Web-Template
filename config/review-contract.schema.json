@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Surface-aware review result",
+  "title": "Surface-aware account-bound review result",
   "type": "object",
   "additionalProperties": false,
   "allOf": [
@@ -13,52 +13,19 @@
       "if": { "properties": { "verdict": { "const": "approved" } }, "required": ["verdict"] },
       "then": {
         "properties": {
-          "primaryModel": {
-            "properties": {
-              "family": { "not": { "const": "unknown" } },
-              "fallback": { "const": false }
-            }
-          },
-          "reviewerModel": {
-            "properties": {
-              "family": { "not": { "const": "unknown" } },
-              "fallback": { "const": false }
-            }
-          },
-          "findings": {
-            "items": {
-              "properties": {
-                "severity": { "not": { "enum": ["critical", "high"] } },
-                "blocking": { "const": false }
-              }
-            }
-          }
+          "primaryModel": { "properties": { "family": { "not": { "const": "unknown" } }, "fallback": { "const": false } } },
+          "reviewerModel": { "properties": { "family": { "not": { "const": "unknown" } }, "fallback": { "const": false } } },
+          "findings": { "items": { "properties": { "severity": { "not": { "enum": ["critical", "high"] } }, "blocking": { "const": false } } } }
         }
       }
     }
   ],
-  "required": [
-    "schemaVersion",
-    "issue",
-    "executionSurface",
-    "primaryModel",
-    "reviewerModel",
-    "risk",
-    "headSha",
-    "verifySha",
-    "verifyDigest",
-    "diffDigest",
-    "contractDigest",
-    "verdict",
-    "contracts",
-    "findings",
-    "acceptanceAssessment",
-    "reviewedAt"
-  ],
+  "required": ["schemaVersion", "issue", "executionSurface", "primaryOperatorLabel", "primaryModel", "reviewerModel", "risk", "headSha", "verifySha", "verifyDigest", "diffDigest", "contractDigest", "verdict", "contracts", "findings", "acceptanceAssessment", "reviewedAt"],
   "properties": {
     "schemaVersion": { "const": 2 },
     "issue": { "type": "integer", "minimum": 1 },
     "executionSurface": { "enum": ["codex-local", "claude-local", "cursor-cloud"] },
+    "primaryOperatorLabel": { "enum": ["codex", "claude"] },
     "primaryModel": { "$ref": "#/$defs/modelIdentity" },
     "reviewerModel": { "$ref": "#/$defs/modelIdentity" },
     "risk": { "$ref": "#/$defs/risk" },
@@ -68,12 +35,7 @@
     "diffDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "contractDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "verdict": { "enum": ["approved", "changes-requested", "unavailable"] },
-    "contracts": {
-      "type": "array",
-      "minItems": 1,
-      "uniqueItems": true,
-      "items": { "enum": ["change-evaluator", "supabase-auditor"] }
-    },
+    "contracts": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["change-evaluator", "supabase-auditor"] } },
     "findings": {
       "type": "array",
       "items": {
@@ -86,12 +48,7 @@
           "location": { "type": "string", "minLength": 1 },
           "summary": { "type": "string", "minLength": 1 }
         },
-        "allOf": [
-          {
-            "if": { "properties": { "severity": { "enum": ["critical", "high"] } }, "required": ["severity"] },
-            "then": { "properties": { "blocking": { "const": true } } }
-          }
-        ]
+        "allOf": [{ "if": { "properties": { "severity": { "enum": ["critical", "high"] } }, "required": ["severity"] }, "then": { "properties": { "blocking": { "const": true } } } }]
       }
     },
     "acceptanceAssessment": {
@@ -109,7 +66,7 @@
       }
     },
     "reviewedAt": { "type": "string", "format": "date-time" },
-    "unavailableReason": { "type": "string", "enum": ["timeout", "command-missing", "invalid-output"] }
+    "unavailableReason": { "enum": ["timeout", "command-missing", "invalid-output"] }
   },
   "$defs": {
     "modelIdentity": {
@@ -123,15 +80,7 @@
         "fallback": { "type": "boolean" },
         "parameters": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["id", "value"],
-            "properties": {
-              "id": { "type": "string", "minLength": 1 },
-              "value": { "type": "string", "minLength": 1 }
-            }
-          }
+          "items": { "type": "object", "additionalProperties": false, "required": ["id", "value"], "properties": { "id": { "type": "string", "minLength": 1 }, "value": { "type": "string", "minLength": 1 } } }
         }
       }
     },
@@ -139,14 +88,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["level", "reasons"],
-      "properties": {
-        "level": { "enum": ["normal", "high"] },
-        "reasons": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1 }
-        }
-      }
+      "properties": { "level": { "enum": ["normal", "high"] }, "reasons": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } } }
     }
   }
 }

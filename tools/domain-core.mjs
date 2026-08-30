@@ -4,6 +4,8 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { readAuthority } from "./authority-core.mjs";
+import { providerPlaceholders } from "./template-core.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(moduleDirectory, "..");
@@ -44,20 +46,6 @@ const domainConfigurationSchema = z.object({
   if (new Set(paths).size !== paths.length) context.addIssue({ code: "custom", message: "Smoke paths must be unique." });
 });
 
-const ownershipSchema = z.object({
-  schemaVersion: z.literal(1),
-  vercel: z.object({
-    scope: z.string().regex(/^team_[A-Za-z0-9]+$/u),
-    projectId: z.string().regex(/^prj_[A-Za-z0-9]+$/u),
-  }).strict(),
-  cloudflare: z.object({
-    accountId: idSchema,
-    accountName: z.string().min(1),
-    zoneId: idSchema,
-    domains: z.array(hostnameSchema).min(1),
-  }).strict(),
-}).passthrough();
-
 /** @param {string} name @param {any} schema @returns {any} */
 function readCanonicalConfiguration(name, schema) {
   try {
@@ -68,7 +56,7 @@ function readCanonicalConfiguration(name, schema) {
 }
 
 const domainConfiguration = readCanonicalConfiguration("domain.json", domainConfigurationSchema);
-const ownership = readCanonicalConfiguration("ownership.json", ownershipSchema);
+const authority = readAuthority(repositoryRoot);
 
 const targetRecordSchema = z.object({
   id: idSchema.optional(),
@@ -116,7 +104,7 @@ const vercelObservationSchema = z.object({
 }).strict();
 const liveInputSchema = z.object({
   schemaVersion: z.literal(1),
-  source: z.literal("codex-live-inspection"),
+  source: z.literal("operator-live-inspection"),
   cloudflare: cloudflareSnapshotSchema,
   vercel: vercelObservationSchema,
 }).strict();
@@ -231,19 +219,30 @@ function recordBody(record) {
   return { type: record.type, name: record.name, content: record.content, proxied: record.proxied, ttl: record.ttl };
 }
 
+function requireActiveProviderAuthority() {
+  if (
+    authority.accounts.vercel.teamId === providerPlaceholders.vercelScope ||
+    authority.resourceTargets.vercel.projectId === providerPlaceholders.vercelProjectId ||
+    authority.accounts.cloudflare.accountId === providerPlaceholders.cloudflareAccountId ||
+    authority.accounts.cloudflare.accountName === providerPlaceholders.cloudflareAccountName ||
+    authority.resourceTargets.cloudflare.zoneId === providerPlaceholders.cloudflareZoneId
+  ) throw new Error("[ownership] Canonical provider authority is inactive.");
+}
+
 /** @param {z.infer<typeof planSchema>} plan */
 function validatePlanIntegrity(plan) {
+  requireActiveProviderAuthority();
   validateSnapshotClassification(plan.cloudflare);
   if (
     plan.hostname !== domainConfiguration.hostname ||
-    plan.cloudflare.accountId !== ownership.cloudflare.accountId ||
-    plan.cloudflare.accountName !== ownership.cloudflare.accountName ||
-    plan.cloudflare.zoneId !== ownership.cloudflare.zoneId ||
+    plan.cloudflare.accountId !== authority.accounts.cloudflare.accountId ||
+    plan.cloudflare.accountName !== authority.accounts.cloudflare.accountName ||
+    plan.cloudflare.zoneId !== authority.resourceTargets.cloudflare.zoneId ||
     plan.cloudflare.zoneName !== domainConfiguration.zoneName ||
-    plan.vercel.teamId !== ownership.vercel.scope ||
-    plan.vercel.projectId !== ownership.vercel.projectId ||
+    plan.vercel.teamId !== authority.accounts.vercel.teamId ||
+    plan.vercel.projectId !== authority.resourceTargets.vercel.projectId ||
     plan.vercel.hostname !== domainConfiguration.hostname ||
-    !ownership.cloudflare.domains.includes(plan.hostname)
+    !authority.resourceTargets.cloudflare.domains.includes(plan.hostname)
   ) throw new Error("[plan-integrity] Provider ownership does not match canonical configuration.");
   if (!domainConfiguration.allowedRecordTypes.includes(plan.vercel.routing.type)) {
     throw new Error("[plan-integrity] Routing type is outside the canonical allowlist.");
@@ -280,20 +279,21 @@ function validatePlanIntegrity(plan) {
 /** @param {unknown} value @param {Date} [now] */
 export function createDomainPlan(value, now = new Date()) {
   const input = liveInputSchema.parse(value);
+  requireActiveProviderAuthority();
   validateObservationTime("cloudflare-observation", input.cloudflare.observedAt, now, 300_000);
   validateObservationTime("vercel-observation", input.vercel.observedAt, now, 300_000);
   validateSnapshotClassification(input.cloudflare);
   if (
-    input.cloudflare.accountId !== ownership.cloudflare.accountId ||
-    input.cloudflare.accountName !== ownership.cloudflare.accountName ||
-    input.cloudflare.zoneId !== ownership.cloudflare.zoneId ||
+    input.cloudflare.accountId !== authority.accounts.cloudflare.accountId ||
+    input.cloudflare.accountName !== authority.accounts.cloudflare.accountName ||
+    input.cloudflare.zoneId !== authority.resourceTargets.cloudflare.zoneId ||
     input.cloudflare.zoneName !== domainConfiguration.zoneName
   ) throw new Error("[ownership] Cloudflare account or zone does not match canonical ownership.");
   if (
-    input.vercel.teamId !== ownership.vercel.scope ||
-    input.vercel.projectId !== ownership.vercel.projectId ||
+    input.vercel.teamId !== authority.accounts.vercel.teamId ||
+    input.vercel.projectId !== authority.resourceTargets.vercel.projectId ||
     input.vercel.hostname !== domainConfiguration.hostname ||
-    !ownership.cloudflare.domains.includes(input.vercel.hostname)
+    !authority.resourceTargets.cloudflare.domains.includes(input.vercel.hostname)
   ) throw new Error("[ownership] Vercel project or domain does not match canonical ownership.");
   if (!domainConfiguration.allowedRecordTypes.includes(input.vercel.routing.type)) {
     throw new Error("[vercel-routing] Vercel returned a record type outside the reviewed allowlist.");
@@ -455,7 +455,7 @@ export function verifyDomainRelease(value, planValue, dnsValue, now = new Date()
 }
 
 export function validateDomainPolicy() {
-  if (!ownership.cloudflare.domains.includes(domainConfiguration.hostname) ||
+  if (!authority.resourceTargets.cloudflare.domains.includes(domainConfiguration.hostname) ||
     !domainConfiguration.hostname.endsWith(`.${domainConfiguration.zoneName}`)) {
     throw new Error("[domain-policy] Canonical ownership and domain configuration do not agree.");
   }

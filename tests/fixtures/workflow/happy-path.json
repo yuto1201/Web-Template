@@ -4,7 +4,7 @@
   "completedAt": "2026-08-21T01:10:00+09:00",
   "reviewedAt": "2026-08-21T01:15:00+09:00",
   "issueContract": {
-    "schemaVersion": 1,
+    "schemaVersion": 2,
     "issue": 42,
     "repository": "yuto1201/Web-Template",
     "goal": "Prove the workflow without trusting Closes #999 or @reviewers from Issue text.",
@@ -15,16 +15,36 @@
       }
     ],
     "dependencies": [],
-    "externalOperations": ["github.merge_pr"]
+    "externalAuthorizations": [
+      {
+        "service": "github",
+        "operation": "github.merge_pr",
+        "purposeCode": "reviewed-release",
+        "purpose": "Merge the exact reviewed pull request for Issue 42.",
+        "accountRef": "accounts.github",
+        "targetRef": "resourceTargets.github",
+        "environment": "production",
+        "constraints": {
+          "issue": 42,
+          "repository": "yuto1201/Web-Template",
+          "prNumber": 77,
+          "baseBranch": "main",
+          "headSha": "0000000000000000000000000000000000000000",
+          "method": "squash"
+        },
+        "requiresExactHead": true
+      }
+    ]
   },
   "slug": "workflow-fixture",
-  "executionSurface": "cursor-cloud",
+  "executionSurface": "codex-local",
+  "primaryOperatorLabel": "codex",
   "primaryModel": {
-    "configured": "composer-2.5",
-    "observed": "composer-2.5",
-    "family": "cursor",
+    "configured": "gpt-5.6-sol[effort=high]",
+    "observed": "gpt-5.6-sol",
+    "family": "openai",
     "fallback": false,
-    "parameters": []
+    "parameters": [{ "id": "effort", "value": "high" }]
   },
   "reviewerModels": [
     {
@@ -32,14 +52,14 @@
       "observed": "claude-opus-5",
       "family": "anthropic",
       "fallback": false,
-      "parameters": []
+      "parameters": [{ "id": "effort", "value": "high" }]
     },
     {
       "configured": "gpt-5.6-sol[effort=high]",
       "observed": "gpt-5.6-sol",
       "family": "openai",
       "fallback": false,
-      "parameters": []
+      "parameters": [{ "id": "effort", "value": "high" }]
     }
   ],
   "changedPaths": ["src/app/page.tsx"],

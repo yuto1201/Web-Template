@@ -10,7 +10,7 @@ const trace = [
 
 const sequence = [
   ["Define", "Replace the product brief, acceptance criteria, and ownership placeholders."],
-  ["Connect", "Create personal provider resources only after Codex verifies the active account."],
+  ["Connect", "Use provider resources only after the guarded operator verifies the active account and exact target."],
   ["Prove", "Keep denied cases, browser behavior, and build output inside the same review packet."],
   ["Release", "Promote one reviewed commit through preview, production, then DNS."],
 ];
@@ -69,8 +69,9 @@ export default function Home() {
           <dl>
             <div><dt>Public</dt><dd>Publishable browser configuration only</dd></div>
             <div><dt>Server</dt><dd>Secrets stay outside the client module graph</dd></div>
-            <div><dt>External</dt><dd>Authenticated provider work stays with Codex</dd></div>
+            <div><dt>External</dt><dd>Authenticated provider operations use account-bound authority.</dd></div>
           </dl>
+          <p>Claude and Codex can both implement and operate; evaluator and auditor roles remain read-only.</p>
         </section>
 
         <section className="sequence" id="launch-sequence" aria-labelledby="sequence-title">

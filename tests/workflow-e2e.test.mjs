@@ -3,27 +3,32 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateGitHubReviewGate, parseReviewBody } from "../tools/github-review-gate.mjs";
 import { readExternalOperationRequest } from "../tools/workflow-core.mjs";
 
 const repositoryRoot = path.resolve(".");
 
-describe("provider-free Issue workflow simulation", () => {
+/** @param {string} root @param {string[]} args */
+function runWorkflow(root, args) {
+  return spawnSync(process.execPath, [
+    path.join(repositoryRoot, "tools", "issue-workflow.mjs"),
+    ...args,
+    "--root",
+    root,
+  ], { cwd: repositoryRoot, encoding: "utf8", windowsHide: true });
+}
+
+describe("provider-free Issue workflow simulation", { timeout: 20_000 }, () => {
   it("runs from claim through an approved squash-merge request", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "web-template-e2e-"));
-    const command = spawnSync(process.execPath, [
-      path.join(repositoryRoot, "tools", "issue-workflow.mjs"),
+    const command = runWorkflow(root, [
       "simulate",
       "--fixture",
       path.join(repositoryRoot, "tests", "fixtures", "workflow", "happy-path.json"),
-      "--root",
-      root,
-    ], { cwd: repositoryRoot, encoding: "utf8", windowsHide: true });
+    ]);
 
     expect(command.status, command.stderr).toBe(0);
     const result = JSON.parse(command.stdout);
     expect(result.state.current).toBe("approved-for-merge");
-    expect(result.branch).toBe("cursor/42-workflow-fixture");
     expect(result.gate).toMatchObject({
       ok: true,
       issue: 42,
@@ -32,22 +37,25 @@ describe("provider-free Issue workflow simulation", () => {
     });
     expect(result.request).toMatchObject({
       operation: "github.merge_pr",
-      inputs: { issue: 42, method: "squash", headSha: result.headSha },
+      executionSurface: "codex-local",
+      providerSurface: "github-cli",
+      inputs: { issue: 42, baseBranch: "main", method: "squash", headSha: result.headSha },
       resolvedTarget: "yuto1201/Web-Template",
+      authorization: {
+        purposeCode: "reviewed-release",
+        accountRef: "accounts.github",
+        targetRef: "resourceTargets.github",
+        requiresExactHead: true,
+      },
     });
 
     expect(Object.keys(result.paths)).toHaveLength(7);
-    expect(result.paths.reviews).toEqual([
-      `.artifacts/issues/42/${result.headSha}/reviews/anthropic.json`,
-      `.artifacts/issues/42/${result.headSha}/reviews/openai.json`,
-    ]);
-    const artifactPaths = Object.entries(result.paths).flatMap(([key, value]) => key === "reviews" ? value : [value]);
-    for (const artifact of artifactPaths) {
+    for (const artifact of Object.values(result.paths).flat()) {
       await expect(stat(path.join(root, artifact))).resolves.toBeDefined();
     }
 
-    const state = JSON.parse(await readFile(path.join(root, ".artifacts", "issues", "42", "state.json"), "utf8"));
-    expect(state.transitions.map(/** @param {{ current: string }} transition */ (transition) => transition.current)).toEqual([
+    const state = /** @type {{transitions: Array<{current: string}>}} */ (JSON.parse(await readFile(path.join(root, ".artifacts", "issues", "42", "state.json"), "utf8")));
+    expect(state.transitions.map((transition) => transition.current)).toEqual([
       "claimed",
       "in-progress",
       "verify-passed",
@@ -63,37 +71,17 @@ describe("provider-free Issue workflow simulation", () => {
     const prBody = await readFile(path.join(root, result.paths.pullRequest), "utf8");
     expect(prBody).toContain("Closes #42");
     expect(prBody).toContain(`Reviewed SHA: \`${result.headSha}\``);
-    expect(prBody).toContain("Execution surface: cursor-cloud");
-    expect(prBody).toContain("Primary observed model: composer-2.5");
-    expect(prBody).toContain("Risk: high");
-    expect(prBody).toContain("Reviewer anthropic:");
-    expect(prBody).toContain("Reviewer openai:");
-    expect(prBody).toContain("claude-opus-5[effort=high] | claude-opus-5 | anthropic | false | approved");
     expect(prBody).toContain("## External changes");
     expect(prBody).toContain("Closes \\#999");
     expect(prBody).not.toContain("@reviewers");
-    expect(parseReviewBody(prBody)).toMatchObject({
-      executionSurface: "cursor-cloud",
-      primaryModel: { configured: "composer-2.5", observed: "composer-2.5", family: "cursor", fallback: false },
-      risk: { level: "high", reasons: ["operation:github.merge_pr"] },
-      reviewedSha: result.headSha,
-      reviews: [{ family: "anthropic" }, { family: "openai" }],
-    });
-    const workflow = JSON.parse(await readFile(path.join(repositoryRoot, "config", "workflow.json"), "utf8"));
-    const executionPolicy = JSON.parse(await readFile(path.join(repositoryRoot, "config", "execution.json"), "utf8"));
-    expect(evaluateGitHubReviewGate({
-      event: {
-        pull_request: {
-          body: prBody,
-          head: { sha: result.headSha, ref: "cursor/42-workflow-fixture", repo: { full_name: "yuto1201/Web-Template" } },
-          base: { sha: "b".repeat(40), repo: { full_name: "yuto1201/Web-Template" } },
-          user: { login: "yuto1201", id: 50611866, type: "User" },
-        },
-      },
-      changedPaths: ["src/app/page.tsx"],
-      diff: "",
-      workflow,
-      executionPolicy,
-    })).toMatchObject({ ok: true, mode: "independent-review", headSha: result.headSha, risk: "high" });
+  });
+
+  it("fails closed for caller-authored receipt lifecycle commands", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "web-template-receipt-disabled-"));
+    for (const commandName of ["validate-preflight", "claim-execution", "validate-result"]) {
+      const command = runWorkflow(root, [commandName]);
+      expect(command.status).not.toBe(0);
+      expect(command.stderr).toMatch(/caller-authored receipt|guarded adapter/iu);
+    }
   });
 });

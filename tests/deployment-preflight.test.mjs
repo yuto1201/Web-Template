@@ -1,12 +1,22 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  canonicalVercelOwnership,
-  DeploymentCheckpointError,
-  validateDeploymentPreflight,
-} from "../tools/deployment-core.mjs";
+import { afterAll, describe, expect, it } from "vitest";
+import { providerPlaceholders } from "../tools/template-core.mjs";
+import { activeProviderAuthority, providerCoreModule } from "./helpers/provider-module.mjs";
+
+const canonicalAuthority = activeProviderAuthority();
+const activeFixture = await providerCoreModule({
+  authority: canonicalAuthority,
+  core: "deployment-core.mjs",
+  configuration: "deployment.json",
+  prefix: "deployment-active-",
+});
+const { canonicalVercelOwnership, DeploymentCheckpointError, validateDeploymentPreflight } = activeFixture.module;
+
+afterAll(async () => {
+  await rm(activeFixture.root, { recursive: true, force: true });
+});
 
 const requiredKeys = [
   "APP_ORIGIN",
@@ -33,15 +43,33 @@ async function fixture({ link = true } = {}) {
   if (link) {
     await mkdir(path.join(root, ".vercel"), { recursive: true });
     await writeFile(path.join(root, ".vercel", "project.json"), JSON.stringify({
-      orgId: canonicalVercelOwnership.scope,
-      projectId: canonicalVercelOwnership.projectId,
+      orgId: canonicalAuthority.accounts.vercel.teamId,
+      projectId: canonicalAuthority.resourceTargets.vercel.projectId,
       settings: { framework: "nextjs" },
     }), "utf8");
   }
   return root;
 }
 
+async function placeholderModule() {
+  const placeholderAuthority = structuredClone(canonicalAuthority);
+  placeholderAuthority.accounts.vercel.teamId = providerPlaceholders.vercelScope;
+  placeholderAuthority.resourceTargets.vercel.projectId = providerPlaceholders.vercelProjectId;
+  return providerCoreModule({
+    authority: placeholderAuthority,
+    core: "deployment-core.mjs",
+    configuration: "deployment.json",
+    prefix: "deployment-placeholder-",
+  });
+}
+
 describe("Vercel deployment preflight", () => {
+  it("keeps the compatibility export aligned with canonical authority paths", () => {
+    expect(canonicalVercelOwnership).toEqual({
+      scope: canonicalAuthority.accounts.vercel.teamId,
+      projectId: canonicalAuthority.resourceTargets.vercel.projectId,
+    });
+  });
   it("accepts exact linkage and names-only environment coverage", async () => {
     const root = await fixture();
     await expect(validateDeploymentPreflight(snapshot(), root)).resolves.toMatchObject({
@@ -61,6 +89,20 @@ describe("Vercel deployment preflight", () => {
       name: "DeploymentCheckpointError",
       checkpoint: "link",
     });
+  });
+
+  it("rejects parser-valid inactive Vercel placeholder authority", async () => {
+    const fixture = await placeholderModule();
+    try {
+      await mkdir(path.join(fixture.root, ".vercel"));
+      await writeFile(path.join(fixture.root, ".vercel", "project.json"), JSON.stringify({
+        orgId: providerPlaceholders.vercelScope,
+        projectId: providerPlaceholders.vercelProjectId,
+      }), "utf8");
+      await expect(fixture.module.validateDeploymentPreflight(snapshot(), fixture.root)).rejects.toMatchObject({ checkpoint: "ownership" });
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("blocks missing environment keys without accepting values", async () => {

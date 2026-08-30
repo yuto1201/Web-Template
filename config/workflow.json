@@ -3,7 +3,6 @@
   "executionPolicy": "config/execution.json",
   "artifactRoot": ".artifacts",
   "baseRef": "main",
-  "reviewerMap": { "codex": "claude", "claude": "codex" },
   "githubReviewGate": {
     "checkName": "Exact Head review policy",
     "dependabot": {
@@ -36,6 +35,7 @@
     "superseded": []
   },
   "privilegedPathRules": [
+    { "type": "prefix", "path": ".cursor/", "contracts": ["change-evaluator"] },
     { "type": "prefix", "path": ".claude/", "contracts": ["change-evaluator"] },
     { "type": "prefix", "path": ".codex/", "contracts": ["change-evaluator"] },
     { "type": "prefix", "path": ".github/", "contracts": ["change-evaluator"] },

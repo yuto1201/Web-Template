@@ -44,17 +44,12 @@ Decisions are append-only. To change one, add a new entry that explicitly supers
 - Decision: treat this repository as a guarded golden template rather than a minimal code snippet. Initialization changes app identity, ports, URLs, and provider ownership placeholders, but retains the tested Auth, RLS, deployment, DNS, review, and secret-boundary checks.
 - Reason: the generated application stays product-neutral while keeping the failure controls that make reuse safe. Local readiness and optional live provider activation are reported separately so repository size is not confused with mandatory cloud provisioning.
 
-## D-007: Activated Cursor Cloud may operate owner providers
+## D-007: Account-bound operator authority replaces actor-specific authority
 
 - Status: accepted
-- Date: 2026-08-22
-- Supersedes: D-003 only for an activated, owner-authenticated `cursor-cloud` execution surface. `codex-local` authority and `claude-local` denial remain unchanged.
-- Decision: authorize Cursor Cloud provider reads and writes only after live activation proves the owner's connector identity, exact configured target, actual parent and reviewer models, read-only subagent/provider-tool denial, and a real base-gated Cursor pull request. Each write still requires a frozen Issue operation, reversible intent, redacted result, and independently queried post-state. Build readiness or connector availability alone grants no authority.
-- Reason: the owner can use a durable cloud execution surface without copying workstation credentials, while the activation and per-operation gates retain the existing personal-account boundary.
-
-## D-008: Review evidence records surface and observed model separately
-
-- Status: accepted
-- Date: 2026-08-22
-- Decision: record the execution surface independently from configured and runtime-observed model identities. Derive risk deterministically; require a different observed family for normal risk and both OpenAI and Anthropic observed families for high risk. Describe Cursor subagents as same-platform cross-model contexts, not independent platform attestations.
-- Reason: a product name or configured selector does not prove the model that served a turn, and multiple contexts inside one platform do not authenticate separate platforms or model vendors.
+- Date: 2026-08-30
+- Supersedes: D-003 and actor-specific portions of D-004/D-006
+- Decision: Claude acting in implementer and external-operator roles has the same account-bound authority as Codex. Authorization derives from the authenticated account, repository service mode, protected-main authority snapshot, frozen Issue purpose, exact target, execution role, and current review evidence; `operatorLabel` and `modelFamily` do not authenticate or authorize a provider operation. Evaluator and auditor roles remain read-only and opposite-model review remains independent.
+- Reason: model labels are not security principals. Shared, account-bound controls prevent unrelated-account and wrong-target operations while permitting either operator surface to implement and operate under the same policy.
+- Enforcement boundary: repository-approved external operations must pass strict authorization, fresh preflight, one-time claim, redacted result/finalize, and required exact-Head gates without automatic account switching. This controls accepted repository workflow evidence but cannot cryptographically stop a process sharing the same OS user from bypassing adapters; stronger isolation requires OS, container/VM, keychain, or provider-token mediation.
+- Migration: preserve D-003 as history, remove actor-specific policy atomically only after the shared controls are green, and do not let the candidate authority authorize Issue #33 itself. The new authority becomes active after reviewed merge to protected `main`; generated repositories must explicitly replace or deactivate source accounts/targets and pass clean-room leakage and idempotence checks.

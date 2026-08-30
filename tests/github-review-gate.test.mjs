@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateGitHubReviewGate, parseReviewBody } from "../tools/github-review-gate.mjs";
+import { deriveReviewRisk, evaluateGitHubReviewGate, parseReviewBody } from "../tools/github-review-gate.mjs";
 
 const headSha = "a".repeat(40);
 const executionPolicy = JSON.parse(await readFile(path.resolve("config/execution.json"), "utf8"));
@@ -29,6 +29,7 @@ const workflow = {
 function reviewBody(override = {}) {
   const values = {
     executionSurface: "cursor-cloud",
+    primaryOperatorLabel: "codex",
     primaryConfigured: "composer-2.5",
     primaryObserved: "composer-2.5",
     primaryFamily: "cursor",
@@ -43,7 +44,7 @@ function reviewBody(override = {}) {
   };
   const reviews = values.reviewers.map(({ family, configured, observed, fallback, verdict, contracts }) =>
     `- Reviewer ${family}: ${configured} | ${observed} | ${family} | ${fallback} | ${verdict} | ${contracts}`).join("\n");
-  return `Closes #29\n\n## Cross-model review\n- Execution surface: ${values.executionSurface}\n- Primary configured model: ${values.primaryConfigured}\n- Primary observed model: ${values.primaryObserved}\n- Primary family: ${values.primaryFamily}\n- Primary fallback: ${values.primaryFallback}\n- Risk: ${values.risk}\n- Risk reasons: ${values.riskReasons}\n- Reviewed SHA: \`${values.sha}\`\n${reviews}\n\n## Remaining work\n- None.\n`;
+  return `Closes #29\n\n## Cross-model review\n- Execution surface: ${values.executionSurface}\n- Primary operator label: ${values.primaryOperatorLabel}\n- Primary configured model: ${values.primaryConfigured}\n- Primary observed model: ${values.primaryObserved}\n- Primary family: ${values.primaryFamily}\n- Primary fallback: ${values.primaryFallback}\n- Risk: ${values.risk}\n- Risk reasons: ${values.riskReasons}\n- Reviewed SHA: \`${values.sha}\`\n${reviews}\n\n## External changes\n- None.\n\n## Remaining work\n- None.\n`;
 }
 
 function highRiskBody(override = {}) {
@@ -76,6 +77,34 @@ function dependabotEvent() {
   return value;
 }
 
+function externalChangeBody(operation = "cloudflare.upsert_dns", modelFamily = "cursor") {
+  const digest = `sha256:${"0".repeat(64)}`;
+  /** @param {string} phase */
+  const reference = (phase) => ({ reference: `evidence/external-operations/issue-29-test/${phase}.json`, digest });
+  const change = {
+    schemaVersion: 1,
+    service: "cloudflare",
+    operation,
+    operatorLabel: "codex",
+    executionRole: "external-operator",
+    modelFamily,
+    accountRef: "accounts.cloudflare",
+    targetRef: "resourceTargets.cloudflare",
+    serviceMode: "repository-active",
+    executionHeadSha: "b".repeat(40),
+    evidenceHeadSha: headSha,
+    mutationDigest: digest,
+    request: reference("request"),
+    preflight: { ...reference("preflight"), receiptId: "receipt-issue-29-test" },
+    claim: { ...reference("claim"), observationDigest: digest },
+    mutation: { ...reference("mutation"), idempotencyKeyDigest: digest },
+    result: { ...reference("result"), receiptId: "receipt-issue-29-test" },
+    finalized: reference("finalized"),
+    outcome: "succeeded",
+  };
+  return reviewBody().replace("- None.\n\n## Remaining work", `- Operation evidence: ${JSON.stringify(change)}\n\n## Remaining work`);
+}
+
 const actionDiff = `diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -1 +1 @@\n-        uses: actions/checkout@v6\n+        uses: actions/checkout@v7\n`;
 
 describe("GitHub exact-Head review gate", () => {
@@ -83,6 +112,7 @@ describe("GitHub exact-Head review gate", () => {
     expect(parseReviewBody(highRiskBody())).toEqual({
       issue: 29,
       executionSurface: "cursor-cloud",
+      primaryOperatorLabel: "codex",
       primaryModel: {
         configured: "composer-2.5",
         observed: "composer-2.5",
@@ -152,6 +182,13 @@ describe("GitHub exact-Head review gate", () => {
       workflow,
       executionPolicy,
     })).toMatchObject({ risk: "high", reviewers: ["anthropic", "openai"] });
+  });
+
+  it("derives high risk from a validated external operation even when paths are ordinary", () => {
+    expect(deriveReviewRisk(externalChangeBody(), ["src/app/page.tsx"], executionPolicy)).toEqual({
+      level: "high",
+      reasons: ["operation:cloudflare.upsert_dns"],
+    });
   });
 
   it("rejects stale, duplicate, hidden, unknown, ambiguous, and injected claims", () => {

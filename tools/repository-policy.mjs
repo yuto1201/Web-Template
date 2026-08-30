@@ -2,25 +2,27 @@ import { spawnSync } from "node:child_process";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findCredentialEvidence } from "./template-core.mjs";
+import { parseAuthority, readAuthority } from "./authority-core.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const defaultRoot = path.resolve(path.dirname(modulePath), "..");
 const requiredFiles = [
+  ".claude/agents/change-evaluator.md",
+  ".claude/agents/supabase-auditor.md",
   ".claude/settings.json",
   ".codex/agents/change-evaluator.toml",
   ".codex/agents/supabase-auditor.toml",
-  ".cursor/hooks.json",
-  ".cursor/environment.json",
   ".cursor/Dockerfile",
+  ".cursor/environment.json",
+  ".cursor/hooks.json",
   ".gitattributes",
   ".github/pull_request_template.md",
   ".github/workflows/review-gate.yml",
   "AGENTS.md",
   "CLAUDE.md",
   "config/agents.json",
-  "config/execution.json",
   "config/deployment.json",
+  "config/execution.json",
   "config/domain.json",
   "config/github-ruleset.json",
   "config/ownership.json",
@@ -32,13 +34,23 @@ const requiredFiles = [
   "docs/deployment.md",
   "docs/domain.md",
   "docs/activation.md",
-  "docs/onboarding-cursor-cloud.md",
   "docs/onboarding-macos.md",
+  "docs/onboarding-cursor-cloud.md",
   "docs/workflow.md",
+  "specs/account-bound-authority.md",
+  "specs/cursor-cloud.md",
+  "tools/authority-core.mjs",
+  "tools/completion-audit.mjs",
+  "tools/generate-agent-wrappers.mjs",
   "tools/issue-workflow.mjs",
+  "tools/github-cli-provider-client.mjs",
+  "tools/github-provider-operation.mjs",
   "tools/github-review-gate.mjs",
-  "tools/guard-cursor-hook.mjs",
+  "tools/external-change-review-gate.mjs",
   "tools/cursor-cloud-doctor.mjs",
+  "tools/guard-cursor-hook.mjs",
+  "tools/generate-next-types.mjs",
+  "tools/provider-guarded-adapter.mjs",
   "tools/workstation-doctor.mjs",
   "tools/run-next-dev.mjs",
   "tools/run-next-start.mjs",
@@ -48,9 +60,167 @@ const requiredFiles = [
   "tools/domain-workflow.mjs",
   "tools/workflow-core.mjs",
   "specs/acceptance.md",
+  "tests/authority-core.test.mjs",
   "tests/domain-workflow.test.mjs",
+  "tests/operator-parity.test.mjs",
   "tests/workstation-doctor.test.mjs",
 ];
+const secretPatterns = [
+  /-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----/u,
+  /\bgh[pousr]_[A-Za-z0-9_]{30,}\b/u,
+  /\bsbp_[A-Za-z0-9]{20,}\b/u,
+  /\bsb_secret_[A-Za-z0-9_-]{20,}\b/u,
+  /\bsk_live_[A-Za-z0-9]{20,}\b/u,
+  /\bAKIA[0-9A-Z]{16}\b/u,
+  /(?:SERVICE_ROLE|SUPABASE_SERVICE_ROLE_KEY)\s*[:=]\s*["']?eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/iu,
+  /\bv1\.0-[A-Za-z0-9_-]{40,}\b/u,
+];
+
+const actorPattern = /\b(?:claude|codex)\b/iu;
+const jointActorSpanPatterns = [
+  /\b(?:claude(?:\s*(?:,\s*)?and\s+|\s*[&/+]\s*)codex|codex(?:\s*(?:,\s*)?and\s+|\s*[&/+]\s*)claude)\b/giu,
+  /\b(?:claude\s*\(\s*and\s+codex|codex\s*\(\s*and\s+claude)\b\s*\)/giu,
+];
+const reviewerActorSource = String.raw`(?:claude|codex)(?:['’]s)?\s+(?:reviewers?|evaluators?|auditors?)`;
+const reviewerRestrictionSource = String.raw`(?:cannot|can['’]t|may\s+not|must\s+not|mustn['’]t|shall\s+not)`;
+const reviewerAuthoredWorkSource = String.raw`(?:claude|codex)[- ]authored\s+(?:changes?|implementations?)`;
+const reviewerWorkSource = String.raw`(?:${reviewerAuthoredWorkSource}|changes?|implementations?)`;
+const reviewerRestrictedActionSource = `(?:${[
+  String.raw`approve(?:\s+${reviewerWorkSource})?`,
+  String.raw`deploy(?:\s+(?:deployments?|production))?`,
+  String.raw`edit(?:\s+(?:repository\s+files?|${reviewerWorkSource}))?`,
+  String.raw`merge(?:\s+(?:pull\s+requests?|${reviewerWorkSource}))?`,
+  String.raw`modify(?:\s+(?:repository\s+files?|${reviewerWorkSource}))?`,
+  String.raw`mutate(?:\s+(?:external\s+systems?|repository\s+(?:files?|state)|${reviewerWorkSource}))?`,
+  String.raw`run(?:\s+(?:commands?|shell\s+commands?))?`,
+  String.raw`self[- ]approve(?:\s+${reviewerWorkSource})?`,
+  String.raw`use(?:\s+(?:external\s+tools?|provider\s+apis?|the\s+shell))?`,
+  String.raw`write(?:\s+(?:repository\s+files?|${reviewerWorkSource}))?`,
+].join("|")})`;
+const reviewerOnlyActionSource = String.raw`(?:audit|evaluate|review)(?:\s+${reviewerWorkSource})?`;
+const reviewerRoleStatementPatterns = [
+  new RegExp(String.raw`\b${reviewerActorSource}\s+(?:(?:remain(?:s)?|is|are)|must\s+remain)\s+read[- ]only\b`, "giu"),
+  new RegExp(String.raw`\b${reviewerActorSource}\s+${reviewerRestrictionSource}\s+${reviewerRestrictedActionSource}\b`, "giu"),
+  new RegExp(String.raw`\b${reviewerActorSource}\s+may\s+only\s+${reviewerOnlyActionSource}\b`, "giu"),
+];
+const reviewerActorSpanPattern = /\b(?:claude|codex)(?:['’]s)?\s+(?:reviewers?|evaluators?|auditors?)\b/giu;
+const actorRestrictionPattern = /\b(?:alone|barred|belongs?\s+to|cannot|can(?:['’]t)|delegat(?:e|es|ed|ing|ion|ions)|den(?:y|ies|ied)|disallow(?:ed|s)?|exclusive|exclusively|forbid(?:den|s)?|hand[- ]?off|limited\s+to|may\s+not|must\s+not|mustn(?:['’]t)|not\s+allowed|only|owned|owner|ownership|owns|prohibit(?:ed|s|ion)?|remains?\s+(?:an?\s+)?(?:claude|codex)\s+(?:operation|operator|work)|reserved|restricted|shall\s+not|sole|stays?\s+with)\b/iu;
+const canonicalOperatorParityPattern = /\bclaude\b[^.!?。！？\n]{0,160}\bhas\s+the\s+same\s+account-bound\s+authority\s+as\s+codex\b/iu;
+
+/** @param {string} content */
+function segmentPolicyClauses(content) {
+  return content.split(/[.!?。！？;\n]+/u).map((clause) => clause.trim()).filter(Boolean);
+}
+
+/** @param {string} clause */
+function removeJointActorSpans(clause) {
+  return jointActorSpanPatterns.reduce(
+    (result, pattern) => result.replace(pattern, " shared-actor-pair "),
+    clause,
+  );
+}
+
+/** @param {string} clause */
+function removeReviewerRoleStatements(clause) {
+  return reviewerRoleStatementPatterns.reduce(
+    (result, pattern) => result.replace(pattern, " read-only-reviewer-policy "),
+    clause,
+  );
+}
+
+/** @param {string} clause */
+function removeReviewerActorSpans(clause) {
+  return clause.replace(reviewerActorSpanPattern, " read-only-reviewer-role ");
+}
+
+/** @param {string} clause */
+function removeNonOperatorActorSpans(clause) {
+  return removeReviewerActorSpans(removeReviewerRoleStatements(removeJointActorSpans(clause)));
+}
+
+/** @param {string} clause */
+function hasStandaloneActorRestriction(clause) {
+  return actorPattern.test(clause) && actorRestrictionPattern.test(clause);
+}
+
+/** @param {string} content */
+export function detectActorAsymmetry(content) {
+  if (/guard-claude-tool\.mjs/iu.test(content)) {
+    return "Actor-specific Claude guard policy remains.";
+  }
+
+  for (const clause of segmentPolicyClauses(content)) {
+    const standalonePolicy = removeNonOperatorActorSpans(clause);
+    if (!hasStandaloneActorRestriction(standalonePolicy)) {
+      continue;
+    }
+    return `Actor-specific operator delegation, ownership, or restriction remains: ${clause.trim()}`;
+  }
+  return null;
+}
+
+/** @param {string} content */
+export function hasCanonicalOperatorParityStatement(content) {
+  return canonicalOperatorParityPattern.test(content);
+}
+
+/**
+ * @param {{
+ *   claudeSettings: Record<string, unknown>,
+ *   generatorSource: string,
+ *   generatedAssets: Map<string, string>,
+ *   canonicalSurfaces?: Map<string, string>,
+ * }} input
+ */
+export function operatorParityErrors({
+  claudeSettings,
+  generatorSource,
+  generatedAssets,
+  canonicalSurfaces = new Map(),
+}) {
+  const errors = [];
+  const permissions = claudeSettings.permissions && typeof claudeSettings.permissions === "object"
+    ? /** @type {Record<string, unknown>} */ (claudeSettings.permissions)
+    : {};
+  const hooks = claudeSettings.hooks && typeof claudeSettings.hooks === "object"
+    ? /** @type {Record<string, unknown>} */ (claudeSettings.hooks)
+    : {};
+  const allowedSecretDenies = ["Read(./.env)", "Read(./.env.*)"];
+  if (
+    Array.isArray(permissions.deny) &&
+    (permissions.deny.length !== allowedSecretDenies.length || permissions.deny.some((value, index) => value !== allowedSecretDenies[index]))
+  ) {
+    errors.push("Claude project settings must not contain model-specific deny rules.");
+  }
+  if (Array.isArray(hooks.PreToolUse) && hooks.PreToolUse.length > 0) {
+    errors.push("Claude project settings must not contain a PreToolUse policy hook.");
+  }
+
+  /** @type {Map<string, string>} */
+  const sources = new Map([
+    [".claude/settings.json", JSON.stringify(claudeSettings)],
+    ["tools/generate-agent-wrappers.mjs", generatorSource],
+  ]);
+  for (const [relativePath, content] of generatedAssets) sources.set(relativePath, content);
+  for (const [relativePath, content] of canonicalSurfaces) sources.set(relativePath, content);
+  for (const [relativePath, content] of sources) {
+    const asymmetry = detectActorAsymmetry(content);
+    if (asymmetry) {
+      errors.push(`${relativePath}: ${asymmetry}`);
+    }
+  }
+  for (const relativePath of ["tools/generate-agent-wrappers.mjs", "CLAUDE.md"]) {
+    const content = sources.get(relativePath);
+    if (typeof content !== "string" || !hasCanonicalOperatorParityStatement(content)) {
+      const surface = relativePath === "CLAUDE.md"
+        ? "generated CLAUDE.md"
+        : `generator source (${relativePath})`;
+      errors.push(`Canonical operator equality statement is missing from ${surface}.`);
+    }
+  }
+  return errors;
+}
+
 /** @param {unknown} value @returns {unknown} */
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -80,43 +250,64 @@ function collectTrackedFiles(root) {
 
 /** @param {string} content */
 export function containsPotentialSecret(content) {
-  return findCredentialEvidence(content).length > 0;
+  return secretPatterns.some((pattern) => pattern.test(content));
 }
 
-/** @param {{ authority: string, decisions: string }} input */
-export function validateCursorAuthorityDocumentation(input) {
-  const errors = [];
-  if (!/^\| `cursor-cloud` \| approved provider operator only after live owner-authenticated activation \|$/mu.test(input.authority)) {
-    errors.push("docs/authority.md must name cursor-cloud as an approved operator only after live owner-authenticated activation.");
-  }
-  if (!/^\| `claude-local` \| denied \|$/mu.test(input.authority)) {
-    errors.push("docs/authority.md must keep claude-local denied provider authority.");
-  }
-  const decision = /^## D-007:[^\n]*\n([\s\S]*?)(?=^## D-|(?![\s\S]))/mu.exec(input.decisions)?.[1] ?? "";
-  if (
-    !decision.includes("- Status: accepted") ||
-    !decision.includes("- Supersedes: D-003 only for an activated, owner-authenticated `cursor-cloud` execution surface.") ||
-    !decision.includes("`codex-local` authority and `claude-local` denial remain unchanged.")
-  ) {
-    errors.push("specs/decisions.md must accept a narrow D-003 supersession for activated owner-authenticated Cursor Cloud.");
-  }
-  return errors;
-}
-
-const requiredCursorHookEvents = [
-  "preToolUse",
-  "beforeShellExecution",
-  "subagentStart",
-  "subagentStop",
-  "afterFileEdit",
-];
-const canonicalCursorFamilies = ["anthropic", "openai"];
-const canonicalCursorRoles = ["change-evaluator", "consultant", "supabase-auditor"];
 const canonicalCursorEnvironment = {
   build: { dockerfile: "Dockerfile", context: ".." },
   install: "npm ci && npm exec -- playwright install --with-deps chromium && npm run cursor:doctor -- --build",
   start: "sudo service docker start",
 };
+const requiredCursorHookEvents = [
+  "afterFileEdit",
+  "beforeShellExecution",
+  "preToolUse",
+  "subagentStart",
+  "subagentStop",
+];
+
+/** @param {{ hooksConfig: unknown, packageJson: unknown }} input */
+export function validateCursorHookPolicy(input) {
+  const errors = [];
+  const hooksConfig = input.hooksConfig && typeof input.hooksConfig === "object"
+    ? /** @type {Record<string, any>} */ (input.hooksConfig)
+    : {};
+  const hooks = hooksConfig.hooks && typeof hooksConfig.hooks === "object" && !Array.isArray(hooksConfig.hooks)
+    ? /** @type {Record<string, unknown>} */ (hooksConfig.hooks)
+    : {};
+  const hookNames = Object.keys(hooks);
+  if (hooksConfig.version !== 1 || !equal(hookNames.toSorted(), requiredCursorHookEvents.toSorted())) {
+    errors.push("Cursor Cloud project hooks must contain exactly the supported hook events.");
+  }
+  for (const event of requiredCursorHookEvents) {
+    const entries = hooks[event];
+    const entry = Array.isArray(entries) && entries.length === 1 && entries[0] && typeof entries[0] === "object"
+      ? /** @type {Record<string, unknown>} */ (entries[0])
+      : null;
+    if (
+      !entry ||
+      !Object.keys(entry).every((key) => ["command", "failClosed", "timeout", "type"].includes(key)) ||
+      entry.type !== "command" ||
+      entry.command !== "node tools/guard-cursor-hook.mjs" ||
+      !Number.isInteger(entry.timeout) ||
+      Number(entry.timeout) <= 0 ||
+      Number(entry.timeout) > 60 ||
+      entry.failClosed !== true
+    ) {
+      errors.push(`Cursor hook ${event} must be a finite fail-closed project command.`);
+    }
+  }
+  if (containsPotentialSecret(JSON.stringify(hooksConfig))) {
+    errors.push("Cursor hook configuration must not contain credential values.");
+  }
+  const packageJson = input.packageJson && typeof input.packageJson === "object"
+    ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
+    : {};
+  if (packageJson.scripts?.["cursor:hook-check"] !== "node tools/guard-cursor-hook.mjs --check") {
+    errors.push("package.json must expose the deterministic Cursor hook check.");
+  }
+  return errors;
+}
 const canonicalCursorDockerfile = `FROM node:24.13.0-bookworm
 
 RUN apt-get update \\
@@ -141,25 +332,20 @@ function containsSecretShape(value) {
   ));
 }
 
-/**
- * @param {{ environmentConfig: unknown, dockerfile: unknown, packageJson: unknown }} input
- */
+/** @param {{ environmentConfig: unknown, dockerfile: unknown, packageJson: unknown }} input */
 export function validateCursorEnvironmentPolicy(input) {
   const errors = [];
-  const environmentConfig = input.environmentConfig;
-  if (!equal(environmentConfig, canonicalCursorEnvironment)) {
+  if (!equal(input.environmentConfig, canonicalCursorEnvironment)) {
     errors.push(".cursor/environment.json must contain only the exact build, install, and start contract.");
   }
-  if (containsSecretShape(environmentConfig)) {
+  if (containsSecretShape(input.environmentConfig)) {
     errors.push(".cursor/environment.json must not contain secret-shaped fields or values.");
   }
-
   const dockerfile = typeof input.dockerfile === "string" ? input.dockerfile : "";
   const logicalDockerfile = dockerfile.endsWith("\n") ? dockerfile.slice(0, -1) : dockerfile;
   if (logicalDockerfile !== canonicalCursorDockerfile) {
     errors.push(".cursor/Dockerfile must exactly match the canonical public toolchain definition.");
   }
-
   const packageJson = input.packageJson && typeof input.packageJson === "object"
     ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
     : {};
@@ -170,142 +356,6 @@ export function validateCursorEnvironmentPolicy(input) {
     )
   ) {
     errors.push("package.json must expose the non-activating Cursor Cloud doctor.");
-  }
-  return errors;
-}
-
-/** @param {string} configured */
-function configuredBaseModel(configured) {
-  const match = /^(.*)\[[^\[\]]+\]$/u.exec(configured);
-  return match ? match[1] : configured;
-}
-
-/** @param {string} content */
-function cursorAgentFrontmatter(content) {
-  if (!content.startsWith("---\n")) return null;
-  const end = content.indexOf("\n---\n", 4);
-  if (end < 0 || content.slice(end + 5).trim().length === 0) return null;
-  /** @type {Record<string, string>} */
-  const fields = {};
-  for (const line of content.slice(4, end).split("\n")) {
-    const match = /^(name|model|readonly):\s*(\S.*)$/u.exec(line);
-    if (!match) continue;
-    if (Object.hasOwn(fields, match[1])) return null;
-    fields[match[1]] = match[2];
-  }
-  return fields;
-}
-
-/**
- * @param {{
- *   hooksConfig: unknown,
- *   packageJson: unknown,
- *   agentsConfig: unknown,
- *   executionPolicy: unknown,
- *   cursorAgentFiles: string[],
- *   cursorAgentContents: Record<string, string>,
- * }} input
- */
-export function validateCursorHookPolicy(input) {
-  const errors = [];
-  const hooksConfig = input.hooksConfig && typeof input.hooksConfig === "object"
-    ? /** @type {Record<string, unknown>} */ (input.hooksConfig)
-    : {};
-  const hooks = hooksConfig.hooks && typeof hooksConfig.hooks === "object" && !Array.isArray(hooksConfig.hooks)
-    ? /** @type {Record<string, unknown>} */ (hooksConfig.hooks)
-    : {};
-  const hookNames = Object.keys(hooks);
-
-  if (hooksConfig.version !== 1 || !equal(hookNames.toSorted(), requiredCursorHookEvents.toSorted())) {
-    errors.push("Cursor Cloud project hooks must not claim unsupported hook coverage.");
-  }
-  if (hookNames.includes("beforeMCPExecution") || hookNames.includes("afterMCPExecution")) {
-    if (!errors.includes("Cursor Cloud project hooks must not claim unsupported hook coverage.")) {
-      errors.push("Cursor Cloud project hooks must not claim unsupported hook coverage.");
-    }
-  }
-
-  for (const event of requiredCursorHookEvents) {
-    const entries = hooks[event];
-    const entry = Array.isArray(entries) && entries.length === 1 && entries[0] && typeof entries[0] === "object"
-      ? /** @type {Record<string, unknown>} */ (entries[0])
-      : null;
-    const validKeys = entry && Object.keys(entry).every((key) => ["command", "failClosed", "timeout", "type"].includes(key));
-    if (
-      !entry ||
-      entry.type !== "command" ||
-      entry.command !== "node tools/guard-cursor-hook.mjs" ||
-      !Number.isInteger(entry.timeout) ||
-      Number(entry.timeout) <= 0 ||
-      Number(entry.timeout) > 60 ||
-      entry.failClosed !== true ||
-      !validKeys
-    ) {
-      errors.push(`Cursor hook ${event} must be a finite fail-closed project command.`);
-    }
-  }
-
-  if (containsPotentialSecret(JSON.stringify(hooksConfig))) {
-    errors.push("Cursor hook configuration must not contain credential values.");
-  }
-
-  const packageJson = input.packageJson && typeof input.packageJson === "object"
-    ? /** @type {{ scripts?: Record<string, unknown> }} */ (input.packageJson)
-    : {};
-  if (packageJson.scripts?.["cursor:hook-check"] !== "node tools/guard-cursor-hook.mjs --check") {
-    errors.push("package.json must expose the deterministic Cursor hook check.");
-  }
-
-  const agentsConfig = input.agentsConfig && typeof input.agentsConfig === "object"
-    ? /** @type {{ cursor?: { families?: unknown, roles?: unknown } }} */ (input.agentsConfig)
-    : {};
-  const executionPolicy = input.executionPolicy && typeof input.executionPolicy === "object"
-    ? /** @type {{ cursorModels?: Record<string, unknown>, modelFamilies?: Record<string, unknown> }} */ (input.executionPolicy)
-    : {};
-  const families = Array.isArray(agentsConfig.cursor?.families)
-    ? agentsConfig.cursor.families.filter((family) => typeof family === "string")
-    : [];
-  const roles = Array.isArray(agentsConfig.cursor?.roles)
-    ? agentsConfig.cursor.roles
-      .map((role) => role && typeof role === "object" && "slug" in role ? role.slug : null)
-      .filter((slug) => typeof slug === "string")
-    : [];
-  if (
-    !equal(families.toSorted(), canonicalCursorFamilies) ||
-    families.length !== canonicalCursorFamilies.length ||
-    !equal(roles.toSorted(), canonicalCursorRoles) ||
-    roles.length !== canonicalCursorRoles.length
-  ) {
-    errors.push("Cursor agent roles and families must match the canonical nonempty sets.");
-  }
-  const modelsValid = canonicalCursorFamilies.every((family) => {
-    const configured = executionPolicy.cursorModels?.[family];
-    const patterns = executionPolicy.modelFamilies?.[family];
-    return typeof configured === "string" && Array.isArray(patterns) && patterns.length > 0 && patterns.every(
-      (source) => typeof source === "string",
-    ) && patterns.some((source) => new RegExp(source, "u").test(configuredBaseModel(configured)));
-  });
-  if (!modelsValid) errors.push("Cursor configured models must match their canonical families.");
-  const expectedAgents = canonicalCursorRoles.flatMap(
-    (role) => canonicalCursorFamilies.map((family) => `${role}-${family}.md`),
-  ).toSorted();
-  if (!modelsValid || !equal(input.cursorAgentFiles.toSorted(), expectedAgents)) {
-    errors.push(".cursor/agents must contain exactly the generated Cursor agent set.");
-  }
-  const contents = input.cursorAgentContents && typeof input.cursorAgentContents === "object"
-    ? input.cursorAgentContents
-    : {};
-  const contentValid = modelsValid && expectedAgents.length === 6 && expectedAgents.every((filename) => {
-    const content = contents[filename];
-    if (typeof content !== "string") return false;
-    const fields = cursorAgentFrontmatter(content);
-    const name = filename.replace(/\.md$/u, "");
-    const family = canonicalCursorFamilies.find((candidate) => name.endsWith(`-${candidate}`));
-    return fields?.name === name && fields.readonly === "true" && typeof family === "string" &&
-      fields.model === executionPolicy.cursorModels?.[family];
-  });
-  if (!contentValid) {
-    errors.push(".cursor/agents content must preserve canonical name, model, and readonly frontmatter.");
   }
   return errors;
 }
@@ -325,39 +375,49 @@ export async function validateRepository(root = defaultRoot) {
     }
   }
 
-  const ownership = JSON.parse(await readFile(path.join(root, "config", "ownership.json"), "utf8"));
-  const authority = await readFile(path.join(root, "docs", "authority.md"), "utf8");
-  const decisions = await readFile(path.join(root, "specs", "decisions.md"), "utf8");
-  errors.push(...validateCursorAuthorityDocumentation({ authority, decisions }));
+  const ownership = readAuthority(root);
   const template = JSON.parse(await readFile(path.join(root, "config", "template.json"), "utf8"));
   const project = template.project ?? {};
-  if (!equal(ownership.github, project.github)) {
-    errors.push("config/ownership.json GitHub ownership does not match config/template.json.");
+  let templateAuthority;
+  try {
+    templateAuthority = parseAuthority({
+      schemaVersion: project.schemaVersion,
+      authorization: project.authorization,
+      accounts: project.accounts,
+      servicePolicies: project.servicePolicies,
+      resourceTargets: project.resourceTargets,
+      observations: project.observations,
+    });
+  } catch {
+    errors.push("config/template.json contains invalid authority configuration.");
   }
-  if (!equal(ownership.supabase, project.ownership?.supabase)) {
-    errors.push("config/ownership.json Supabase ownership does not match config/template.json.");
+  if (templateAuthority && !equal(ownership.authorization, templateAuthority.authorization)) {
+    errors.push("config/ownership.json authorization does not match config/template.json.");
   }
-  if (!equal(ownership.vercel, project.ownership?.vercel)) {
-    errors.push("config/ownership.json Vercel ownership does not match config/template.json.");
+  /** @type {Array<"github" | "supabase" | "vercel" | "cloudflare" | "linear">} */
+  const authorityServices = ["github", "supabase", "vercel", "cloudflare", "linear"];
+  for (const service of authorityServices) {
+    if (templateAuthority && !equal(ownership.accounts[service], templateAuthority.accounts[service])) {
+      errors.push(`config/ownership.json ${service} account does not match config/template.json.`);
+    }
+    if (templateAuthority && !equal(ownership.servicePolicies[service], templateAuthority.servicePolicies[service])) {
+      errors.push(`config/ownership.json ${service} service policy does not match config/template.json.`);
+    }
+    if (templateAuthority && !equal(ownership.resourceTargets[service], templateAuthority.resourceTargets[service])) {
+      errors.push(`config/ownership.json ${service} resource target does not match config/template.json.`);
+    }
   }
-  const expectedCloudflare = project.ownership?.cloudflare;
   let expectedHostname;
   try {
     expectedHostname = new URL(project.publicUrls?.production).hostname;
   } catch {
     errors.push("config/template.json has an invalid production URL.");
   }
-  if (
-    ownership.cloudflare?.accountId !== expectedCloudflare?.accountId ||
-    ownership.cloudflare?.accountName !== expectedCloudflare?.accountName ||
-    ownership.cloudflare?.zoneId !== expectedCloudflare?.zoneId ||
-    ownership.cloudflare?.domains?.length !== 1 ||
-    ownership.cloudflare.domains[0] !== expectedHostname
-  ) {
+  if (ownership.resourceTargets.cloudflare.domains.length !== 1 || ownership.resourceTargets.cloudflare.domains[0] !== expectedHostname) {
     errors.push("config/ownership.json Cloudflare ownership does not match config/template.json.");
   }
 
-  const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }>, cursor?: { families?: string[], roles?: Array<{ slug?: string }> } }} */ (
+  const agents = /** @type {{ schemaVersion?: number, reviewContract?: string, agents?: Array<{ slug: string }> }} */ (
     JSON.parse(await readFile(path.join(root, "config", "agents.json"), "utf8"))
   );
   const slugs = agents.agents?.map((agent) => agent.slug) ?? [];
@@ -378,9 +438,6 @@ export async function validateRepository(root = defaultRoot) {
   const states = /** @type {string[]} */ (Array.isArray(workflow.states) ? workflow.states : []);
   const stateSet = new Set(states);
   if (stateSet.size !== states.length) errors.push("config/workflow.json states must be unique.");
-  if (workflow.reviewerMap?.codex !== "claude" || workflow.reviewerMap?.claude !== "codex") {
-    errors.push("config/workflow.json must map each primary model to the opposite reviewer.");
-  }
   if (workflow.baseRef !== "main") errors.push("config/workflow.json must derive review scope from main.");
   const reviewGate = workflow.githubReviewGate;
   if (reviewGate?.checkName !== "Exact Head review policy") {
@@ -438,11 +495,6 @@ export async function validateRepository(root = defaultRoot) {
   const expectedCodexAgents = slugs.map((slug) => `${slug}.toml`).sort();
   const actualClaudeAgents = (await readdir(path.join(root, ".claude", "agents"))).sort();
   const actualCodexAgents = (await readdir(path.join(root, ".codex", "agents"))).sort();
-  const actualCursorAgents = (await readdir(path.join(root, ".cursor", "agents"))).sort();
-  const actualCursorAgentContents = Object.fromEntries(await Promise.all(actualCursorAgents.map(async (filename) => [
-    filename,
-    await readFile(path.join(root, ".cursor", "agents", filename), "utf8"),
-  ])));
   if (actualClaudeAgents.join(",") !== expectedClaudeAgents.join(",")) {
     errors.push(".claude/agents must contain exactly the generated evaluator set.");
   }
@@ -453,21 +505,13 @@ export async function validateRepository(root = defaultRoot) {
   const nodeVersion = (await readFile(path.join(root, ".node-version"), "utf8")).trim();
   const nvmVersion = (await readFile(path.join(root, ".nvmrc"), "utf8")).trim();
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
-  const cursorHooks = JSON.parse(await readFile(path.join(root, ".cursor", "hooks.json"), "utf8"));
-  const cursorEnvironment = JSON.parse(await readFile(path.join(root, ".cursor", "environment.json"), "utf8"));
-  const cursorDockerfile = await readFile(path.join(root, ".cursor", "Dockerfile"), "utf8");
-  const executionPolicy = JSON.parse(await readFile(path.join(root, "config", "execution.json"), "utf8"));
   errors.push(...validateCursorHookPolicy({
-    hooksConfig: cursorHooks,
+    hooksConfig: JSON.parse(await readFile(path.join(root, ".cursor", "hooks.json"), "utf8")),
     packageJson,
-    agentsConfig: agents,
-    executionPolicy,
-    cursorAgentFiles: actualCursorAgents,
-    cursorAgentContents: actualCursorAgentContents,
   }));
   errors.push(...validateCursorEnvironmentPolicy({
-    environmentConfig: cursorEnvironment,
-    dockerfile: cursorDockerfile,
+    environmentConfig: JSON.parse(await readFile(path.join(root, ".cursor", "environment.json"), "utf8")),
+    dockerfile: await readFile(path.join(root, ".cursor", "Dockerfile"), "utf8"),
     packageJson,
   }));
   if (nodeVersion !== nvmVersion || packageJson.engines?.node !== nodeVersion) {
@@ -499,8 +543,6 @@ export async function validateRepository(root = defaultRoot) {
     !reviewWorkflow.includes("ref: ${{ github.event.pull_request.base.sha }}") ||
     !reviewWorkflow.includes('gate_path="trusted/tools/github-review-gate.mjs"') ||
     !reviewWorkflow.includes('workflow_path="trusted/config/workflow.json"') ||
-    !reviewWorkflow.includes('execution_policy_path="trusted/config/execution.json"') ||
-    !reviewWorkflow.includes("cache-dependency-path: trusted/package-lock.json") ||
     !reviewWorkflow.includes("working-directory: trusted") ||
     trustedInstallIndex === -1 ||
     verificationIndex === -1 ||
@@ -530,22 +572,30 @@ export async function validateRepository(root = defaultRoot) {
     errors.push(".gitignore must ignore .artifacts/ domain evidence.");
   }
 
-  const claudeSettings = JSON.parse(
-    await readFile(path.join(root, ".claude", "settings.json"), "utf8"),
-  );
-  if (!claudeSettings.permissions?.deny?.includes("Bash")) {
-    errors.push("Claude project settings must deny Bash.");
+  const claudeSettings = JSON.parse(await readFile(path.join(root, ".claude", "settings.json"), "utf8"));
+  const generatorSource = await readFile(path.join(root, "tools", "generate-agent-wrappers.mjs"), "utf8");
+  const generatedAssets = new Map([
+    ["CLAUDE.md", await readFile(path.join(root, "CLAUDE.md"), "utf8")],
+  ]);
+  for (const slug of slugs) {
+    generatedAssets.set(
+      `.claude/agents/${slug}.md`,
+      await readFile(path.join(root, ".claude", "agents", `${slug}.md`), "utf8"),
+    );
+    generatedAssets.set(
+      `.codex/agents/${slug}.toml`,
+      await readFile(path.join(root, ".codex", "agents", `${slug}.toml`), "utf8"),
+    );
   }
-  const hookCommand = claudeSettings.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command;
-  if (
-    typeof hookCommand !== "string" ||
-    !hookCommand.includes("CLAUDE_PROJECT_DIR") ||
-    !hookCommand.includes("tools','guard-claude-tool.mjs") ||
-    !hookCommand.includes("process.exit(2)") ||
-    !hookCommand.includes("module.runCli()")
-  ) {
-    errors.push("Claude PreToolUse must locate the guard from the project root and fail closed.");
-  }
+  const canonicalSurfaces = new Map([
+    ["tools/completion-audit.mjs", await readFile(path.join(root, "tools", "completion-audit.mjs"), "utf8")],
+  ]);
+  errors.push(...operatorParityErrors({
+    claudeSettings,
+    generatorSource,
+    generatedAssets,
+    canonicalSurfaces,
+  }));
 
   for (const relative of collectTrackedFiles(root)) {
     const normalized = relative.toLowerCase();

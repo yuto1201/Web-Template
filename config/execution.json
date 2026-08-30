@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "surfaces": {
     "codex-local": { "branchPrefix": "codex", "providerOperator": true },
-    "claude-local": { "branchPrefix": "claude", "providerOperator": false },
+    "claude-local": { "branchPrefix": "claude", "providerOperator": true },
     "cursor-cloud": { "branchPrefix": "cursor", "providerOperator": true }
   },
   "modelFamilies": {
@@ -41,7 +41,6 @@
   "routineDeliveryOperations": ["github.push_branch", "github.create_pr", "github.delete_branch"],
   "highRiskOperations": [
     "github.merge_pr",
-    "github.update_ruleset",
     "supabase.apply_migrations",
     "vercel.deploy_preview",
     "vercel.deploy_production",

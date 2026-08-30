@@ -249,31 +249,32 @@ export function validateActivationEvidence(value, executionPolicy, options = {})
  * Shared pure binding contract used by both cursor:doctor and external-operation preflight.
  * @param {ReturnType<typeof validateActivationEvidence>} activation
  * @param {{ branch?: unknown, headSha?: unknown }} repository
- * @param {CursorOwnership} ownership
+ * @param {CursorOwnership | Record<string, any>} ownership
  * @returns {Array<[string, string, boolean]>}
  */
 export function activationRepositoryBindingChecks(activation, repository, ownership) {
+  const normalizedOwnership = cursorOwnershipView(ownership);
   const currentBranch = repository.branch;
   const currentBranchAvailable = typeof currentBranch === "string" && currentBranch.length > 0;
   const currentBranchIsCursor = currentBranchAvailable && /^cursor\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(currentBranch);
   const currentHead = repository.headSha;
   const currentHeadAvailable = typeof currentHead === "string" && /^[0-9a-f]{40}$/u.test(currentHead);
-  const expectedGitHub = `${ownership.github?.owner ?? ""}/${ownership.github?.repository ?? ""}`;
-  const expectedSupabaseProject = ownership.supabase?.projectRef;
-  const expectedVercelScope = ownership.vercel?.scope;
-  const expectedVercelProject = ownership.vercel?.projectId;
-  const expectedCloudflareAccountId = ownership.cloudflare?.accountId;
-  const expectedCloudflareAccountName = ownership.cloudflare?.accountName;
-  const expectedCloudflareZoneId = ownership.cloudflare?.zoneId;
-  const expectedCloudflareDomains = ownership.cloudflare?.domains;
+  const expectedGitHub = `${normalizedOwnership.github?.owner ?? ""}/${normalizedOwnership.github?.repository ?? ""}`;
+  const expectedSupabaseProject = normalizedOwnership.supabase?.projectRef;
+  const expectedVercelScope = normalizedOwnership.vercel?.scope;
+  const expectedVercelProject = normalizedOwnership.vercel?.projectId;
+  const expectedCloudflareAccountId = normalizedOwnership.cloudflare?.accountId;
+  const expectedCloudflareAccountName = normalizedOwnership.cloudflare?.accountName;
+  const expectedCloudflareZoneId = normalizedOwnership.cloudflare?.zoneId;
+  const expectedCloudflareDomains = normalizedOwnership.cloudflare?.domains;
   return [
     ["current-branch", currentBranchAvailable ? "current-branch-not-cursor" : "current-branch-unavailable", currentBranchIsCursor],
     ["activation-branch", "activation-branch-mismatch", currentBranchIsCursor && activation.repository.branch === currentBranch],
     ["current-head", "current-head-unavailable", currentHeadAvailable],
     ["activation-head", "activation-head-mismatch", currentHeadAvailable && activation.repository.headSha === currentHead],
-    ["github-owner", "github-owner-mismatch", activation.providers.github.owner === ownership.github?.owner],
+    ["github-owner", "github-owner-mismatch", activation.providers.github.owner === normalizedOwnership.github?.owner],
     ["github-target", "github-target-mismatch", activation.providers.github.fullName === expectedGitHub && activation.repository.fullName === expectedGitHub],
-    ["supabase-owner", "supabase-owner-mismatch", activation.providers.supabase.organizationName === ownership.supabase?.organizationName],
+    ["supabase-owner", "supabase-owner-mismatch", activation.providers.supabase.organizationName === normalizedOwnership.supabase?.organizationName],
     ["supabase-project-configured", "supabase-project-unconfigured", typeof expectedSupabaseProject === "string" && expectedSupabaseProject.length > 0],
     ["supabase-project", "supabase-project-mismatch", activation.providers.supabase.projectRef === expectedSupabaseProject],
     ["vercel-scope-configured", "vercel-scope-unconfigured", typeof expectedVercelScope === "string" && expectedVercelScope.length > 0],
@@ -288,6 +289,33 @@ export function activationRepositoryBindingChecks(activation, repository, owners
     ["cloudflare-domain-configured", "cloudflare-domain-unconfigured", Array.isArray(expectedCloudflareDomains) && expectedCloudflareDomains.length > 0],
     ["cloudflare-domain", "cloudflare-domain-mismatch", Array.isArray(expectedCloudflareDomains) && expectedCloudflareDomains.includes(activation.providers.cloudflare.domain)],
   ];
+}
+
+/** @param {any} ownership @returns {CursorOwnership} */
+function cursorOwnershipView(ownership) {
+  if (ownership?.schemaVersion === 2) {
+    return {
+      github: {
+        owner: ownership.resourceTargets?.github?.owner,
+        repository: ownership.resourceTargets?.github?.repository,
+      },
+      supabase: {
+        organizationName: ownership.accounts?.supabase?.organizationName,
+        projectRef: ownership.resourceTargets?.supabase?.projectRef,
+      },
+      vercel: {
+        scope: ownership.accounts?.vercel?.teamId,
+        projectId: ownership.resourceTargets?.vercel?.projectId,
+      },
+      cloudflare: {
+        accountId: ownership.accounts?.cloudflare?.accountId,
+        accountName: ownership.accounts?.cloudflare?.accountName,
+        zoneId: ownership.resourceTargets?.cloudflare?.zoneId,
+        domains: ownership.resourceTargets?.cloudflare?.domains,
+      },
+    };
+  }
+  return ownership ?? {};
 }
 
 /** @param {string} command @param {string[]} args @param {string} [cwd] */
@@ -395,7 +423,7 @@ export async function collectCursorCloudSnapshot(root = defaultRoot) {
       docker: Boolean(commandOutput("docker", ["--version"])),
       chromium: await chromiumAvailable(),
     },
-    ownership: JSON.parse(ownershipText),
+    ownership: cursorOwnershipView(JSON.parse(ownershipText)),
     executionPolicy: JSON.parse(executionPolicyText),
     expected: {
       node: expectedNodeVersion,

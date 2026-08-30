@@ -1,21 +1,74 @@
 {
-  "schemaVersion": 1,
-  "github": {
-    "owner": "yuto1201",
-    "repository": "Web-Template"
+  "schemaVersion": 2,
+  "authorization": {
+    "operatorLabels": ["codex", "claude"],
+    "externalOperatorRoles": ["implementer", "external-operator"],
+    "allowAutomaticAccountSwitch": false
   },
-  "supabase": {
-    "organizationName": "yuto1201's Org",
-    "projectRef": null
+  "accounts": {
+    "github": {
+      "login": "yuto1201",
+      "userId": 50611866,
+      "nodeId": "MDQ6VXNlcjUwNjExODY2"
+    },
+    "supabase": {
+      "organizationName": "yuto1201's Org",
+      "organizationId": "kmjpkzaqlewqnypyqwkg"
+    },
+    "vercel": {
+      "teamName": "yuto",
+      "teamSlug": "yuto16",
+      "teamId": "team_ANEUn6gVL8dccPaY08wkvxFt",
+      "requiredPlan": "Hobby"
+    },
+    "cloudflare": {
+      "accountName": "Yuto Dev",
+      "accountId": "7ea8e713d76506f9e303f58624829aa5",
+      "loginEmailHint": "y***@icloud.com",
+      "loginEmailSha256": "56875d39ea00e471ad20771dc3936f9ec92b565c7b31f725a1639a4cda71e982",
+      "requiredRole": "Super Administrator",
+      "allowedZonePlans": ["Free"]
+    },
+    "linear": {
+      "workspaceName": "Yuto33004",
+      "workspaceSlug": "yuto33004",
+      "workspaceUrl": "https://linear.app/yuto33004",
+      "workspaceId": null,
+      "userName": "上杉侑斗",
+      "userEmailHint": "y***@gmail.com",
+      "userEmailSha256": "463920584f870bd7c73cc9056e6630b66cf812577f1d803fa409b39db7617039",
+      "userId": null,
+      "requiredRole": "Admin"
+    }
   },
-  "vercel": {
-    "scope": "team_ANEUn6gVL8dccPaY08wkvxFt",
-    "projectId": "prj_KCauT0Bgq4PBZjrxuA1PO3J0Q3Q8"
+  "servicePolicies": {
+    "github": { "mode": "repository-active" },
+    "supabase": { "mode": "repository-active" },
+    "vercel": { "mode": "repository-active" },
+    "cloudflare": { "mode": "repository-active" },
+    "linear": { "mode": "explicit-user-purpose-only" }
   },
-  "cloudflare": {
-    "accountId": "7ea8e713d76506f9e303f58624829aa5",
-    "accountName": "Yuto Dev",
-    "zoneId": "df938e9c196edf952ff26e95f02edf49",
-    "domains": ["web-template.yutodev.com"]
+  "resourceTargets": {
+    "github": {
+      "owner": "yuto1201",
+      "repository": "Web-Template",
+      "repositoryId": 1340840341,
+      "repositoryNodeId": "R_kgDOT-uZlQ"
+    },
+    "supabase": { "projectRef": null },
+    "vercel": { "projectId": "prj_KCauT0Bgq4PBZjrxuA1PO3J0Q3Q8" },
+    "cloudflare": {
+      "zoneId": "df938e9c196edf952ff26e95f02edf49",
+      "domains": ["web-template.yutodev.com"]
+    },
+    "linear": { "teamKey": "YUT", "teamId": null }
+  },
+  "observations": {
+    "github": {
+      "displayName": "Yuuuuuuuto",
+      "createdAt": "2019-05-14T06:31:57Z",
+      "publicRepositories": 9,
+      "observedAt": "2026-08-30T00:00:00+09:00"
+    }
   }
 }

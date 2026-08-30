@@ -3,6 +3,8 @@ import { readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { readAuthority } from "./authority-core.mjs";
+import { providerPlaceholders } from "./template-core.mjs";
 
 /** @typedef {{
   releaseEvidenceMaxAgeMinutes: number,
@@ -12,7 +14,6 @@ import { z } from "zod";
   remoteSchemaOrder: Array<{ stage: "expand" | "deploy" | "contract", requiresExplicitApproval: boolean }>,
   forbiddenProductionOperations: string[]
 }} DeploymentConfiguration */
-/** @typedef {{ vercel: { scope: string | null, projectId: string | null } }} OwnershipConfiguration */
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(moduleDirectory, "..");
@@ -68,14 +69,6 @@ const deploymentConfigurationSchema = z.object({
     }
   }
 });
-const ownershipConfigurationSchema = z.object({
-  schemaVersion: z.literal(1),
-  vercel: z.object({
-    scope: z.string().regex(/^team_[A-Za-z0-9]+$/u).nullable(),
-    projectId: z.string().regex(/^prj_[A-Za-z0-9]+$/u).nullable(),
-  }).strict(),
-}).passthrough();
-
 /** @param {string} name @param {{ parse(value: unknown): unknown }} schema @returns {unknown} */
 function readConfiguration(name, schema) {
   try {
@@ -86,7 +79,7 @@ function readConfiguration(name, schema) {
 }
 
 const deploymentConfiguration = /** @type {DeploymentConfiguration} */ (readConfiguration("deployment.json", deploymentConfigurationSchema));
-const ownershipConfiguration = /** @type {OwnershipConfiguration} */ (readConfiguration("ownership.json", ownershipConfigurationSchema));
+const authority = readAuthority(defaultRoot);
 
 export class DeploymentCheckpointError extends Error {
   /** @param {string} checkpoint @param {string} message */
@@ -148,6 +141,11 @@ function uniqueSorted(values, checkpoint) {
   return parsed.toSorted();
 }
 
+function hasInactiveVercelAuthority() {
+  return authority.accounts.vercel.teamId === providerPlaceholders.vercelScope ||
+    authority.resourceTargets.vercel.projectId === providerPlaceholders.vercelProjectId;
+}
+
 /** @param {string} root */
 export async function readLocalVercelLink(root = defaultRoot) {
   const linkDirectory = path.join(root, ".vercel");
@@ -172,12 +170,13 @@ export async function readLocalVercelLink(root = defaultRoot) {
 
 /** @param {unknown} snapshotValue @param {string} [root] */
 export async function validateDeploymentPreflight(snapshotValue, root = defaultRoot) {
-  const ownership = ownershipConfiguration;
+  const teamId = authority.accounts.vercel.teamId;
+  const projectId = authority.resourceTargets.vercel.projectId;
   const link = await readLocalVercelLink(root);
-  if (!ownership.vercel?.scope || !ownership.vercel?.projectId) {
+  if (!teamId || !projectId || hasInactiveVercelAuthority()) {
     throw new DeploymentCheckpointError("ownership", "config/ownership.json has no exact Vercel scope/project.");
   }
-  if (link.orgId !== ownership.vercel.scope || link.projectId !== ownership.vercel.projectId) {
+  if (link.orgId !== teamId || link.projectId !== projectId) {
     throw new DeploymentCheckpointError("link", "Local Vercel linkage does not match config/ownership.json.");
   }
   let snapshot;
@@ -205,10 +204,12 @@ export async function validateDeploymentPreflight(snapshotValue, root = defaultR
 export function validateReleaseEvidence(value, expectedCommitSha, now = new Date()) {
   const expectedSha = shaSchema.parse(expectedCommitSha);
   const evidence = releaseEvidenceSchema.parse(value);
-  if (!ownershipConfiguration.vercel.scope || !ownershipConfiguration.vercel.projectId) {
+  const teamId = authority.accounts.vercel.teamId;
+  const projectId = authority.resourceTargets.vercel.projectId;
+  if (!teamId || !projectId || hasInactiveVercelAuthority()) {
     throw new DeploymentCheckpointError("ownership", "config/ownership.json has no exact Vercel scope/project.");
   }
-  if (evidence.teamId !== ownershipConfiguration.vercel.scope || evidence.projectId !== ownershipConfiguration.vercel.projectId) {
+  if (evidence.teamId !== teamId || evidence.projectId !== projectId) {
     throw new DeploymentCheckpointError("release-project", "Release evidence does not match the canonical Vercel project.");
   }
   if (evidence.commitSha !== expectedSha) throw new DeploymentCheckpointError("release-sha", "Deployment commit does not match the verified commit.");
@@ -267,4 +268,7 @@ export async function lintDeploymentWorkflows(root = defaultRoot) {
 }
 
 export const deploymentSchemas = { environmentSnapshotSchema, releaseEvidenceSchema };
-export const canonicalVercelOwnership = Object.freeze({ ...ownershipConfiguration.vercel });
+export const canonicalVercelOwnership = Object.freeze({
+  scope: authority.accounts.vercel.teamId,
+  projectId: authority.resourceTargets.vercel.projectId,
+});

@@ -1,9 +1,23 @@
-import { describe, expect, it } from "vitest";
-import {
-  canonicalVercelOwnership,
-  validateReleaseEvidence,
-  validateRemoteSchemaOrder,
-} from "../tools/deployment-core.mjs";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { rm } from "node:fs/promises";
+import { providerPlaceholders } from "../tools/template-core.mjs";
+import { activeProviderAuthority, providerCoreModule } from "./helpers/provider-module.mjs";
+
+const canonicalAuthority = activeProviderAuthority();
+const activeFixture = await providerCoreModule({
+  authority: canonicalAuthority,
+  core: "deployment-core.mjs",
+  configuration: "deployment.json",
+  prefix: "release-active-",
+});
+const { validateReleaseEvidence, validateRemoteSchemaOrder } = activeFixture.module;
+const deploymentWorkflowPath = path.resolve("tools/deployment-workflow.mjs");
+
+afterAll(async () => {
+  await rm(activeFixture.root, { recursive: true, force: true });
+});
 
 const commitSha = "a".repeat(40);
 const verificationTime = new Date("2026-08-21T02:10:00+09:00");
@@ -13,8 +27,8 @@ function evidence(overrides = {}) {
     schemaVersion: 1,
     source: "vercel-api",
     environment: "production",
-    teamId: canonicalVercelOwnership.scope,
-    projectId: canonicalVercelOwnership.projectId,
+    teamId: canonicalAuthority.accounts.vercel.teamId,
+    projectId: canonicalAuthority.resourceTargets.vercel.projectId,
     deploymentId: "dpl_WEBTEMPLATE123",
     url: "https://web-template-yuto16.vercel.app",
     status: "READY",
@@ -28,13 +42,25 @@ function evidence(overrides = {}) {
   };
 }
 
+async function placeholderModule() {
+  const placeholderAuthority = structuredClone(canonicalAuthority);
+  placeholderAuthority.accounts.vercel.teamId = providerPlaceholders.vercelScope;
+  placeholderAuthority.resourceTargets.vercel.projectId = providerPlaceholders.vercelProjectId;
+  return providerCoreModule({
+    authority: placeholderAuthority,
+    core: "deployment-core.mjs",
+    configuration: "deployment.json",
+    prefix: "release-placeholder-",
+  });
+}
+
 describe("Vercel release evidence", () => {
   it("binds a READY production deployment and smoke results to the verified commit", () => {
     expect(validateReleaseEvidence(evidence(), commitSha, verificationTime)).toMatchObject({
       ok: true,
       commitSha,
-      teamId: canonicalVercelOwnership.scope,
-      projectId: canonicalVercelOwnership.projectId,
+      teamId: canonicalAuthority.accounts.vercel.teamId,
+      projectId: canonicalAuthority.resourceTargets.vercel.projectId,
     });
   });
 
@@ -46,6 +72,18 @@ describe("Vercel release evidence", () => {
         { path: "/health", status: 200, jsonStatus: "ok" },
       ],
     }), commitSha, verificationTime)).toThrow(/\/ returned 500/u);
+  });
+
+  it("rejects release evidence bound to inactive Vercel placeholder authority", async () => {
+    const fixture = await placeholderModule();
+    try {
+      expect(() => fixture.module.validateReleaseEvidence(evidence({
+        teamId: providerPlaceholders.vercelScope,
+        projectId: providerPlaceholders.vercelProjectId,
+      }), commitSha, verificationTime)).toThrow(/ownership/u);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("rejects stale, wrong-project, incomplete, and credential-bearing evidence", () => {
@@ -62,5 +100,13 @@ describe("Vercel release evidence", () => {
       contractRequiresExplicitApproval: true,
       productionReset: "forbidden",
     });
+  });
+
+  it("fails closed for legacy deployment authorization and release commands", () => {
+    for (const command of ["preflight", "verify-release"]) {
+      const result = spawnSync(process.execPath, [deploymentWorkflowPath, command], { cwd: path.resolve("."), encoding: "utf8" });
+      expect(result.status, command).not.toBe(0);
+      expect(result.stderr, command).toMatch(/unsupported.*guarded adapter|provider-specific guarded adapter/iu);
+    }
   });
 });

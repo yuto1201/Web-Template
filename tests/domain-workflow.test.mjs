@@ -1,17 +1,27 @@
 import { spawnSync } from "node:child_process";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import {
+import { afterAll, describe, expect, it } from "vitest";
+import { providerPlaceholders } from "../tools/template-core.mjs";
+import { activeProviderAuthority, providerCoreModule } from "./helpers/provider-module.mjs";
+
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const canonicalAuthority = activeProviderAuthority(repositoryRoot);
+const activeFixture = await providerCoreModule({
+  authority: canonicalAuthority,
+  core: "domain-core.mjs",
+  configuration: "domain.json",
+  prefix: "domain-active-",
+});
+const {
   createDomainPlan,
   validateDomainApplyPreflight,
   validateDomainPolicy,
   validateDomainRollbackPreflight,
   verifyDnsChange,
   verifyDomainRelease,
-} from "../tools/domain-core.mjs";
-
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+} = activeFixture.module;
 const workflowPath = path.join(repositoryRoot, "tools", "domain-workflow.mjs");
 const planTime = new Date("2026-08-21T07:31:00.000Z");
 const unrelatedRecords = [
@@ -19,16 +29,20 @@ const unrelatedRecords = [
   { id: "b".repeat(32), type: "AAAA", name: "test.yutodev.com", modifiedOn: "2026-04-27T05:40:28.511Z" },
 ];
 
+afterAll(async () => {
+  await rm(activeFixture.root, { recursive: true, force: true });
+});
+
 /** @returns {any} */
 function liveInput() {
   return {
     schemaVersion: 1,
-    source: "codex-live-inspection",
+    source: "operator-live-inspection",
     cloudflare: {
       observedAt: "2026-08-21T07:30:00.000Z",
-      accountId: "7ea8e713d76506f9e303f58624829aa5",
-      accountName: "Yuto Dev",
-      zoneId: "df938e9c196edf952ff26e95f02edf49",
+      accountId: canonicalAuthority.accounts.cloudflare.accountId,
+      accountName: canonicalAuthority.accounts.cloudflare.accountName,
+      zoneId: canonicalAuthority.resourceTargets.cloudflare.zoneId,
       zoneName: "yutodev.com",
       zoneStatus: "active",
       caaStatus: "absent",
@@ -38,8 +52,8 @@ function liveInput() {
     vercel: {
       source: "vercel-api",
       observedAt: "2026-08-21T07:30:30.000Z",
-      teamId: "team_ANEUn6gVL8dccPaY08wkvxFt",
-      projectId: "prj_KCauT0Bgq4PBZjrxuA1PO3J0Q3Q8",
+      teamId: canonicalAuthority.accounts.vercel.teamId,
+      projectId: canonicalAuthority.resourceTargets.vercel.projectId,
       hostname: "web-template.yutodev.com",
       ownershipVerified: true,
       configurationStatus: "pending",
@@ -71,6 +85,21 @@ function changedSnapshot(plan, overrides = {}) {
       modifiedOn: "2026-08-21T07:31:30.000Z",
     }],
     ...overrides,
+  });
+}
+
+async function placeholderModule() {
+  const placeholderAuthority = structuredClone(canonicalAuthority);
+  placeholderAuthority.accounts.vercel.teamId = providerPlaceholders.vercelScope;
+  placeholderAuthority.resourceTargets.vercel.projectId = providerPlaceholders.vercelProjectId;
+  placeholderAuthority.accounts.cloudflare.accountId = providerPlaceholders.cloudflareAccountId;
+  placeholderAuthority.accounts.cloudflare.accountName = providerPlaceholders.cloudflareAccountName;
+  placeholderAuthority.resourceTargets.cloudflare.zoneId = providerPlaceholders.cloudflareZoneId;
+  return providerCoreModule({
+    authority: placeholderAuthority,
+    core: "domain-core.mjs",
+    configuration: "domain.json",
+    prefix: "domain-placeholder-",
   });
 }
 
@@ -123,6 +152,21 @@ describe("Cloudflare domain workflow", () => {
     expect(() => planFrom(withSecret)).toThrow(/Unrecognized key/u);
   });
 
+  it("rejects a domain plan bound to inactive provider placeholder authority", async () => {
+    const fixture = await placeholderModule();
+    try {
+      const input = liveInput();
+      input.cloudflare.accountId = providerPlaceholders.cloudflareAccountId;
+      input.cloudflare.accountName = providerPlaceholders.cloudflareAccountName;
+      input.cloudflare.zoneId = providerPlaceholders.cloudflareZoneId;
+      input.vercel.teamId = providerPlaceholders.vercelScope;
+      input.vercel.projectId = providerPlaceholders.vercelProjectId;
+      expect(() => fixture.module.createDomainPlan(input, planTime)).toThrow(/inactive/u);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("requires a fresh post-plan Cloudflare read and fixes the create API request", () => {
     const plan = planFrom();
     const current = currentSnapshot(plan, { unrelatedRecords: [...plan.cloudflare.unrelatedRecords].reverse() });
@@ -132,7 +176,7 @@ describe("Cloudflare domain workflow", () => {
       recordId: null,
       request: {
         method: "POST",
-        path: "/zones/df938e9c196edf952ff26e95f02edf49/dns_records",
+        path: `/zones/${canonicalAuthority.resourceTargets.cloudflare.zoneId}/dns_records`,
         body: plan.desiredRecord,
       },
     });
@@ -297,5 +341,13 @@ describe("Cloudflare domain workflow", () => {
     const malformed = spawnSync(process.execPath, [workflowPath, "lint", "--output"], { cwd: repositoryRoot, encoding: "utf8" });
     expect(malformed.status).not.toBe(0);
     expect(malformed.stderr).toMatch(/Expected --name value options/u);
+  });
+
+  it("fails closed for legacy apply and rollback mutation commands", () => {
+    for (const command of ["apply-preflight", "rollback-preflight"]) {
+      const result = spawnSync(process.execPath, [workflowPath, command], { cwd: repositoryRoot, encoding: "utf8" });
+      expect(result.status, command).not.toBe(0);
+      expect(result.stderr, command).toMatch(/unsupported.*guarded adapter|provider-specific guarded adapter/iu);
+    }
   });
 });

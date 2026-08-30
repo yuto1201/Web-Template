@@ -7,6 +7,16 @@ const familySchema = z.enum([...knownFamilies, "unknown"]);
 const riskSchema = z.enum(["normal", "high"]);
 const surfaceSchema = z.enum(["codex-local", "claude-local", "cursor-cloud"]);
 
+/** @param {string} family */
+export function operationModelFamily(family) {
+  return ({
+    openai: "gpt",
+    anthropic: "claude",
+    cursor: "cursor",
+    xai: "xai",
+  })[family] ?? null;
+}
+
 /** @param {string} left @param {string} right */
 function compareCodePoints(left, right) {
   const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);
@@ -28,7 +38,6 @@ export const executionOperationNames = [
   "github.create_pr",
   "github.merge_pr",
   "github.delete_branch",
-  "github.update_ruleset",
   "supabase.inspect_project",
   "supabase.apply_migrations",
   "vercel.inspect_project",
@@ -82,7 +91,7 @@ const executionPolicySchema = z.object({
   schemaVersion: z.literal(1),
   surfaces: z.object({
     "codex-local": z.object({ branchPrefix: z.literal("codex"), providerOperator: z.literal(true) }).strict(),
-    "claude-local": z.object({ branchPrefix: z.literal("claude"), providerOperator: z.literal(false) }).strict(),
+    "claude-local": z.object({ branchPrefix: z.literal("claude"), providerOperator: z.literal(true) }).strict(),
     "cursor-cloud": z.object({ branchPrefix: z.literal("cursor"), providerOperator: z.literal(true) }).strict(),
   }).strict(),
   modelFamilies: z.object({

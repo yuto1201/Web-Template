@@ -1,6 +1,6 @@
 # Cursor Cloud onboarding, activation, and revocation
 
-Follow this runbook in order. Stop at the first mismatch and use the repository blocked state named in that step. Build readiness never grants provider authority, and activating Cursor never grants authority to `claude-local` or to Cursor subagents.
+Follow this runbook in order. Stop at the first mismatch and use the repository blocked state named in that step. Build readiness never grants provider authority. `claude-local` and `codex-local` have the same account-bound authority under D-007; Cursor subagents remain read-only, and `cursor-cloud` additionally requires the activation proven here.
 
 ## 1. Connect the personal source-control account
 
@@ -119,6 +119,6 @@ When removing Cursor access, proceed in reverse authority order:
 4. delete/rotate Cursor runtime and Build secrets, then rotate any credential that may have entered prompts, logs, screenshots, browser state, or images;
 5. invalidate activation artifacts for future runs; a new run must repeat model, capability, identity, target, branch, and base-gate observations;
 6. record only secret names/scopes, public target identifiers, timestamps, and redacted post-state;
-7. leave `codex-local` and guarded `claude-local` configuration, authority, and credentials unchanged.
+7. leave the shared account-bound `codex-local` and `claude-local` configuration, authority, and credentials unchanged.
 
 Disabling Cursor Cloud must not weaken or remove the generated repository guardrails. The repository remains usable through its local modes, and provider activation returns to `needs-cursor-or-codex` until a future observed activation completes.

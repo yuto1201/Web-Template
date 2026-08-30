@@ -1,29 +1,34 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { lstat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const providerPlaceholders = Object.freeze({
-  supabaseOrganizationName: "REPLACE WITH CODEX",
-  vercelScope: "team_REPLACEWITHCODEX",
-  vercelProjectId: "prj_REPLACEWITHCODEX",
+  githubUserId: 1,
+  githubNodeId: "REPLACEWITHOPERATOR",
+  githubRepositoryId: 1,
+  githubRepositoryNodeId: "REPLACEWITHOPERATOR_REPOSITORY",
+  supabaseOrganizationName: "REPLACE WITH OPERATOR",
+  supabaseOrganizationId: "replacewithoperator0",
+  vercelTeamName: "REPLACE WITH OPERATOR",
+  vercelTeamSlug: "replace-with-operator",
+  vercelScope: "team_REPLACEWITHOPERATOR",
+  vercelProjectId: "prj_REPLACEWITHOPERATOR",
   cloudflareAccountId: "00000000000000000000000000000000",
-  cloudflareAccountName: "REPLACE WITH CODEX",
+  cloudflareAccountName: "REPLACE WITH OPERATOR",
+  cloudflareLoginEmailHint: "not configured",
+  cloudflareLoginEmailSha256: "0".repeat(64),
+  cloudflareRequiredRole: "REPLACE WITH OPERATOR",
   cloudflareZoneId: "11111111111111111111111111111111",
+  linearWorkspaceName: "REPLACE WITH OPERATOR",
+  linearWorkspaceSlug: "replace-with-operator",
+  linearWorkspaceUrl: "https://linear.app/replace-with-operator",
+  linearUserName: "REPLACE WITH OPERATOR",
+  linearUserEmailHint: "not configured",
+  linearUserEmailSha256: "0".repeat(64),
+  linearRequiredRole: "REPLACE WITH OPERATOR",
+  linearTeamKey: "TBD",
 });
-
-export const cursorTemplateGuardrailPaths = Object.freeze([
-  ".cursor/Dockerfile",
-  ".cursor/environment.json",
-  ".cursor/hooks.json",
-  ".cursor/agents/change-evaluator-anthropic.md",
-  ".cursor/agents/change-evaluator-openai.md",
-  ".cursor/agents/consultant-anthropic.md",
-  ".cursor/agents/consultant-openai.md",
-  ".cursor/agents/supabase-auditor-anthropic.md",
-  ".cursor/agents/supabase-auditor-openai.md",
-  "config/execution.json",
-  "docs/onboarding-cursor-cloud.md",
-]);
 
 /** @param {string} value */
 function sha256(value) {
@@ -31,64 +36,12 @@ function sha256(value) {
 }
 
 const ignoredDirectories = new Set([
-  ".artifacts", ".git", ".next", ".supabase", ".vercel", ".worktrees",
+  ".artifacts", ".git", ".next", ".supabase", ".superpowers", ".vercel", ".worktrees",
   "coverage", "node_modules", "out", "playwright-report", "test-results",
 ]);
 const ignoredFileExtensions = new Set([
   ".gif", ".ico", ".jpeg", ".jpg", ".pdf", ".png", ".tsbuildinfo", ".webp", ".zip",
 ]);
-const credentialEvidencePatterns = Object.freeze([
-  {
-    kind: "supabase-service-role-assignment",
-    source: `["']?(?:SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SECRET_KEY|SERVICE_ROLE_KEY)["']?\\s*[:=]\\s*["']?(?:eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}|sb_(?:secret|p)_[A-Za-z0-9_-]{20,})`,
-    flags: "giu",
-  },
-  {
-    kind: "vercel-token-assignment",
-    source: `["']?(?:VERCEL_TOKEN|VERCEL_ACCESS_TOKEN)["']?\\s*[:=]\\s*["']?[A-Za-z0-9_-]{20,}`,
-    flags: "giu",
-  },
-  {
-    kind: "cloudflare-credential-assignment",
-    source: `["']?(?:CLOUDFLARE_API_TOKEN|CF_API_TOKEN|CLOUDFLARE_GLOBAL_API_KEY|CF_API_KEY)["']?\\s*[:=]\\s*["']?[A-Za-z0-9_-]{20,}`,
-    flags: "giu",
-  },
-  {
-    kind: "aws-secret-assignment",
-    source: `["']?(?:AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)["']?\\s*[:=]\\s*["']?[A-Za-z0-9/+=_-]{32,}`,
-    flags: "giu",
-  },
-  { kind: "private-key", source: "-----BEGIN (?:EC |OPENSSH |RSA )?PRIVATE KEY-----", flags: "gu" },
-  { kind: "github-fine-grained-token", source: "\\bgithub_pat_[A-Za-z0-9_]{20,}\\b", flags: "gu" },
-  { kind: "github-classic-token", source: "\\bgh[pousr]_[A-Za-z0-9_]{30,}\\b", flags: "gu" },
-  { kind: "aws-access-key", source: "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b", flags: "gu" },
-  { kind: "supabase-access-token", source: "\\bsbp_[A-Za-z0-9]{20,}\\b", flags: "gu" },
-  { kind: "supabase-secret-key", source: "\\bsb_secret_[A-Za-z0-9_-]{20,}\\b", flags: "gu" },
-  { kind: "stripe-live-key", source: "\\bsk_live_[A-Za-z0-9]{20,}\\b", flags: "gu" },
-  { kind: "cloudflare-legacy-key", source: "\\bv1\\.0-[A-Za-z0-9_-]{40,}\\b", flags: "gu" },
-]);
-
-/**
- * Return only fixed credential categories and offsets; never return candidate values.
- * Overlapping raw-token and assignment matches represent one credential finding.
- * @param {string} content
- */
-export function findCredentialEvidence(content) {
-  /** @type {Array<{ kind: string, index: number, end: number }>} */
-  const findings = [];
-  for (const definition of credentialEvidencePatterns) {
-    const pattern = new RegExp(definition.source, definition.flags);
-    for (const match of content.matchAll(pattern)) {
-      const index = match.index ?? 0;
-      const end = index + match[0].length;
-      if (findings.some((finding) => index < finding.end && end > finding.index)) continue;
-      findings.push({ kind: definition.kind, index, end });
-    }
-  }
-  return findings
-    .toSorted((left, right) => left.index - right.index || left.kind.localeCompare(right.kind))
-    .map(({ kind, index }) => ({ kind, index }));
-}
 const portOffsets = Object.freeze({
   supabaseBase: 0,
   supabaseApi: 1,
@@ -99,19 +52,6 @@ const portOffsets = Object.freeze({
   supabasePooler: 9,
   supabaseInspector: 63,
 });
-
-/** @param {string} root @param {string} relative */
-async function isIgnoredSddControllerDirectory(root, relative) {
-  if (relative.split(path.sep).join("/") !== ".superpowers/sdd") return false;
-  try {
-    const ignore = await readFile(path.join(root, relative, ".gitignore"), "utf8");
-    const rules = ignore.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
-    return rules.length === 1 && rules[0] === "*";
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
-    throw error;
-  }
-}
 
 /** @param {unknown} condition @param {string} message */
 function assert(condition, message) {
@@ -130,16 +70,35 @@ function exactKeys(value, allowed, label) {
   assert(extras.length === 0, `${label} contains unsupported keys: ${extras.join(", ")}.`);
 }
 
-/** @param {unknown} value @param {string} label @param {RegExp} pattern */
+/** @param {unknown} value @param {string} label @param {RegExp} pattern @returns {string} */
 function string(value, label, pattern) {
   assert(typeof value === "string" && pattern.test(value), `${label} is invalid.`);
-  return value;
+  return /** @type {string} */ (value);
+}
+
+/** @param {unknown} value @param {string} label @returns {string | null} */
+function nullableString(value, label) {
+  assert(value === null || typeof value === "string", `${label} must be a string or null.`);
+  return /** @type {string | null} */ (value);
 }
 
 /** @param {unknown} value @param {string} label */
-function nullableString(value, label) {
-  assert(value === null || typeof value === "string", `${label} must be a string or null.`);
-  return value;
+function nullablePositiveInteger(value, label) {
+  assert(value === null || (Number.isInteger(value) && Number(value) > 0), `${label} must be a positive integer or null.`);
+  return value === null ? null : Number(value);
+}
+
+/** @param {unknown[]} values @param {string} label */
+function rejectPartialAuthority(values, label) {
+  const configured = values.filter((value) => value !== null).length;
+  assert(configured === 0 || configured === values.length, `${label} contains partial authority; provide every field or null placeholders.`);
+}
+
+/** @param {unknown[]} accountValues @param {unknown[]} targetValues @param {string} label */
+function rejectPartialServiceGroup(accountValues, targetValues, label) {
+  const accountActive = accountValues.every((value) => value !== null);
+  const targetActive = targetValues.every((value) => value !== null);
+  assert(accountActive === targetActive, `${label} service group contains partial authority; account and target must both be active or both use inactive placeholders.`);
 }
 
 /** @param {unknown} value @param {string} label */
@@ -148,7 +107,7 @@ function port(value, label) {
   return Number(value);
 }
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {string} */
 function normalizeHttpsOrigin(value) {
   assert(typeof value === "string", "publicUrls.production must be an HTTPS origin.");
   const url = new URL(/** @type {string} */ (value));
@@ -163,15 +122,10 @@ function normalizeHttpsOrigin(value) {
 /** @param {unknown} value */
 export function normalizeInitializationConfig(value) {
   const input = object(value, "Initialization config");
-  exactKeys(input, ["schemaVersion", "appName", "slug", "github", "localPorts", "publicUrls", "ownership"], "Initialization config");
-  assert(input.schemaVersion === 1, "Initialization config schemaVersion must be 1.");
+  exactKeys(input, ["schemaVersion", "appName", "slug", "localPorts", "publicUrls", "accounts", "servicePolicies", "resourceTargets"], "Initialization config");
+  assert(input.schemaVersion === 2, "Initialization config schemaVersion must be 2.");
   const appName = string(input.appName, "appName", /^(?=.{2,64}$)[^\r\n\t"\\]+$/u);
   const slug = string(input.slug, "slug", /^(?=.{2,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/u);
-
-  const github = object(input.github, "github");
-  exactKeys(github, ["owner", "repository"], "github");
-  const githubOwner = string(github.owner, "github.owner", /^(?=.{1,39}$)(?!-)[A-Za-z0-9-]+(?<!-)$/u);
-  const githubRepository = string(github.repository, "github.repository", /^(?=.{1,100}$)[A-Za-z0-9._-]+$/u);
 
   const localPorts = object(input.localPorts, "localPorts");
   exactKeys(localPorts, ["app", "supabaseBase"], "localPorts");
@@ -186,75 +140,251 @@ export function normalizeInitializationConfig(value) {
   exactKeys(publicUrls, ["production"], "publicUrls");
   const production = normalizeHttpsOrigin(publicUrls.production);
 
-  const ownership = object(input.ownership, "ownership");
-  exactKeys(ownership, ["supabase", "vercel", "cloudflare"], "ownership");
-  const supabase = object(ownership.supabase, "ownership.supabase");
-  exactKeys(supabase, ["organizationName", "projectRef"], "ownership.supabase");
-  const supabaseOrganization = nullableString(supabase.organizationName, "ownership.supabase.organizationName") ?? providerPlaceholders.supabaseOrganizationName;
-  string(supabaseOrganization, "ownership.supabase.organizationName", /^(?=.{1,128}$)[^\r\n"\\]+$/u);
-  const supabaseProjectRef = nullableString(supabase.projectRef, "ownership.supabase.projectRef");
-  if (supabaseProjectRef !== null) string(supabaseProjectRef, "ownership.supabase.projectRef", /^[a-z0-9]{20}$/u);
-
-  const vercel = object(ownership.vercel, "ownership.vercel");
-  exactKeys(vercel, ["scope", "projectId"], "ownership.vercel");
-  const vercelScope = nullableString(vercel.scope, "ownership.vercel.scope") ?? providerPlaceholders.vercelScope;
-  const vercelProjectId = nullableString(vercel.projectId, "ownership.vercel.projectId") ?? providerPlaceholders.vercelProjectId;
-  string(vercelScope, "ownership.vercel.scope", /^team_[A-Za-z0-9]+$/u);
-  string(vercelProjectId, "ownership.vercel.projectId", /^prj_[A-Za-z0-9]+$/u);
-
-  const cloudflare = object(ownership.cloudflare, "ownership.cloudflare");
-  exactKeys(cloudflare, ["accountId", "accountName", "zoneId", "zoneName"], "ownership.cloudflare");
-  const cloudflareAccountId = nullableString(cloudflare.accountId, "ownership.cloudflare.accountId") ?? providerPlaceholders.cloudflareAccountId;
-  const cloudflareAccountName = nullableString(cloudflare.accountName, "ownership.cloudflare.accountName") ?? providerPlaceholders.cloudflareAccountName;
-  const cloudflareZoneId = nullableString(cloudflare.zoneId, "ownership.cloudflare.zoneId") ?? providerPlaceholders.cloudflareZoneId;
-  const cloudflareZoneName = string(cloudflare.zoneName, "ownership.cloudflare.zoneName", /^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/u);
-  string(cloudflareAccountId, "ownership.cloudflare.accountId", /^[0-9a-f]{32}$/u);
-  string(cloudflareZoneId, "ownership.cloudflare.zoneId", /^[0-9a-f]{32}$/u);
-  string(cloudflareAccountName, "ownership.cloudflare.accountName", /^(?=.{1,128}$)[^\r\n"\\]+$/u);
-
   const hostname = new URL(production).hostname;
+  assert(hostname.startsWith(`${slug}.`), "The production hostname must be slug.cloudflareZoneName for the DNS-only starter policy.");
+  const cloudflareZoneName = hostname.slice(slug.length + 1);
+  string(cloudflareZoneName, "cloudflareZoneName", /^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/u);
   assert(hostname === `${slug}.${cloudflareZoneName}`, "The production hostname must be slug.cloudflareZoneName for the DNS-only starter policy.");
 
-  return {
-    schemaVersion: 1,
+  const accounts = object(input.accounts, "accounts");
+  exactKeys(accounts, ["github", "supabase", "vercel", "cloudflare", "linear"], "accounts");
+  const githubAccount = object(accounts.github, "accounts.github");
+  exactKeys(githubAccount, ["login", "userId", "nodeId"], "accounts.github");
+  const githubLogin = string(githubAccount.login, "accounts.github.login", /^(?=.{1,39}$)(?!-)[A-Za-z0-9-]+(?<!-)$/u);
+  const githubUserId = nullablePositiveInteger(githubAccount.userId, "accounts.github.userId");
+  const githubNodeId = nullableString(githubAccount.nodeId, "accounts.github.nodeId");
+  rejectPartialAuthority([githubUserId, githubNodeId], "accounts.github");
+  if (githubNodeId !== null) string(githubNodeId, "accounts.github.nodeId", /^.{1,256}$/u);
+
+  const supabaseAccount = object(accounts.supabase, "accounts.supabase");
+  exactKeys(supabaseAccount, ["organizationName", "organizationId"], "accounts.supabase");
+  const supabaseOrganizationName = nullableString(supabaseAccount.organizationName, "accounts.supabase.organizationName");
+  const supabaseOrganizationId = nullableString(supabaseAccount.organizationId, "accounts.supabase.organizationId");
+  if (supabaseOrganizationName !== null) string(supabaseOrganizationName, "accounts.supabase.organizationName", /^(?=.{1,128}$)[^\r\n"\\]+$/u);
+  if (supabaseOrganizationId !== null) string(supabaseOrganizationId, "accounts.supabase.organizationId", /^[a-z0-9]{20}$/u);
+  rejectPartialAuthority([supabaseOrganizationName, supabaseOrganizationId], "accounts.supabase");
+
+  const vercelAccount = object(accounts.vercel, "accounts.vercel");
+  exactKeys(vercelAccount, ["teamName", "teamSlug", "teamId", "requiredPlan"], "accounts.vercel");
+  const vercelTeamName = nullableString(vercelAccount.teamName, "accounts.vercel.teamName");
+  const vercelTeamSlug = nullableString(vercelAccount.teamSlug, "accounts.vercel.teamSlug");
+  const vercelTeamId = nullableString(vercelAccount.teamId, "accounts.vercel.teamId");
+  const vercelRequiredPlan = nullableString(vercelAccount.requiredPlan, "accounts.vercel.requiredPlan");
+  rejectPartialAuthority([vercelTeamName, vercelTeamSlug, vercelTeamId, vercelRequiredPlan], "accounts.vercel");
+  if (vercelTeamName !== null) string(vercelTeamName, "accounts.vercel.teamName", /^(?=.{1,128}$)[^\r\n"\\]+$/u);
+  if (vercelTeamSlug !== null) string(vercelTeamSlug, "accounts.vercel.teamSlug", /^[a-z0-9-]+$/u);
+  if (vercelTeamId !== null) string(vercelTeamId, "accounts.vercel.teamId", /^team_[A-Za-z0-9]+$/u);
+  if (vercelRequiredPlan !== null) string(vercelRequiredPlan, "accounts.vercel.requiredPlan", /^(?:Hobby|Pro|Enterprise)$/u);
+
+  const cloudflareAccount = object(accounts.cloudflare, "accounts.cloudflare");
+  exactKeys(cloudflareAccount, ["accountId", "accountName", "loginEmailHint", "loginEmailSha256", "requiredRole", "allowedZonePlans"], "accounts.cloudflare");
+  const cloudflareAccountId = nullableString(cloudflareAccount.accountId, "accounts.cloudflare.accountId");
+  const cloudflareAccountName = nullableString(cloudflareAccount.accountName, "accounts.cloudflare.accountName");
+  const cloudflareLoginEmailHint = nullableString(cloudflareAccount.loginEmailHint, "accounts.cloudflare.loginEmailHint");
+  const cloudflareLoginEmailSha256 = nullableString(cloudflareAccount.loginEmailSha256, "accounts.cloudflare.loginEmailSha256");
+  const cloudflareRequiredRole = nullableString(cloudflareAccount.requiredRole, "accounts.cloudflare.requiredRole");
+  assert(cloudflareAccount.allowedZonePlans === null || Array.isArray(cloudflareAccount.allowedZonePlans), "accounts.cloudflare.allowedZonePlans must be an array or null.");
+  const cloudflareAllowedZonePlans = /** @type {string[] | null} */ (cloudflareAccount.allowedZonePlans);
+  if (cloudflareAccountId !== null) string(cloudflareAccountId, "accounts.cloudflare.accountId", /^[0-9a-f]{32}$/u);
+  if (cloudflareAccountName !== null) string(cloudflareAccountName, "accounts.cloudflare.accountName", /^(?=.{1,128}$)[^\r\n"\\]+$/u);
+  if (cloudflareLoginEmailSha256 !== null) string(cloudflareLoginEmailSha256, "accounts.cloudflare.loginEmailSha256", /^[0-9a-f]{64}$/u);
+  if (cloudflareAllowedZonePlans !== null) assert(cloudflareAllowedZonePlans.length > 0 && cloudflareAllowedZonePlans.every((plan) => ["Free", "Pro", "Business", "Enterprise"].includes(plan)), "accounts.cloudflare.allowedZonePlans is invalid.");
+  rejectPartialAuthority([cloudflareAccountId, cloudflareAccountName, cloudflareLoginEmailHint, cloudflareLoginEmailSha256, cloudflareRequiredRole, cloudflareAllowedZonePlans], "accounts.cloudflare");
+
+  const linearAccount = object(accounts.linear, "accounts.linear");
+  const linearKeys = ["workspaceName", "workspaceSlug", "workspaceUrl", "workspaceId", "userName", "userEmailHint", "userEmailSha256", "userId", "requiredRole"];
+  exactKeys(linearAccount, linearKeys, "accounts.linear");
+  const linearValues = Object.fromEntries(linearKeys.map((key) => [key, nullableString(linearAccount[key], `accounts.linear.${key}`)]));
+  if (linearValues.workspaceName !== null) string(linearValues.workspaceName, "accounts.linear.workspaceName", /^.{1,256}$/u);
+  if (linearValues.workspaceSlug !== null) string(linearValues.workspaceSlug, "accounts.linear.workspaceSlug", /^[a-z0-9-]+$/u);
+  if (linearValues.workspaceUrl !== null) string(linearValues.workspaceUrl, "accounts.linear.workspaceUrl", /^https:\/\/linear\.app\/[a-z0-9-]+$/u);
+  if (linearValues.workspaceId !== null) string(linearValues.workspaceId, "accounts.linear.workspaceId", /^.{1,256}$/u);
+  if (linearValues.userName !== null) string(linearValues.userName, "accounts.linear.userName", /^.{1,256}$/u);
+  if (linearValues.userEmailHint !== null) string(linearValues.userEmailHint, "accounts.linear.userEmailHint", /^.{1,128}$/u);
+  if (linearValues.userEmailSha256 !== null) string(linearValues.userEmailSha256, "accounts.linear.userEmailSha256", /^[0-9a-f]{64}$/u);
+  if (linearValues.userId !== null) string(linearValues.userId, "accounts.linear.userId", /^.{1,256}$/u);
+  if (linearValues.requiredRole !== null) string(linearValues.requiredRole, "accounts.linear.requiredRole", /^.{1,256}$/u);
+
+  const servicePolicies = object(input.servicePolicies, "servicePolicies");
+  exactKeys(servicePolicies, ["github", "supabase", "vercel", "cloudflare", "linear"], "servicePolicies");
+  for (const service of ["github", "supabase", "vercel", "cloudflare"]) {
+    const policy = object(servicePolicies[service], `servicePolicies.${service}`);
+    exactKeys(policy, ["mode"], `servicePolicies.${service}`);
+    assert(policy.mode === "repository-active", `servicePolicies.${service}.mode must be repository-active.`);
+  }
+  const linearPolicy = object(servicePolicies.linear, "servicePolicies.linear");
+  exactKeys(linearPolicy, ["mode"], "servicePolicies.linear");
+  assert(linearPolicy.mode === "explicit-user-purpose-only", "servicePolicies.linear.mode must be explicit-user-purpose-only.");
+
+  const resourceTargets = object(input.resourceTargets, "resourceTargets");
+  exactKeys(resourceTargets, ["github", "supabase", "vercel", "cloudflare", "linear"], "resourceTargets");
+  const githubTarget = object(resourceTargets.github, "resourceTargets.github");
+  exactKeys(githubTarget, ["owner", "repository", "repositoryId", "repositoryNodeId"], "resourceTargets.github");
+  const githubOwner = string(githubTarget.owner, "resourceTargets.github.owner", /^(?=.{1,39}$)(?!-)[A-Za-z0-9-]+(?<!-)$/u);
+  const githubRepository = string(githubTarget.repository, "resourceTargets.github.repository", /^(?=.{1,100}$)[A-Za-z0-9._-]+$/u);
+  const githubRepositoryId = nullablePositiveInteger(githubTarget.repositoryId, "resourceTargets.github.repositoryId");
+  const githubRepositoryNodeId = nullableString(githubTarget.repositoryNodeId, "resourceTargets.github.repositoryNodeId");
+  rejectPartialAuthority([githubRepositoryId, githubRepositoryNodeId], "resourceTargets.github");
+  assert(githubLogin === githubOwner, "GitHub account login and repository owner must agree.");
+
+  const supabaseTarget = object(resourceTargets.supabase, "resourceTargets.supabase");
+  exactKeys(supabaseTarget, ["projectRef"], "resourceTargets.supabase");
+  const supabaseProjectRef = nullableString(supabaseTarget.projectRef, "resourceTargets.supabase.projectRef");
+  if (supabaseProjectRef !== null) string(supabaseProjectRef, "resourceTargets.supabase.projectRef", /^[a-z0-9]{20}$/u);
+
+  const vercelTarget = object(resourceTargets.vercel, "resourceTargets.vercel");
+  exactKeys(vercelTarget, ["projectId"], "resourceTargets.vercel");
+  const vercelProjectId = nullableString(vercelTarget.projectId, "resourceTargets.vercel.projectId");
+  if (vercelProjectId !== null) string(vercelProjectId, "resourceTargets.vercel.projectId", /^prj_[A-Za-z0-9]+$/u);
+
+  const cloudflareTarget = object(resourceTargets.cloudflare, "resourceTargets.cloudflare");
+  exactKeys(cloudflareTarget, ["zoneId", "domains"], "resourceTargets.cloudflare");
+  const cloudflareZoneId = nullableString(cloudflareTarget.zoneId, "resourceTargets.cloudflare.zoneId");
+  if (cloudflareZoneId !== null) string(cloudflareZoneId, "resourceTargets.cloudflare.zoneId", /^[0-9a-f]{32}$/u);
+  assert(Array.isArray(cloudflareTarget.domains) && cloudflareTarget.domains.length === 1 && cloudflareTarget.domains[0] === hostname, "resourceTargets.cloudflare.domains must contain only the production hostname.");
+
+  const linearTarget = object(resourceTargets.linear, "resourceTargets.linear");
+  exactKeys(linearTarget, ["teamKey", "teamId"], "resourceTargets.linear");
+  const linearTeamKey = nullableString(linearTarget.teamKey, "resourceTargets.linear.teamKey");
+  const linearTeamId = nullableString(linearTarget.teamId, "resourceTargets.linear.teamId");
+  if (linearTeamKey !== null) string(linearTeamKey, "resourceTargets.linear.teamKey", /^[A-Z][A-Z0-9]{1,15}$/u);
+  if (linearTeamId !== null) string(linearTeamId, "resourceTargets.linear.teamId", /^.{1,256}$/u);
+  const linearReadableIdentity = [
+    linearValues.workspaceName,
+    linearValues.workspaceSlug,
+    linearValues.workspaceUrl,
+    linearValues.userName,
+    linearValues.userEmailHint,
+    linearValues.userEmailSha256,
+    linearValues.requiredRole,
+    linearTeamKey,
+  ];
+  const linearStableIdentity = [linearValues.workspaceId, linearValues.userId, linearTeamId];
+  rejectPartialAuthority(linearReadableIdentity, "Linear readable identity");
+  rejectPartialAuthority(linearStableIdentity, "Linear stable identity");
+  assert(linearStableIdentity.every((item) => item === null) || linearReadableIdentity.every((item) => item !== null), "Linear identity contains partial authority.");
+
+  rejectPartialServiceGroup([githubUserId, githubNodeId], [githubRepositoryId, githubRepositoryNodeId], "GitHub");
+  rejectPartialServiceGroup([supabaseOrganizationName, supabaseOrganizationId], [supabaseProjectRef], "Supabase");
+  rejectPartialServiceGroup([vercelTeamName, vercelTeamSlug, vercelTeamId, vercelRequiredPlan], [vercelProjectId], "Vercel");
+  rejectPartialServiceGroup([
+    cloudflareAccountId,
+    cloudflareAccountName,
+    cloudflareLoginEmailHint,
+    cloudflareLoginEmailSha256,
+    cloudflareRequiredRole,
+    cloudflareAllowedZonePlans,
+  ], [cloudflareZoneId], "Cloudflare");
+
+  const project = {
+    schemaVersion: 2,
     appName,
     slug,
-    github: { owner: githubOwner, repository: githubRepository },
     localPorts: { app: appPort, ...derivedPorts },
     publicUrls: {
       localhost: `http://localhost:${appPort}`,
       loopback: `http://127.0.0.1:${appPort}`,
       production,
     },
-    ownership: {
-      supabase: { organizationName: supabaseOrganization, projectRef: supabaseProjectRef },
-      vercel: { scope: vercelScope, projectId: vercelProjectId },
+    authorization: {
+      operatorLabels: ["codex", "claude"],
+      externalOperatorRoles: ["implementer", "external-operator"],
+      allowAutomaticAccountSwitch: false,
+    },
+    accounts: {
+      github: { login: githubLogin, userId: githubUserId ?? providerPlaceholders.githubUserId, nodeId: githubNodeId ?? providerPlaceholders.githubNodeId },
+      supabase: {
+        organizationName: supabaseOrganizationName ?? providerPlaceholders.supabaseOrganizationName,
+        organizationId: supabaseOrganizationId ?? providerPlaceholders.supabaseOrganizationId,
+      },
+      vercel: {
+        teamName: vercelTeamName ?? providerPlaceholders.vercelTeamName,
+        teamSlug: vercelTeamSlug ?? providerPlaceholders.vercelTeamSlug,
+        teamId: vercelTeamId ?? providerPlaceholders.vercelScope,
+        requiredPlan: vercelRequiredPlan ?? "Hobby",
+      },
       cloudflare: {
-        accountId: cloudflareAccountId,
-        accountName: cloudflareAccountName,
-        zoneId: cloudflareZoneId,
-        zoneName: cloudflareZoneName,
+        accountId: cloudflareAccountId ?? providerPlaceholders.cloudflareAccountId,
+        accountName: cloudflareAccountName ?? providerPlaceholders.cloudflareAccountName,
+        loginEmailHint: cloudflareLoginEmailHint ?? providerPlaceholders.cloudflareLoginEmailHint,
+        loginEmailSha256: cloudflareLoginEmailSha256 ?? providerPlaceholders.cloudflareLoginEmailSha256,
+        requiredRole: cloudflareRequiredRole ?? providerPlaceholders.cloudflareRequiredRole,
+        allowedZonePlans: cloudflareAllowedZonePlans ?? ["Free"],
+      },
+      linear: {
+        workspaceName: linearValues.workspaceName ?? providerPlaceholders.linearWorkspaceName,
+        workspaceSlug: linearValues.workspaceSlug ?? providerPlaceholders.linearWorkspaceSlug,
+        workspaceUrl: linearValues.workspaceUrl ?? providerPlaceholders.linearWorkspaceUrl,
+        workspaceId: linearValues.workspaceId,
+        userName: linearValues.userName ?? providerPlaceholders.linearUserName,
+        userEmailHint: linearValues.userEmailHint ?? providerPlaceholders.linearUserEmailHint,
+        userEmailSha256: linearValues.userEmailSha256 ?? providerPlaceholders.linearUserEmailSha256,
+        userId: linearValues.userId,
+        requiredRole: linearValues.requiredRole ?? providerPlaceholders.linearRequiredRole,
+      },
+    },
+    servicePolicies: structuredClone(servicePolicies),
+    resourceTargets: {
+      github: {
+        owner: githubOwner,
+        repository: githubRepository,
+        repositoryId: githubRepositoryId ?? providerPlaceholders.githubRepositoryId,
+        repositoryNodeId: githubRepositoryNodeId ?? providerPlaceholders.githubRepositoryNodeId,
+      },
+      supabase: { projectRef: supabaseProjectRef },
+      vercel: { projectId: vercelProjectId ?? providerPlaceholders.vercelProjectId },
+      cloudflare: { zoneId: cloudflareZoneId ?? providerPlaceholders.cloudflareZoneId, domains: [hostname] },
+      linear: { teamKey: linearTeamKey ?? providerPlaceholders.linearTeamKey, teamId: linearTeamId },
+    },
+    observations: {
+      github: {
+        displayName: "Not observed",
+        createdAt: "1970-01-01T00:00:00.000Z",
+        publicRepositories: 0,
+        observedAt: "1970-01-01T00:00:00.000Z",
       },
     },
   };
+  return project;
 }
 
 /** @param {Record<string, any>} project @returns {Record<string, string>} */
 export function projectTokens(project) {
-  return {
+  const tokens = {
     productionUrl: project.publicUrls.production,
     productionHostname: new URL(project.publicUrls.production).hostname,
     localhostOrigin: project.publicUrls.localhost,
     loopbackOrigin: project.publicUrls.loopback,
-    supabaseOrganizationName: project.ownership.supabase.organizationName,
-    vercelProjectId: project.ownership.vercel.projectId,
-    vercelScope: project.ownership.vercel.scope,
-    cloudflareAccountId: project.ownership.cloudflare.accountId,
-    cloudflareAccountName: project.ownership.cloudflare.accountName,
-    cloudflareZoneId: project.ownership.cloudflare.zoneId,
-    cloudflareZoneName: project.ownership.cloudflare.zoneName,
-    githubRepository: project.github.repository,
-    githubOwner: project.github.owner,
+    supabaseOrganizationName: project.accounts.supabase.organizationName,
+    supabaseOrganizationId: project.accounts.supabase.organizationId,
+    vercelTeamName: project.accounts.vercel.teamName,
+    vercelTeamSlug: project.accounts.vercel.teamSlug,
+    vercelTeamId: project.accounts.vercel.teamId,
+    vercelProjectId: project.resourceTargets.vercel.projectId,
+    cloudflareAccountId: project.accounts.cloudflare.accountId,
+    cloudflareAccountName: project.accounts.cloudflare.accountName,
+    cloudflareLoginEmailHint: project.accounts.cloudflare.loginEmailHint,
+    cloudflareLoginEmailSha256: project.accounts.cloudflare.loginEmailSha256,
+    cloudflareZoneId: project.resourceTargets.cloudflare.zoneId,
+    cloudflareZoneName: new URL(project.publicUrls.production).hostname.slice(project.slug.length + 1),
+    linearWorkspaceName: project.accounts.linear.workspaceName,
+    linearWorkspaceSlug: project.accounts.linear.workspaceSlug,
+    linearWorkspaceUrl: project.accounts.linear.workspaceUrl,
+    linearWorkspaceId: project.accounts.linear.workspaceId,
+    linearUserName: project.accounts.linear.userName,
+    linearUserEmailHint: project.accounts.linear.userEmailHint,
+    linearUserEmailSha256: project.accounts.linear.userEmailSha256,
+    linearUserId: project.accounts.linear.userId,
+    linearTeamKey: project.resourceTargets.linear.teamKey,
+    linearTeamId: project.resourceTargets.linear.teamId,
+    githubUserId: String(project.accounts.github.userId),
+    githubNodeId: project.accounts.github.nodeId,
+    githubRepositoryId: String(project.resourceTargets.github.repositoryId),
+    githubRepositoryNodeId: project.resourceTargets.github.repositoryNodeId,
+    githubDisplayName: project.observations.github.displayName,
+    githubCreatedAt: project.observations.github.createdAt,
+    githubRepository: project.resourceTargets.github.repository,
+    githubOwner: project.resourceTargets.github.owner,
     appName: project.appName,
     slug: project.slug,
     supabaseBasePort: String(project.localPorts.supabaseBase),
@@ -266,27 +396,47 @@ export function projectTokens(project) {
     supabasePoolerPort: String(project.localPorts.supabasePooler),
     supabaseInspectorPort: String(project.localPorts.supabaseInspector),
   };
+  return Object.fromEntries(Object.entries(tokens).filter(([, token]) => typeof token === "string" && token.length > 0));
 }
 
-/** @param {string} root @param {string} [relative] @returns {Promise<string[]>} */
-async function textFiles(root, relative = "") {
-  const directory = path.join(root, relative);
-  const entries = await readdir(directory, { withFileTypes: true });
+/** @param {string} root @returns {string[]} */
+export function listTrackedFiles(root) {
+  const command = spawnSync("git", ["ls-files", "--cached", "-z"], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (command.status !== 0 || command.error || typeof command.stdout !== "string") {
+    throw new Error(`Unable to enumerate tracked template files with git ls-files.\n${command.error?.message ?? command.stderr ?? ""}`.trim());
+  }
+
   const files = [];
-  for (const entry of entries) {
-    const child = relative ? path.join(relative, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      if (!ignoredDirectories.has(entry.name) && !(await isIgnoredSddControllerDirectory(root, child))) {
-        files.push(...await textFiles(root, child));
-      }
-      continue;
-    }
-    if (entry.name === ".git") continue;
-    if (!entry.isFile() || ignoredFileExtensions.has(path.extname(entry.name).toLowerCase())) continue;
-    if ((entry.name === ".env" || entry.name.startsWith(".env.")) && entry.name !== ".env.example") continue;
-    const content = await readFile(path.join(root, child));
+  for (const relative of command.stdout.split("\0").filter(Boolean)) {
+    const segments = relative.split("/");
+    assert(
+      !path.isAbsolute(relative) && !/^[A-Za-z]:\//u.test(relative) && !relative.includes("\\") &&
+        path.posix.normalize(relative) === relative && segments.every((segment) => segment && segment !== "." && segment !== ".."),
+      `Tracked template path is unsafe: ${JSON.stringify(relative)}.`,
+    );
+    if (!segments.includes(".superpowers")) files.push(relative);
+  }
+  return files.toSorted();
+}
+
+/** @param {string} root @param {string[]} trackedFiles @returns {Promise<string[]>} */
+async function textFiles(root, trackedFiles) {
+  const files = [];
+  for (const relative of trackedFiles) {
+    const segments = relative.split("/");
+    if (segments.slice(0, -1).some((segment) => ignoredDirectories.has(segment))) continue;
+    const name = segments.at(-1) ?? "";
+    const metadata = await lstat(path.join(root, relative));
+    if (!metadata.isFile() || metadata.isSymbolicLink() || ignoredFileExtensions.has(path.extname(name).toLowerCase())) continue;
+    if ((name === ".env" || name.startsWith(".env.")) && name !== ".env.example") continue;
+    const content = await readFile(path.join(root, relative));
     if (content.includes(0)) continue;
-    files.push(child.split(path.sep).join("/"));
+    files.push(relative);
   }
   return files.toSorted();
 }
@@ -302,11 +452,11 @@ function count(content, token) {
   return matches;
 }
 
-/** @param {string} root @param {Record<string, string>} tokens */
-export async function discoverOccurrences(root, tokens) {
+/** @param {string} root @param {Record<string, string>} tokens @param {string[]} [trackedFiles] */
+export async function discoverOccurrences(root, tokens, trackedFiles = listTrackedFiles(root)) {
   /** @type {Record<string, Record<string, number>>} */
   const result = Object.fromEntries(Object.keys(tokens).map((key) => [key, {}]));
-  for (const relative of await textFiles(root)) {
+  for (const relative of await textFiles(root, trackedFiles)) {
     const content = await readFile(path.join(root, relative), "utf8");
     for (const [key, token] of Object.entries(tokens)) {
       const occurrences = count(content, token);
@@ -316,51 +466,11 @@ export async function discoverOccurrences(root, tokens) {
   return result;
 }
 
-/** @param {string} root */
-export async function verifyCursorTemplateRetention(root) {
-  let sourceAccountCredentials = 0;
-  const credentialPaths = [];
-  for (const relative of cursorTemplateGuardrailPaths) {
-    const content = await readFile(path.join(root, relative), "utf8");
-    assert(content.length > 0, `Retained Cursor guardrail is empty: ${relative}.`);
-    const findings = findCredentialEvidence(content);
-    sourceAccountCredentials += findings.length;
-    if (findings.length > 0) credentialPaths.push(relative);
-  }
-  assert(
-    sourceAccountCredentials === 0,
-    `Retained Cursor guardrail contains a provider credential: ${credentialPaths.join(", ")}.`,
-  );
-  const expectedAgents = cursorTemplateGuardrailPaths
-    .filter((relative) => relative.startsWith(".cursor/agents/"))
-    .map((relative) => path.basename(relative))
-    .toSorted();
-  const actualAgents = (await readdir(path.join(root, ".cursor", "agents"))).toSorted();
-  assert(
-    JSON.stringify(actualAgents) === JSON.stringify(expectedAgents),
-    "Generated repository must retain exactly the six canonical Cursor agents.",
-  );
-  const readme = await readFile(path.join(root, "README.md"), "utf8");
-  const readmeCredentialFindings = findCredentialEvidence(readme);
-  sourceAccountCredentials += readmeCredentialFindings.length;
-  assert(sourceAccountCredentials === 0, "Retained Cursor onboarding link contains a provider credential.");
-  assert(
-    readme.includes("[Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md)"),
-    "Generated repository must link to Cursor Cloud onboarding.",
-  );
-  return {
-    files: [...cursorTemplateGuardrailPaths],
-    cursorAgents: actualAgents.length,
-    onboarding: "docs/onboarding-cursor-cloud.md",
-    sourceAccountCredentials,
-  };
-}
-
 /** @param {unknown} value */
 export function validateTemplateState(value) {
   const state = object(value, "config/template.json");
   exactKeys(state, ["schemaVersion", "status", "project", "occurrences", "initializationFingerprint", "managedHashes"], "config/template.json");
-  assert(state.schemaVersion === 1, "config/template.json schemaVersion must be 1.");
+  assert(state.schemaVersion === 2, "config/template.json schemaVersion must be 2.");
   assert(state.status === "template-source" || state.status === "initialized", "config/template.json status is invalid.");
   object(state.project, "config/template.json project");
   object(state.occurrences, "config/template.json occurrences");
@@ -427,7 +537,7 @@ export async function initializeTemplate(root, configValue) {
   await verifyTemplateSource(root, state);
   assert(project.appName !== state.project.appName, "appName must replace the template source name.");
   assert(project.slug !== state.project.slug, "slug must replace the template source slug.");
-  assert(project.github.repository !== state.project.github.repository, "github.repository must replace the template source repository name.");
+  assert(project.resourceTargets.github.repository !== state.project.resourceTargets.github.repository, "resourceTargets.github.repository must replace the template source repository name.");
 
   const sourceTokens = projectTokens(state.project);
   const targetTokens = projectTokens(project);
@@ -442,21 +552,21 @@ export async function initializeTemplate(root, configValue) {
 
   const ownershipPath = "config/ownership.json";
   const ownership = JSON.parse(outputs.get(ownershipPath) ?? await readFile(path.join(root, ownershipPath), "utf8"));
-  ownership.github = project.github;
-  ownership.supabase = project.ownership.supabase;
-  ownership.vercel = project.ownership.vercel;
-  ownership.cloudflare = {
-    accountId: project.ownership.cloudflare.accountId,
-    accountName: project.ownership.cloudflare.accountName,
-    zoneId: project.ownership.cloudflare.zoneId,
-    domains: [new URL(project.publicUrls.production).hostname],
-  };
+  ownership.schemaVersion = 2;
+  ownership.authorization = project.authorization;
+  ownership.accounts = project.accounts;
+  ownership.servicePolicies = project.servicePolicies;
+  ownership.resourceTargets = project.resourceTargets;
+  ownership.observations = project.observations;
+  for (const key of ["github", "supabase", "vercel", "cloudflare"]) delete ownership[key];
+  const { parseAuthority } = await import("./authority-core.mjs");
+  parseAuthority(ownership);
   outputs.set(ownershipPath, `${JSON.stringify(ownership, null, 2)}\n`);
 
   const domainPath = "config/domain.json";
   const domain = JSON.parse(outputs.get(domainPath) ?? await readFile(path.join(root, domainPath), "utf8"));
   domain.hostname = new URL(project.publicUrls.production).hostname;
-  domain.zoneName = project.ownership.cloudflare.zoneName;
+  domain.zoneName = new URL(project.publicUrls.production).hostname.slice(project.slug.length + 1);
   domain.recordName = project.slug;
   outputs.set(domainPath, `${JSON.stringify(domain, null, 2)}\n`);
 
@@ -465,7 +575,7 @@ export async function initializeTemplate(root, configValue) {
     .filter(([relative]) => relative !== statePath)
     .map(([relative, output]) => [relative, sha256(output)]));
   const initializedState = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     status: "initialized",
     project,
     occurrences: {},

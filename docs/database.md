@@ -8,7 +8,7 @@ Create every migration through the repository-pinned CLI, then edit the generate
 npm exec -- supabase migration new describe_the_change
 ```
 
-Never edit a migration already applied to a hosted project. Add a forward-only recovery migration instead. Hosted link, push, reset, and SQL execution are Codex-only external operations after the personal project identity is verified.
+Never edit a migration already applied to a hosted project. Add a forward-only recovery migration instead. The registered hosted-mutation contract is only `supabase.apply_migrations`: it requires an implementer or external-operator, the protected-main account and exact project ref, frozen Issue purpose, an ordered list of migration paths and content digests, fresh preflight/claim/postflight observations, provider idempotency, and exact-Head review. No Supabase production provider client ships in this release, so the operation currently fails closed before hosted execution. A later Issue must implement and verify that client. A missing project ref or changed migration byte also fails closed. Hosted reset, arbitrary SQL execution, and Supabase Auth-policy mutation are unsupported operations; legacy CLI compatibility does not authorize them.
 
 ## Exposed schema checklist
 
@@ -28,6 +28,8 @@ The baseline pgTAP suite also walks every table, view, and security-definer func
 Local API defaults are `public` and `graphql_public`, a 1,000-row response limit, PostgreSQL 17, one-hour JWTs, and email sign-up enabled without local email confirmation. Product auth policy is configured separately from this database baseline.
 
 Private schemas, idempotency keys, revision columns, RPC functions, and audit tables are optional product patterns. They are not installed by this neutral baseline.
+
+Destructive hosted reset, schema drop, or down migration is not implied by a normal migration authorization and is not registered for execution. Use expand → deploy → contract; a future contract step needs a separately registered operation with explicit authorization, exact target, reviewed recovery plan, and fresh provider evidence.
 
 ## Verification
 

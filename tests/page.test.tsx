@@ -12,5 +12,7 @@ describe("template landing page", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Every value has one side of the glass." })).toBeVisible();
     expect(screen.getByRole("group", { name: "Application delivery path" })).toBeVisible();
     expect(screen.getAllByRole("list")).toHaveLength(2);
+    expect(screen.getByText("Authenticated provider operations use account-bound authority.")).toBeVisible();
+    expect(screen.getByText(/Claude and Codex can both implement and operate/iu)).toBeVisible();
   });
 });

@@ -99,6 +99,23 @@ describe("generated agent assets", () => {
     }
   });
 
+  it("separates shared operator authority from read-only evaluator capability", async () => {
+    const assets = await buildGeneratedAssets(root);
+    expect(assets.get("CLAUDE.md")).toContain("same account-bound authority as Codex");
+
+    for (const [relative, content] of assets) {
+      if (relative.startsWith(`.claude${path.sep}agents${path.sep}`)) {
+        const tools = content.match(/^tools:\s*(.+)$/mu)?.[1]
+          ?.split(",")
+          .map((tool) => tool.trim());
+        expect(tools).toEqual(["Read", "Grep", "Glob"]);
+      }
+      if (relative.startsWith(`.codex${path.sep}agents${path.sep}`)) {
+        expect(content).toMatch(/^sandbox_mode = "read-only"$/mu);
+      }
+    }
+  });
+
   it("keeps the generated evaluator prompt and JSON schema on one result contract", async () => {
     const schema = JSON.parse(await readFile(path.join(root, "config", "review-contract.schema.json"), "utf8"));
     expect(schema.additionalProperties).toBe(false);

@@ -37,9 +37,12 @@ jobs:
           cache: npm
           cache-dependency-path: trusted/package-lock.json
 
-      - name: Install trusted verifier dependencies
+      - name: Install trusted gate dependencies
         working-directory: trusted
-        run: npm ci --ignore-scripts
+        shell: bash
+        run: |
+          npm install --global npm@11.6.2
+          npm ci --ignore-scripts
 
       - name: Verify exact-Head review evidence
         env:

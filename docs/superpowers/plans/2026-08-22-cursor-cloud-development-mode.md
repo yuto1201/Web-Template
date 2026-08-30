@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Work only on GitHub Issue #29 and branch `codex/29-cursor-cloud-mode`.
-- Keep `codex-local` and `claude-local` behavior and local Claude restrictions intact.
+- Historical note: this plan predates D-007 and Issue #33. Current policy gives `codex-local` and `claude-local` equal account-bound authority; evaluator and auditor roles remain read-only.
 - Treat Cursor as an execution surface, never as a model family.
 - Model identity must contain configured and observed raw IDs; `unknown` and invalid fallback fail closed.
 - Normal risk requires one observed reviewer family different from the observed primary family.
@@ -131,7 +131,7 @@ Create `config/execution.json` with this shape and exact initial values:
   "schemaVersion": 1,
   "surfaces": {
     "codex-local": { "branchPrefix": "codex", "providerOperator": true },
-    "claude-local": { "branchPrefix": "claude", "providerOperator": false },
+    "claude-local": { "branchPrefix": "claude", "providerOperator": true },
     "cursor-cloud": { "branchPrefix": "cursor", "providerOperator": true }
   },
   "modelFamilies": {
@@ -665,7 +665,7 @@ git commit -m "feat: prepare the Cursor Cloud environment"
 
 - [ ] **Step 1: Add failing documentation/policy/template assertions**
 
-Assert generated repositories retain `.cursor/environment.json`, `.cursor/hooks.json`, all generated Cursor agents, `config/execution.json`, the Cursor onboarding link, and no source account token. Assert the authority doc names `cursor-cloud` as an approved operator and `claude-local` as denied. Assert decisions contain an accepted entry that explicitly supersedes D-003 only for authenticated Cursor Cloud.
+Assert generated repositories retain `.cursor/environment.json`, `.cursor/hooks.json`, all generated Cursor agents, `config/execution.json`, the Cursor onboarding link, and no source account token. Historical actor-specific denial assertions in this plan are superseded by D-007 and Issue #33: `claude-local` and `codex-local` now share the same account-bound authority, while `cursor-cloud` additionally requires live run-bound activation. Assert the current decisions record that supersession.
 
 - [ ] **Step 2: Run the focused audits and verify missing evidence**
 
@@ -677,7 +677,7 @@ Expected: FAIL until the durable documents and acceptance trace include Issue #2
 
 - [ ] **Step 3: Update canonical instructions and decisions**
 
-Add branch prefix `cursor/<issue>-<slug>`, surface-specific authority, observed-model rules, normal/high review requirements, same-platform limitation, frozen operation allowlists, prompt-injection handling, and provider post-state verification. Add an append-only decision that retains Codex authority, keeps Claude denied, and authorizes only the owner's authenticated Cursor Cloud surface after activation.
+Add branch prefix `cursor/<issue>-<slug>`, surface-specific activation, observed-model rules, normal/high review requirements, same-platform limitation, frozen operation allowlists, prompt-injection handling, and provider post-state verification. The current D-007 decision supersedes the historical actor-specific denial: Claude and Codex share account-bound authority, while the owner's Cursor Cloud surface additionally requires activation.
 
 - [ ] **Step 4: Write Cursor onboarding and activation procedures**
 

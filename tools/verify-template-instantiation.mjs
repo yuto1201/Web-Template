@@ -1,13 +1,8 @@
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import {
-  discoverOccurrences,
-  projectTokens,
-  readTemplateState,
-  verifyCursorTemplateRetention,
-} from "./template-core.mjs";
+import { discoverOccurrences, listTrackedFiles, projectTokens, readTemplateState } from "./template-core.mjs";
 
 /** @param {string} command @param {string[]} args @param {string} cwd @param {string} label */
 function run(command, args, cwd, label) {
@@ -20,13 +15,18 @@ function run(command, args, cwd, label) {
 
 /** @param {string} source @param {string} target */
 async function copyProject(source, target) {
-  const listing = run("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], source, "enumerate template files");
-  for (const relative of listing.split("\0").filter(Boolean)) {
+  const trackedFiles = listTrackedFiles(source);
+  for (const relative of trackedFiles) {
     const from = path.join(source, relative);
     const to = path.join(target, relative);
+    const metadata = await lstat(from);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`Tracked template entry must be a regular file and not a symbolic link: ${relative}.`);
+    }
     await mkdir(path.dirname(to), { recursive: true });
     await copyFile(from, to);
   }
+  return trackedFiles;
 }
 
 const source = process.cwd();
@@ -44,44 +44,75 @@ if (sourceState.status === "initialized") {
   const temporaryParent = path.resolve(os.tmpdir());
   const target = await mkdtemp(path.join(temporaryParent, "web-starter-clean-room-"));
   try {
-    await copyProject(source, target);
+    const trackedFiles = await copyProject(source, target);
+    run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
+    run("git", ["add", "-A"], target, "index clean-room template files");
+    run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
     const config = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       appName: "Clean Room App",
       slug: "clean-room-app",
-      github: { owner: "example-owner", repository: "clean-room-app" },
       localPorts: { app: 4310, supabaseBase: 56320 },
       publicUrls: { production: "https://clean-room-app.example.invalid" },
-      ownership: {
-        supabase: { organizationName: null, projectRef: null },
-        vercel: { scope: null, projectId: null },
-        cloudflare: { accountId: null, accountName: null, zoneId: null, zoneName: "example.invalid" },
+      accounts: {
+        github: { login: "example-owner", userId: null, nodeId: null },
+        supabase: { organizationName: null, organizationId: null },
+        vercel: { teamName: null, teamSlug: null, teamId: null, requiredPlan: null },
+        cloudflare: {
+          accountId: null,
+          accountName: null,
+          loginEmailHint: null,
+          loginEmailSha256: null,
+          requiredRole: null,
+          allowedZonePlans: null,
+        },
+        linear: {
+          workspaceName: null,
+          workspaceSlug: null,
+          workspaceUrl: null,
+          workspaceId: null,
+          userName: null,
+          userEmailHint: null,
+          userEmailSha256: null,
+          userId: null,
+          requiredRole: null,
+        },
+      },
+      servicePolicies: {
+        github: { mode: "repository-active" },
+        supabase: { mode: "repository-active" },
+        vercel: { mode: "repository-active" },
+        cloudflare: { mode: "repository-active" },
+        linear: { mode: "explicit-user-purpose-only" },
+      },
+      resourceTargets: {
+        github: { owner: "example-owner", repository: "clean-room-app", repositoryId: null, repositoryNodeId: null },
+        supabase: { projectRef: null },
+        vercel: { projectId: null },
+        cloudflare: { zoneId: null, domains: ["clean-room-app.example.invalid"] },
+        linear: { teamKey: null, teamId: null },
       },
     };
     const inputDirectory = path.join(target, ".artifacts");
     await mkdir(inputDirectory, { recursive: true });
     const inputPath = path.join(inputDirectory, "template-init.json");
     await writeFile(inputPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    const first = run(process.execPath, ["tools/initialize-template.mjs", "--config", inputPath], target, "first initialization");
-    const second = run(process.execPath, ["tools/initialize-template.mjs", "--config", inputPath], target, "idempotence check");
+    const first = run(process.execPath, [npmCli, "run", "template:init", "--", "--config", inputPath], target, "first initialization");
+    const second = run(process.execPath, [npmCli, "run", "template:init", "--", "--config", inputPath], target, "idempotence check");
     if (!first.includes('"status": "initialized"') || !second.includes('"status": "idempotent"')) {
       throw new Error("Initialization did not report initialized then idempotent status.");
     }
-    const leakage = await discoverOccurrences(target, projectTokens(sourceState.project));
+    const leakage = await discoverOccurrences(target, projectTokens(sourceState.project), trackedFiles);
     const leakedFiles = [...new Set(Object.values(leakage).flatMap((files) => Object.keys(files)))];
     if (leakedFiles.length > 0) throw new Error(`Template source values leaked into clean-room output: ${leakedFiles.join(", ")}`);
-    const cursorGuardrails = await verifyCursorTemplateRetention(target);
 
-    run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
     run("git", ["add", "-A"], target, "stage clean-room files for policy inspection");
-    run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
     run(process.execPath, [npmCli, "run", "workstation:doctor"], target, "verify clean-room workstation contract");
     run(process.execPath, [npmCli, "run", "check"], target, "run clean-room repository checks");
     const readiness = run(process.execPath, [npmCli, "run", "readiness"], target, "verify clean-room readiness distinction");
     if (!readiness.includes('"status": "ready"') || !readiness.includes('"status": "needs-codex"')) {
       throw new Error("Clean-room readiness did not distinguish local readiness from pending live providers.");
     }
-    const providerActivation = "needs-cursor-or-codex";
     run(process.execPath, [npmCli, "run", "test:e2e"], target, "run clean-room browser smoke checks");
     const generatedPackage = JSON.parse(await readFile(path.join(target, "package.json"), "utf8"));
     process.stdout.write(`${JSON.stringify({
@@ -89,10 +120,7 @@ if (sourceState.status === "initialized") {
       status: "clean-room-verified",
       packageName: generatedPackage.name,
       sourceLeakage: 0,
-      sourceAccountCredentials: cursorGuardrails.sourceAccountCredentials,
       idempotence: "passed",
-      cursorGuardrails,
-      providerActivation,
       workstation: "passed",
       checks: "passed",
       readiness: "passed",

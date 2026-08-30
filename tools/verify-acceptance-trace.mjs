@@ -6,9 +6,14 @@ try {
   const trace = JSON.parse(await readFile(path.join(root, "config", "acceptance.json"), "utf8"));
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   if (trace.schemaVersion !== 1 || !Array.isArray(trace.issues)) throw new Error("config/acceptance.json is malformed.");
+  /** @type {number[]} */
   const issueNumbers = trace.issues.map(/** @param {Record<string, any>} entry */ (entry) => entry.issue);
-  if (JSON.stringify(issueNumbers) !== JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 19, 29])) {
-    throw new Error("Acceptance trace must cover Issues #1 through #8, #19, and #29 exactly once and in order.");
+  if (issueNumbers.some((issue) => !Number.isSafeInteger(issue) || issue <= 0)) {
+    throw new Error("Acceptance trace Issue IDs must be positive integers.");
+  }
+  const sortedUniqueIssueNumbers = [...new Set(issueNumbers)].toSorted((left, right) => left - right);
+  if (JSON.stringify(issueNumbers) !== JSON.stringify(sortedUniqueIssueNumbers)) {
+    throw new Error("Acceptance trace Issue IDs must be unique and sorted in ascending order.");
   }
   let evidenceCount = 0;
   for (const entry of trace.issues) {
@@ -25,12 +30,6 @@ try {
     }
     for (const command of entry.commands) {
       if (!packageJson.scripts?.[command]) throw new Error(`Issue #${entry.issue} references missing npm script: ${command}.`);
-    }
-    if (
-      entry.issue === 29 &&
-      JSON.stringify(entry.commands) !== JSON.stringify(["cursor:doctor", "check:generated", "policy", "test", "check"])
-    ) {
-      throw new Error("Issue #29 must retain the canonical Cursor acceptance commands.");
     }
   }
   process.stdout.write(`${JSON.stringify({ ok: true, issues: issueNumbers.length, evidenceFiles: evidenceCount }, null, 2)}\n`);

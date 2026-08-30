@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { readAuthority } from "./authority-core.mjs";
 import { providerPlaceholders, readTemplateState } from "./template-core.mjs";
 
 /** @param {string} value */
 function configured(value) {
-  return typeof value === "string" && value.length > 0 && !value.includes("REPLACEWITHCODEX") && value !== "REPLACE WITH CODEX";
+  return typeof value === "string" && value.length > 0 && !value.includes("REPLACEWITHOPERATOR") && value !== "REPLACE WITH OPERATOR";
 }
 
 /** @param {unknown} value @returns {unknown} */
@@ -24,30 +25,30 @@ function equal(left, right) {
 try {
   const root = process.cwd();
   const state = await readTemplateState(root);
-  const ownership = JSON.parse(await readFile(path.join(root, "config", "ownership.json"), "utf8"));
+  const ownership = readAuthority(root);
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const domain = JSON.parse(await readFile(path.join(root, "config", "domain.json"), "utf8"));
   const expectedHostname = new URL(state.project.publicUrls.production).hostname;
   const localChecks = {
     packageSlug: packageJson.name === state.project.slug,
-    githubOwnership: equal(ownership.github, state.project.github),
-    productionHostname: domain.hostname === expectedHostname && ownership.cloudflare.domains?.[0] === expectedHostname,
+    githubOwnership: equal(ownership.accounts.github, state.project.accounts.github) && equal(ownership.resourceTargets.github, state.project.resourceTargets.github),
+    productionHostname: domain.hostname === expectedHostname && ownership.resourceTargets.cloudflare.domains?.[0] === expectedHostname,
     localPorts: new Set(Object.values(state.project.localPorts)).size === Object.values(state.project.localPorts).length,
   };
   const providers = {
     github: {
-      status: configured(ownership.github?.owner) && configured(ownership.github?.repository) ? "identity-recorded" : "needs-codex",
-      reason: "Repository existence and permissions require a live Codex check.",
+      status: configured(ownership.accounts.github.login) && configured(ownership.resourceTargets.github.owner) && configured(ownership.resourceTargets.github.repository) ? "identity-recorded" : "needs-codex",
+      reason: "Repository existence and permissions require a live external-operator check.",
     },
     supabase: {
-      status: configured(ownership.supabase?.organizationName) && Boolean(ownership.supabase?.projectRef) ? "configured" : "needs-codex",
-      reason: ownership.supabase?.projectRef ? null : "No hosted projectRef is recorded.",
+      status: configured(ownership.accounts.supabase.organizationName) && Boolean(ownership.resourceTargets.supabase.projectRef) ? "configured" : "needs-codex",
+      reason: ownership.resourceTargets.supabase.projectRef ? null : "No hosted projectRef is recorded.",
     },
     vercel: {
-      status: ownership.vercel?.scope !== providerPlaceholders.vercelScope && ownership.vercel?.projectId !== providerPlaceholders.vercelProjectId ? "configured" : "needs-codex",
+      status: ownership.accounts.vercel.teamId !== providerPlaceholders.vercelScope && ownership.resourceTargets.vercel.projectId !== providerPlaceholders.vercelProjectId ? "configured" : "needs-codex",
     },
     cloudflare: {
-      status: ownership.cloudflare?.accountId !== providerPlaceholders.cloudflareAccountId && ownership.cloudflare?.zoneId !== providerPlaceholders.cloudflareZoneId ? "configured" : "needs-codex",
+      status: ownership.accounts.cloudflare.accountId !== providerPlaceholders.cloudflareAccountId && ownership.resourceTargets.cloudflare.zoneId !== providerPlaceholders.cloudflareZoneId ? "configured" : "needs-codex",
     },
   };
   const result = {

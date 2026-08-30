@@ -6,7 +6,7 @@
 | --- | --- |
 | `product.md` | Template goals, users, and non-goals |
 | `architecture.md` | Runtime components and trust boundaries |
-| `cursor-cloud.md` | Cursor Cloud execution, authority, model review, and activation design |
+| `account-bound-authority.md` | Shared Claude/Codex authority, account gates, and external-operation receipts |
 | `acceptance.md` | Template-level completion criteria |
 | `decisions.md` | Accepted decisions and supersession history |
 

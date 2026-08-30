@@ -9,6 +9,7 @@ import {
   validateBranchForSurface,
   validateReviewerFamilies,
 } from "./execution-policy.mjs";
+import { parseExternalChanges, validateExternalChangesAgainstCommittedState } from "./external-change-review-gate.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const shaPattern = /^[0-9a-f]{40}$/u;
@@ -136,6 +137,7 @@ export function parseReviewBody(body) {
 
   const labels = [
     "Execution surface",
+    "Primary operator label",
     "Primary configured model",
     "Primary observed model",
     "Primary family",
@@ -152,6 +154,7 @@ export function parseReviewBody(body) {
   }
 
   const executionSurface = uniqueBodyField(body, section, "Execution surface");
+  const primaryOperatorLabel = uniqueBodyField(body, section, "Primary operator label");
   const primaryConfigured = uniqueBodyField(body, section, "Primary configured model");
   const primaryObserved = uniqueBodyField(body, section, "Primary observed model");
   const primaryFamily = uniqueBodyField(body, section, "Primary family");
@@ -161,6 +164,7 @@ export function parseReviewBody(body) {
   const reviewedShaValue = uniqueBodyField(body, section, "Reviewed SHA");
 
   assert(isExecutionSurface(executionSurface), "Execution surface is unknown.");
+  assert(primaryOperatorLabel === "codex" || primaryOperatorLabel === "claude", "Primary operator label must be codex or claude.");
   const modelPattern = /^[a-z0-9][a-z0-9._-]*(?:\[[a-z0-9._=-]+\])?$/u;
   assert(modelPattern.test(primaryConfigured), "Primary configured model must be one canonical model identifier.");
   assert(modelPattern.test(primaryObserved), "Primary observed model must be one canonical model identifier.");
@@ -200,6 +204,7 @@ export function parseReviewBody(body) {
   return {
     issue,
     executionSurface,
+    primaryOperatorLabel,
     primaryModel: {
       configured: primaryConfigured,
       observed: primaryObserved,
@@ -249,10 +254,16 @@ function validateDependabotDiff(diff, policy) {
   assert(added.toSorted().join("\n") === removed.toSorted().join("\n"), "Dependabot diff must preserve action identities.");
 }
 
+/** @param {string} body @param {string[]} changedPaths @param {ExecutionPolicy} executionPolicy */
+export function deriveReviewRisk(body, changedPaths, executionPolicy) {
+  const externalOperations = parseExternalChanges(body).map(({ operation }) => operation);
+  return classifyRisk({ changedPaths, externalOperations }, executionPolicy);
+}
+
 /**
- * @param {{event: unknown, changedPaths: string[], diff: string, workflow: WorkflowPolicy, executionPolicy?: ExecutionPolicy}} input
+ * @param {{event: unknown, changedPaths: string[], diff: string, workflow: WorkflowPolicy, executionPolicy?: ExecutionPolicy, artifactLoader?: (reference: string) => unknown, authorityLoader?: (commitSha: string) => unknown, evidenceCommit?: {headSha:string,parentSha:string,changedPaths:string[]}, isAuthorityProtected?: (authorityCommitSha:string)=>boolean}} input
  */
-export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, executionPolicy }) {
+export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, executionPolicy, artifactLoader, authorityLoader, evidenceCommit, isAuthorityProtected }) {
   const pullRequest = event && typeof event === "object" && "pull_request" in event
     ? event.pull_request
     : null;
@@ -273,6 +284,17 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   }
 
   const evidence = parseReviewBody(String(pullRequest.body ?? ""));
+  const externalChanges = validateExternalChangesAgainstCommittedState({
+    body: String(pullRequest.body ?? ""),
+    changedPaths,
+    headSha,
+    primaryOperatorLabel: evidence.primaryOperatorLabel,
+    primaryModelFamily: evidence.primaryModel.family,
+    artifactLoader,
+    authorityLoader,
+    evidenceCommit,
+    isAuthorityProtected,
+  });
   assert(pullRequest.head?.repo?.full_name === pullRequest.base?.repo?.full_name, "Independent review requires a same repository branch.");
   assert(evidence.reviewedSha === headSha, "Reviewed SHA must match the current Head SHA.");
   assert(executionPolicy && typeof executionPolicy === "object", "Execution policy is required for independent review.");
@@ -311,7 +333,7 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
       assert(review.configured === executionPolicy.cursorModels[review.family], `Reviewer configured reviewer model must match trusted Cursor policy for ${review.family}.`);
     }
   }
-  const derivedRisk = classifyRisk({ changedPaths, externalOperations: [] }, executionPolicy);
+  const derivedRisk = deriveReviewRisk(String(pullRequest.body ?? ""), changedPaths, executionPolicy);
   if (derivedRisk.level === "high") {
     assert(evidence.risk.level === "high", "Risk claim cannot reduce the risk derived from changed paths.");
     for (const reason of derivedRisk.reasons) assert(evidence.risk.reasons.includes(reason), `Risk reasons must include derived reason ${reason}.`);
@@ -337,7 +359,7 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   for (const review of evidence.reviews) {
     for (const contract of required) assert(review.contracts.includes(contract), `Review evidence is missing required contract ${contract} for reviewer ${review.family}.`);
   }
-  return { ok: true, mode: "independent-review", headSha, reviewers: validatedFamilies, risk: effectiveRisk, contracts: required };
+  return { ok: true, mode: "independent-review", headSha, reviewers: validatedFamilies, risk: effectiveRisk, contracts: required, externalChanges };
 }
 
 /** @param {string[]} argv */
@@ -379,7 +401,24 @@ export async function runCli(argv = process.argv.slice(2)) {
   assert(shaPattern.test(diffBaseSha), "Git merge-base is invalid.");
   const changedPaths = gitBuffer("-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", diffBaseSha, headSha, "--").toString("utf8").split("\0").filter(Boolean);
   const diff = git("diff", "--unified=0", "--no-ext-diff", "--no-textconv", "--no-renames", diffBaseSha, headSha, "--");
-  process.stdout.write(`${JSON.stringify(evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, executionPolicy }), null, 2)}\n`);
+  const evidenceParentSha = git("rev-parse", "--verify", `${headSha}^`).trim();
+  const evidenceCommitChangedPaths = gitBuffer("-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", evidenceParentSha, headSha, "--")
+    .toString("utf8").split("\0").filter(Boolean);
+  process.stdout.write(`${JSON.stringify(evaluateGitHubReviewGate({
+    event,
+    changedPaths,
+    diff,
+    workflow,
+    executionPolicy,
+    artifactLoader: (reference) => JSON.parse(git("show", `${headSha}:${reference}`)),
+    authorityLoader: (commitSha) => JSON.parse(git("show", `${commitSha}:config/ownership.json`)),
+    evidenceCommit: { headSha, parentSha: evidenceParentSha, changedPaths: evidenceCommitChangedPaths },
+    isAuthorityProtected: (authorityCommitSha) => {
+      if (!shaPattern.test(authorityCommitSha)) return false;
+      const result = spawnSync("git", ["merge-base", "--is-ancestor", authorityCommitSha, baseSha], { cwd: repository, encoding: "utf8", windowsHide: true });
+      return result.status === 0;
+    },
+  }), null, 2)}\n`);
 }
 
 if (path.resolve(process.argv[1] ?? "") === modulePath) {

@@ -35,6 +35,9 @@ async function run() {
   const values = options(args);
   if (values.root) throw new Error("--root is not permitted; canonical ownership is repository-bound.");
   const root = repositoryRoot;
+  if (["preflight", "verify-release"].includes(command)) {
+    throw new Error(`Unsupported legacy deployment command: ${command}. Use the provider-specific guarded adapter with a registered operation.`);
+  }
   if (command === "preflight") {
     const snapshot = JSON.parse(await readFile(path.resolve(required(values, "env-snapshot")), "utf8"));
     process.stdout.write(`${JSON.stringify(await validateDeploymentPreflight(snapshot, root), null, 2)}\n`);

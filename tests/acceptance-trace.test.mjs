@@ -11,6 +11,6 @@ describe("acceptance trace", () => {
     });
 
     expect(command.status, command.stderr).toBe(0);
-    expect(JSON.parse(command.stdout)).toMatchObject({ ok: true, issues: 10 });
+    expect(JSON.parse(command.stdout)).toMatchObject({ ok: true, issues: 11 });
   });
 });

@@ -53,18 +53,19 @@ npm run test:e2e
 
 Replace only the values in `.env.local` that are required for the selected local or hosted target. `workstation:doctor` checks only whether the file exists; it never reads or prints its contents.
 
-For a generated application, run template initialization before `npm ci`, exactly as described in the root README. For this golden source repository, do not rerun initialization.
+For a generated application, run `npm ci` before template initialization so the canonical authority parser is available, exactly as described in the root README. For this golden source repository, do not rerun initialization.
 
 ## 4. Re-establish account boundaries
 
 Authentication state is machine-specific. Verify each surface independently on the Mac:
 
-- Codex performs authenticated operations for the personal GitHub repository and personal Supabase, Vercel, and Cloudflare targets.
-- Claude may implement or evaluate local files, but the company Claude account must not access provider connectors, CLIs, hosted databases, deployments, DNS, or personal secrets.
-- `gh auth status` reports only the local GitHub CLI identity. It may intentionally differ from the GitHub account connected to Codex. Do not merge or unify the accounts merely to remove that difference.
+- Claude and Codex have equal account-bound authority in implementer/external-operator roles; evaluator and auditor roles remain read-only. The operator label and model family do not prove account identity.
+- Reauthenticate each provider through its supported flow, then compare provider-derived stable account and exact target fields with the protected-main authority. Do not automatically log out, log in, change profiles, switch teams, or merge identities to remove a mismatch.
+- `gh auth status` proves only the current GitHub CLI surface. Browser, app connector, and other CLI sessions are separate authenticated surfaces and require their own fresh observation.
+- GitHub, Supabase, Vercel, and Cloudflare are `repository-active` within frozen Issue purpose. Linear remains denied because no Linear operation is registered; a user-stated purpose and stable IDs are necessary for any future registration but do not enable current access.
 - The committed `.codex/` and `.claude/` project files are repository policy. Home-directory `.codex`, `.claude`, `.config/gh`, Supabase, Vercel, and Cloudflare credential directories are not project files and must not be copied from the old workstation.
 
-Before the first authenticated write from the Mac, Codex must recheck the live identity, exact target, intended mutation, local evidence, and resulting remote state as required by [the authority runbook](authority.md).
+Before the first authenticated use from the Mac, the active operator must recheck the live identity, exact target, Issue purpose, service mode, and intended operation as required by [the authority runbook](authority.md). Every repository-approved authenticated operation uses the request → preflight → one-time claim → result/finalize receipt flow. High-risk writes additionally rerun the authoritative exact-Head gate.
 
 ## 5. Complete the migration gate
 
@@ -93,4 +94,4 @@ GitHub-hosted macOS CI verifies the fresh install, doctor, full repository check
 | Chromium executable missing | Run `npx playwright install chromium`, then retry `npm run test:e2e`. |
 | Docker CLI passes but daemon fails | Open Docker Desktop, wait for the engine to become ready, and rerun the strict doctor. |
 | Supabase port collision | Stop the other stack or choose a non-overlapping `supabaseBase` during template initialization. |
-| Wrong GitHub identity | Stop before writing. Verify the Codex connector and `gh auth status` separately; use the authorized personal surface for the operation. |
+| Wrong provider identity or target | Stop before reading protected data or writing. Verify the exact active surface separately; never switch accounts automatically. |
