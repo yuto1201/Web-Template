@@ -6,6 +6,17 @@ function detailDigest(value) {
   return `sha256:${createHash("sha256").update(String(value), "utf8").digest("hex")}`;
 }
 
+/** @param {unknown} value @param {number} limit @param {boolean} singleLine */
+function sanitizeIssueText(value, limit, singleLine) {
+  let text = String(value ?? "").replaceAll("\r\n", "\n").replaceAll("\r", "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/gu, "");
+  if (singleLine) text = text.replace(/\s+/gu, " ").trim();
+  if ((singleLine && !text) || text.length > limit) {
+    throw new Error(`GitHub Issue ${singleLine ? "title" : "body"} is missing or exceeds the guarded snapshot limit.`);
+  }
+  return text;
+}
+
 /** @param {string[]} args */
 function invokeGitHubCli(args) {
   const result = spawnSync("gh", args, { encoding: "utf8", windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
@@ -84,7 +95,14 @@ export function createGitHubCliProviderClient(configuration = {}) {
         const issue = invoke(["api", `${repositoryPath(repository)}/issues/${request.inputs.issue}`]);
         return {
           status: "succeeded",
-          evidence: { repository, issue: request.inputs.issue, state: String(issue.state).toUpperCase(), updatedAt: issue.updated_at },
+          evidence: {
+            repository,
+            issue: request.inputs.issue,
+            title: sanitizeIssueText(issue.title, 256, true),
+            body: sanitizeIssueText(issue.body, 65_536, false),
+            state: String(issue.state).toUpperCase(),
+            updatedAt: issue.updated_at,
+          },
         };
       }
       if (operation !== "github.merge_pr") throw new Error(`GitHub CLI guarded client does not implement ${operation}.`);

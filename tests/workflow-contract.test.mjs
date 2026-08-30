@@ -570,7 +570,14 @@ describe("workflow contracts", () => {
       {
         operation: "github.read_issue",
         inputs: { repository, issue: 5 },
-        evidence: { repository, issue: 5, state: "OPEN", updatedAt: timestamp },
+        evidence: {
+          repository,
+          issue: 5,
+          title: "Read the frozen Issue",
+          body: "AC-1: Preserve the complete Issue goal and acceptance criteria.",
+          state: "OPEN",
+          updatedAt: timestamp,
+        },
       },
       {
         operation: "github.push_branch",

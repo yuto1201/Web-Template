@@ -221,8 +221,8 @@ function executeGuardedProviderOperation(configuration) {
       const idempotencyDigest = digestValue({
         repositoryIdentity: repositoryStableIdentity(authority),
         authorityDigest: contract.authority.digest,
+        issueContractDigest: validatedPreflight.issueContractDigest,
         authorizationDigest: validatedPreflight.authorizationDigest,
-        requestDigest: validatedPreflight.requestDigest,
         mutationDigest: validatedPreflight.mutationDigest,
       });
       const idempotencyKey = `authority-${idempotencyDigest.slice("sha256:".length)}`;
@@ -386,6 +386,7 @@ function executeGuardedProviderOperation(configuration) {
         service,
         operation: request.operation,
         outcome: validatedResult.outcome,
+        result: validatedResult.evidence,
         lifecycle: {
           request: { digest: validatedPreflight.requestDigest },
           preflight: { receiptId: receipt.receiptId, digest: digestValue(receipt) },

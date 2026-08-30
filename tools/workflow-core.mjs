@@ -486,7 +486,14 @@ const operationResultSchema = receiptBindingSchema.extend({
 
 /** @type {Record<Operation, import("zod").ZodObject<any>>} */
 const operationSuccessEvidenceSchemas = {
-  "github.read_issue": z.object({ repository: repositorySchema, issue: z.number().int().positive(), state: z.enum(["OPEN", "CLOSED"]), updatedAt: timestampSchema }).strict(),
+  "github.read_issue": z.object({
+    repository: repositorySchema,
+    issue: z.number().int().positive(),
+    title: z.string().trim().min(1).max(256).regex(/^[^\r\n\u0000-\u001F\u007F]+$/u),
+    body: z.string().max(65_536).regex(/^[^\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]*$/u),
+    state: z.enum(["OPEN", "CLOSED"]),
+    updatedAt: timestampSchema,
+  }).strict(),
   "github.push_branch": z.object({ repository: repositorySchema, branch: branchSchema, headSha: shaSchema }).strict(),
   "github.create_pr": z.object({
     issue: z.number().int().positive(),

@@ -100,7 +100,14 @@ function githubClient(authority, options = {}) {
       if (request.operation === "github.read_issue") {
         return {
           status: "succeeded",
-          evidence: { repository: request.inputs.repository, issue: request.inputs.issue, state: "OPEN", updatedAt: "2026-08-30T01:00:30Z" },
+          evidence: {
+            repository: request.inputs.repository,
+            issue: request.inputs.issue,
+            title: "Guarded Issue snapshot",
+            body: "AC-1: Preserve the complete Issue goal and acceptance criteria.",
+            state: "OPEN",
+            updatedAt: "2026-08-30T01:00:30Z",
+          },
           providerIdempotencyKey: idempotencyKey,
         };
       }
@@ -124,6 +131,41 @@ function githubClient(authority, options = {}) {
 }
 
 describe("provider-specific guarded adapters", () => {
+  it("returns the Issue title and body needed to build the frozen Issue contract", async () => {
+    const { createGitHubCliProviderClient: createActualGitHubClient } = /** @type {typeof import("../tools/github-cli-provider-client.mjs")} */ (
+      await vi.importActual("../tools/github-cli-provider-client.mjs")
+    );
+    const request = {
+      operation: "github.read_issue",
+      inputs: { repository: "yuto1201/Web-Template", issue: 33 },
+    };
+    const client = createActualGitHubClient({
+      invoke(args) {
+        const joined = args.join(" ");
+        if (joined === "api repos/yuto1201/Web-Template/issues/33") {
+          return {
+            number: 33,
+            state: "open",
+            title: "Replace actor restrictions",
+            body: "AC-1: Bind authority to the selected account.\nAC-2: Preserve Cursor Cloud.",
+            updated_at: "2026-08-30T01:00:10Z",
+          };
+        }
+        throw new Error(`Unexpected fake GitHub call: ${joined}`);
+      },
+    });
+
+    await expect(client.execute({ request, operation: request.operation })).resolves.toMatchObject({
+      status: "succeeded",
+      evidence: {
+        repository: "yuto1201/Web-Template",
+        issue: 33,
+        title: "Replace actor restrictions",
+        body: "AC-1: Bind authority to the selected account.\nAC-2: Preserve Cursor Cloud.",
+      },
+    });
+  });
+
   it("uses the production GitHub CLI client without switching accounts and binds the merge SHA", async () => {
     const { createGitHubCliProviderClient: createActualGitHubClient } = /** @type {typeof import("../tools/github-cli-provider-client.mjs")} */ (
       await vi.importActual("../tools/github-cli-provider-client.mjs")
@@ -348,6 +390,30 @@ describe("provider-specific guarded adapters", () => {
     expect(secondClient.executionCount()).toBe(0);
   });
 
+  it("deduplicates the same authorized mutation when only the request ID changes", async () => {
+    const fixture = await repositoryFixture();
+    const firstClient = githubClient(fixture.authority);
+    await createTestGitHubGuardedAdapter({ providerClient: firstClient, clock: clock() }).execute({
+      root: fixture.root,
+      requestPath: fixture.simulated.paths.mergeRequest,
+      modelFamily: "gpt",
+    });
+
+    const firstRequestPath = path.join(fixture.root, fixture.simulated.paths.mergeRequest);
+    const copiedRequest = JSON.parse(await readFile(firstRequestPath, "utf8"));
+    copiedRequest.requestId = copiedRequest.requestId.replace(/-1$/u, "-2");
+    const copiedRequestPath = path.join(fixture.root, ".artifacts", "ops-requests", `${copiedRequest.requestId}.json`);
+    await writeFile(copiedRequestPath, `${JSON.stringify(copiedRequest, null, 2)}\n`, "utf8");
+
+    const secondClient = githubClient(fixture.authority);
+    await expect(createTestGitHubGuardedAdapter({ providerClient: secondClient, clock: clock() }).execute({
+      root: fixture.root,
+      requestPath: copiedRequestPath,
+      modelFamily: "gpt",
+    })).rejects.toThrow(/same mutation|already claimed|terminal/iu);
+    expect(secondClient.executionCount()).toBe(0);
+  });
+
   it("does not permanently deduplicate repeated authorized reads", async () => {
     const { root, authority } = await repositoryFixture();
     const issue = 42;
@@ -394,7 +460,16 @@ describe("provider-specific guarded adapters", () => {
     const client = githubClient(authority, { idempotency: "none" });
     const adapter = createTestGitHubGuardedAdapter({ providerClient: client, clock: clock() });
 
-    await expect(adapter.execute({ root, requestPath })).resolves.toMatchObject({ outcome: "succeeded" });
+    await expect(adapter.execute({ root, requestPath })).resolves.toMatchObject({
+      outcome: "succeeded",
+      result: {
+        repository: "yuto1201/Web-Template",
+        issue,
+        title: "Guarded Issue snapshot",
+        body: "AC-1: Preserve the complete Issue goal and acceptance criteria.",
+        state: "OPEN",
+      },
+    });
     await expect(adapter.execute({ root, requestPath })).resolves.toMatchObject({ outcome: "succeeded" });
     expect(client.executionCount()).toBe(2);
   });
