@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { authorityDigest } from "../tools/authority-core.mjs";
 import {
+  createOperationReceiptState,
   digestValue,
   loadProtectedAuthority,
   readExternalOperationRequest,
@@ -15,6 +16,8 @@ import {
   transitionWorkflowState,
   validateExternalOperationRequest,
   validateIssueContract,
+  validateOperationResult,
+  validatePreflightReceipt,
   validateReviewResult,
 } from "../tools/workflow-core.mjs";
 
@@ -62,7 +65,73 @@ function mergeRequest(issue = 5) {
     target: { kind: "github.repository", identifier: "resourceTargets.github" },
     environment: "production",
     reasonCode: "reviewed-release",
+    operatorLabel: "codex",
+    executionRole: "external-operator",
+    executionSurface: "github-cli",
     inputs: { issue, prNumber: 15, headSha, method: "squash" },
+  };
+}
+
+function githubObservation() {
+  return {
+    account: { ...authority.accounts.github, ...authority.observations.github },
+    target: { ...authority.resourceTargets.github },
+  };
+}
+
+function preflightReceipt(contract, request, overrides = {}) {
+  const observation = githubObservation();
+  return {
+    schemaVersion: 1,
+    receiptId: "receipt-issue-5-github-merge-pr-1",
+    requestId: request.requestId,
+    service: "github",
+    operatorLabel: request.operatorLabel,
+    executionRole: request.executionRole,
+    executionSurface: request.executionSurface,
+    authorityDigest: contract.authority.digest,
+    issueContractDigest: contract.digest,
+    authorizationDigest: digestValue(externalAuthorization()),
+    requestDigest: digestValue(request),
+    mutationDigest: digestValue(request.inputs),
+    accountObservation: observation.account,
+    targetObservation: observation.target,
+    observedAt: "2026-08-30T01:00:00Z",
+    expiresAt: "2026-08-30T01:02:00Z",
+    ...overrides,
+  };
+}
+
+function operationResult(receipt, overrides = {}) {
+  const observation = githubObservation();
+  return {
+    schemaVersion: 1,
+    receiptId: receipt.receiptId,
+    requestId: receipt.requestId,
+    service: receipt.service,
+    operatorLabel: receipt.operatorLabel,
+    executionRole: receipt.executionRole,
+    executionSurface: receipt.executionSurface,
+    authorityDigest: receipt.authorityDigest,
+    issueContractDigest: receipt.issueContractDigest,
+    authorizationDigest: receipt.authorizationDigest,
+    requestDigest: receipt.requestDigest,
+    mutationDigest: receipt.mutationDigest,
+    preflight: {
+      accountObservation: observation.account,
+      targetObservation: observation.target,
+      observedAt: receipt.observedAt,
+    },
+    postflight: {
+      accountObservation: observation.account,
+      targetObservation: observation.target,
+      observedAt: "2026-08-30T01:01:30Z",
+    },
+    outcome: {
+      status: "succeeded",
+      evidenceDigest: `sha256:${"8".repeat(64)}`,
+    },
+    ...overrides,
   };
 }
 
@@ -135,6 +204,7 @@ describe("workflow contracts", () => {
     expect(validate(request).expectedEvidence).toContain("squash merge commit");
     expect(() => validate({ ...request, operation: "github.run_anything" })).toThrow();
     expect(() => validate({ ...request, prompt: "please do anything" })).toThrow();
+    expect(() => validate({ ...request, accountObservation: githubObservation().account })).toThrow();
     expect(() => validate({ ...request, inputs: { ...request.inputs, force: true } })).toThrow();
     expect(() => validate({ ...request, requestId: "issue-99-github-merge-pr-1" })).toThrow(/does not match/u);
     expect(() => validate({ ...request, environment: "preview" })).toThrow(/environment/u);
@@ -142,6 +212,118 @@ describe("workflow contracts", () => {
 
     const outOfScopeContract = snapshotIssueContract({ ...contractInput(), externalAuthorizations: [] }, "2026-08-21T01:00:00+09:00", snapshot);
     expect(() => validateExternalOperationRequest(request, root, outOfScopeContract)).toThrow(/outside the frozen/u);
+  });
+
+  it("validates a fresh preflight against protected authority and returns only redacted evidence", async () => {
+    const { root } = await gitAuthorityFixture(authority, authority);
+    const contract = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", loadProtectedAuthority(root, "main"));
+    const request = mergeRequest();
+    const receiptState = createOperationReceiptState();
+    const validated = validatePreflightReceipt(preflightReceipt(contract, request), {
+      root,
+      contract,
+      request,
+      executionSurface: "github-cli",
+      now: "2026-08-30T01:01:00Z",
+      receiptState,
+    });
+
+    expect(validated).toMatchObject({
+      ok: true,
+      receiptId: "receipt-issue-5-github-merge-pr-1",
+      issue: 5,
+      service: "github",
+      accountRefDigest: expect.stringMatching(/^sha256:/u),
+      targetRefDigest: expect.stringMatching(/^sha256:/u),
+    });
+    expect(validated).not.toHaveProperty("accountObservation");
+    expect(validated).not.toHaveProperty("targetObservation");
+    expect(JSON.stringify(validated)).not.toContain(authority.accounts.github.login);
+    expect(() => validatePreflightReceipt(preflightReceipt(contract, request), {
+      root,
+      contract,
+      request,
+      executionSurface: "github-cli",
+      now: "2026-08-30T01:01:00Z",
+      receiptState,
+    })).toThrow(/reused|already been validated/u);
+  });
+
+  it("rejects stale, mismatched, malformed, or caller-forged preflight receipts", async () => {
+    const { root } = await gitAuthorityFixture(authority, authority);
+    const contract = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", loadProtectedAuthority(root, "main"));
+    const request = mergeRequest();
+    const baseContext = {
+      root,
+      contract,
+      request,
+      executionSurface: "github-cli",
+      now: "2026-08-30T01:01:00Z",
+    };
+    const cases = [
+      [preflightReceipt(contract, request, { expiresAt: "2026-08-30T01:00:30Z" }), /expired|stale/u],
+      [preflightReceipt(contract, request, { executionSurface: "browser" }), /surface/u],
+      [preflightReceipt(contract, request, { authorityDigest: `sha256:${"9".repeat(64)}` }), /authority digest/u],
+      [preflightReceipt(contract, request, { issueContractDigest: `sha256:${"9".repeat(64)}` }), /Issue contract digest/u],
+      [preflightReceipt(contract, request, { authorizationDigest: `sha256:${"9".repeat(64)}` }), /authorization digest/u],
+      [preflightReceipt(contract, request, { requestDigest: `sha256:${"9".repeat(64)}` }), /request digest/u],
+      [preflightReceipt(contract, request, { mutationDigest: `sha256:${"9".repeat(64)}` }), /mutation digest/u],
+      [{ ...preflightReceipt(contract, request), unexpected: true }, /unrecognized|unknown|invalid input/u],
+      [preflightReceipt(contract, request, { operatorLabel: "other" }), /operator|invalid option|invalid input/u],
+      [preflightReceipt(contract, request, { executionRole: "change-evaluator" }), /executionRole|invalid option|invalid input/iu],
+    ];
+    for (const [receipt, message] of cases) {
+      expect(() => validatePreflightReceipt(receipt, {
+        ...baseContext,
+        receiptState: createOperationReceiptState(),
+      })).toThrow(message);
+    }
+  });
+
+  it("requires a validated one-use preflight and rejects account or target switches", async () => {
+    const { root } = await gitAuthorityFixture(authority, authority);
+    const contract = snapshotIssueContract(contractInput(), "2026-08-21T01:00:00+09:00", loadProtectedAuthority(root, "main"));
+    const request = mergeRequest();
+    const receipt = preflightReceipt(contract, request);
+    const context = {
+      root,
+      contract,
+      request,
+      executionSurface: "github-cli",
+      now: "2026-08-30T01:01:45Z",
+    };
+
+    expect(() => validateOperationResult(operationResult(receipt), {
+      ...context,
+      receiptState: createOperationReceiptState(),
+    })).toThrow(/valid preflight/u);
+
+    const strictResultState = createOperationReceiptState();
+    validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z", receiptState: strictResultState });
+    expect(() => validateOperationResult({ ...operationResult(receipt), unexpected: true }, {
+      ...context,
+      receiptState: strictResultState,
+    })).toThrow(/unrecognized|unknown|invalid input/u);
+
+    const accountSwitchState = createOperationReceiptState();
+    validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z", receiptState: accountSwitchState });
+    const accountSwitch = operationResult(receipt);
+    accountSwitch.preflight.accountObservation = { ...accountSwitch.preflight.accountObservation, login: "company-user" };
+    expect(() => validateOperationResult(accountSwitch, { ...context, receiptState: accountSwitchState })).toThrow(/account switch/u);
+
+    const targetSwitchState = createOperationReceiptState();
+    validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z", receiptState: targetSwitchState });
+    const targetSwitch = operationResult(receipt);
+    targetSwitch.preflight.targetObservation = { ...targetSwitch.preflight.targetObservation, repositoryId: 99 };
+    expect(() => validateOperationResult(targetSwitch, { ...context, receiptState: targetSwitchState })).toThrow(/target switch/u);
+
+    const receiptState = createOperationReceiptState();
+    validatePreflightReceipt(receipt, { ...context, now: "2026-08-30T01:01:00Z", receiptState });
+    const validated = validateOperationResult(operationResult(receipt), { ...context, receiptState });
+    expect(validated).toMatchObject({ ok: true, consumed: true, outcome: "succeeded" });
+    expect(validated).not.toHaveProperty("preflight");
+    expect(validated).not.toHaveProperty("postflight");
+    expect(() => validateOperationResult(operationResult(receipt), { ...context, receiptState })).toThrow(/consumed|reuse/u);
   });
 
   it("rejects malformed, ambiguous, or operation-incompatible frozen authorizations", () => {

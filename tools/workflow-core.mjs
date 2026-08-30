@@ -5,7 +5,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { authorityDigest, authorizeServiceUse, parseAuthority } from "./authority-core.mjs";
+import { authorityDigest, authorizeServiceUse, evaluateAccountObservation, parseAuthority } from "./authority-core.mjs";
 
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(moduleDirectory, "..");
@@ -58,6 +58,10 @@ const branchSchema = z.string().regex(/^(?:codex|claude)\/[1-9][0-9]*-[a-z0-9]+(
 const worktreeSchema = z.string().regex(/^\.worktrees\/[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 const repositorySchema = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
 const serviceSchema = z.enum(["github", "supabase", "vercel", "cloudflare", "linear"]);
+const operatorLabelSchema = z.enum(["codex", "claude"]);
+const externalOperatorRoleSchema = z.enum(["implementer", "external-operator"]);
+const executionSurfaceSchema = z.string().trim().min(1).max(128).regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/u);
+const receiptIdSchema = z.string().regex(/^receipt-[a-z0-9]+(?:-[a-z0-9]+)*$/u);
 
 const targetSources = {
   github: "resourceTargets.github",
@@ -261,6 +265,11 @@ const operationDefinitions = /** @type {Record<string, {
   },
 });
 
+/** @param {unknown} operation */
+export function requiresAuthoritativeHead(operation) {
+  return operationDefinitions[operationSchema.parse(operation)].requiresExactHead;
+}
+
 const operationPurposeDefinitions = /** @type {Record<string, (constraints: Record<string, unknown>) => string>} */ ({
   "github.read_issue": ({ issue }) => `Read the frozen Issue ${issue}.`,
   "github.push_branch": ({ branch }) => `Push the exact verified branch ${branch}.`,
@@ -285,6 +294,9 @@ const externalRequestBaseSchema = z.object({
   target: z.object({ kind: z.string().min(1), identifier: z.string().min(1).max(200) }).strict(),
   environment: z.enum(["none", "preview", "production"]),
   reasonCode: z.enum(["issue-contract", "acceptance-evidence", "reviewed-release", "verified-cleanup", "user-directed"]),
+  operatorLabel: operatorLabelSchema,
+  executionRole: externalOperatorRoleSchema,
+  executionSurface: executionSurfaceSchema,
   inputs: z.record(z.string(), z.unknown()),
 }).strict();
 
@@ -311,7 +323,7 @@ const externalAuthorizationSchema = externalAuthorizationBaseSchema.transform((a
     [authorization.targetRef === expectedTargetRef, ["targetRef"], `Operation ${authorization.operation} requires target reference ${expectedTargetRef}.`],
     [definition.environments.includes(authorization.environment), ["environment"], `Invalid environment for ${authorization.operation}.`],
     [definition.reasonCodes.includes(authorization.purposeCode), ["purposeCode"], `Invalid purpose code for ${authorization.operation}.`],
-    [authorization.requiresExactHead === definition.requiresExactHead, ["requiresExactHead"], `Invalid exact-Head requirement for ${authorization.operation}.`],
+    [authorization.requiresExactHead === requiresAuthoritativeHead(authorization.operation), ["requiresExactHead"], `Invalid exact-Head requirement for ${authorization.operation}.`],
   ];
   for (const [valid, pathValue, message] of failures) {
     if (!valid) context.addIssue({ code: "custom", path: /** @type {(string | number)[]} */ (pathValue), message: /** @type {string} */ (message) });
@@ -344,6 +356,41 @@ const issueContractSchema = issueContractInputSchema.extend({
   authority: z.object({ commitSha: shaSchema, digest: digestSchema }).strict(),
   fetchedAt: timestampSchema,
   digest: digestSchema,
+}).strict();
+
+const receiptBindingSchema = z.object({
+  receiptId: receiptIdSchema,
+  requestId: externalRequestBaseSchema.shape.requestId,
+  service: z.enum(["github", "supabase", "vercel", "cloudflare"]),
+  operatorLabel: operatorLabelSchema,
+  executionRole: externalOperatorRoleSchema,
+  executionSurface: executionSurfaceSchema,
+  authorityDigest: digestSchema,
+  issueContractDigest: digestSchema,
+  authorizationDigest: digestSchema,
+  requestDigest: digestSchema,
+  mutationDigest: digestSchema,
+}).strict();
+const observationPairSchema = z.object({
+  accountObservation: z.unknown(),
+  targetObservation: z.unknown(),
+  observedAt: timestampSchema,
+}).strict();
+const preflightReceiptSchema = receiptBindingSchema.extend({
+  schemaVersion: z.literal(1),
+  accountObservation: z.unknown(),
+  targetObservation: z.unknown(),
+  observedAt: timestampSchema,
+  expiresAt: timestampSchema,
+}).strict();
+const operationResultSchema = receiptBindingSchema.extend({
+  schemaVersion: z.literal(1),
+  preflight: observationPairSchema,
+  postflight: observationPairSchema,
+  outcome: z.object({
+    status: z.enum(["succeeded", "failed", "ambiguous"]),
+    evidenceDigest: digestSchema,
+  }).strict(),
 }).strict();
 
 const acceptanceEvidenceSchema = z.object({
@@ -656,6 +703,12 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
   if (protectedAuthority.commitSha !== contract.authority.commitSha || protectedAuthority.digest !== contract.authority.digest) {
     throw new Error("Operation request protected authority snapshot does not match the frozen Issue contract.");
   }
+  if (!protectedAuthority.authority.authorization.operatorLabels.includes(request.operatorLabel)) {
+    throw new Error("Operation request operator label is not authorized by protected authority.");
+  }
+  if (!protectedAuthority.authority.authorization.externalOperatorRoles.includes(request.executionRole)) {
+    throw new Error("Operation request execution role is not authorized by protected authority.");
+  }
   const serviceUse = authorizeServiceUse(protectedAuthority.authority, {
     service: definition.service,
     operation: request.operation,
@@ -673,6 +726,211 @@ export function validateExternalOperationRequest(value, root = defaultRoot, cont
     resolvedTarget: resolveOwnershipTarget(protectedAuthority.authority, definition.service),
     expectedEvidence: definition.evidence,
   };
+}
+
+/**
+ * Receipt validators are deliberately stateless across callers. The guarded adapter owns one state
+ * instance for its execution boundary and must persist/serialize that boundary when processes change.
+ */
+export function createOperationReceiptState() {
+  return {
+    validatedPreflights: new Map(),
+    consumedReceiptIds: new Set(),
+  };
+}
+
+/** @param {unknown} value */
+function parseReceiptState(value) {
+  if (!value || typeof value !== "object") throw new Error("Receipt validation requires caller-owned receipt state.");
+  const state = /** @type {{ validatedPreflights?: unknown, consumedReceiptIds?: unknown }} */ (value);
+  if (!(state.validatedPreflights instanceof Map) || !(state.consumedReceiptIds instanceof Set)) {
+    throw new Error("Receipt validation requires caller-owned validated and consumed receipt state.");
+  }
+  return /** @type {{ validatedPreflights: Map<string, any>, consumedReceiptIds: Set<string> }} */ (state);
+}
+
+/** @param {unknown} value @param {string} label */
+function receiptTimestamp(value, label) {
+  const parsed = timestampSchema.parse(value);
+  const milliseconds = Date.parse(parsed);
+  if (!Number.isFinite(milliseconds)) throw new Error(`${label} is invalid.`);
+  return { value: parsed, milliseconds };
+}
+
+/** @param {unknown} contextValue */
+function resolveReceiptContext(contextValue) {
+  if (!contextValue || typeof contextValue !== "object") throw new Error("Receipt validation context is required.");
+  const context = /** @type {Record<string, any>} */ (contextValue);
+  if (typeof context.root !== "string" || context.root.length === 0) throw new Error("Receipt validation root is required.");
+  const executionSurface = executionSurfaceSchema.parse(context.executionSurface);
+  const now = receiptTimestamp(context.now ?? new Date().toISOString(), "Receipt validation time");
+  const receiptState = parseReceiptState(context.receiptState);
+  const contract = validateIssueContract(context.contract);
+  const request = externalRequestBaseSchema.parse(context.request);
+  const validatedRequest = validateExternalOperationRequest(request, context.root, contract);
+  const authoritySnapshot = loadAuthorityAtCommit(context.root, contract.authority.commitSha);
+  if (authoritySnapshot.digest !== contract.authority.digest) {
+    throw new Error("Receipt protected authority digest mismatch.");
+  }
+  return {
+    root: context.root,
+    executionSurface,
+    now,
+    receiptState,
+    contract,
+    request,
+    validatedRequest,
+    authority: authoritySnapshot.authority,
+    service: operationDefinitions[request.operation].service,
+  };
+}
+
+/** @param {ReturnType<typeof resolveReceiptContext>} context */
+function expectedReceiptBinding(context) {
+  return {
+    requestId: context.request.requestId,
+    service: context.service,
+    operatorLabel: context.request.operatorLabel,
+    executionRole: context.request.executionRole,
+    executionSurface: context.request.executionSurface,
+    authorityDigest: context.contract.authority.digest,
+    issueContractDigest: context.contract.digest,
+    authorizationDigest: digestValue(context.validatedRequest.authorization),
+    requestDigest: digestValue(context.request),
+    mutationDigest: digestValue(context.request.inputs),
+  };
+}
+
+/** @param {Record<string, any>} actual @param {ReturnType<typeof expectedReceiptBinding>} expected @param {string} actualSurface */
+function assertReceiptBinding(actual, expected, actualSurface) {
+  const labels = {
+    requestId: "request ID",
+    service: "service",
+    operatorLabel: "operator label",
+    executionRole: "execution role",
+    executionSurface: "execution surface",
+    authorityDigest: "authority digest",
+    issueContractDigest: "Issue contract digest",
+    authorizationDigest: "authorization digest",
+    requestDigest: "request digest",
+    mutationDigest: "mutation digest",
+  };
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    if (actual[key] !== expectedValue) throw new Error(`Receipt ${labels[key]} mismatch.`);
+  }
+  if (actual.executionSurface !== actualSurface) throw new Error("Receipt execution surface does not match the live adapter surface.");
+}
+
+/** @param {unknown} value @param {unknown} contextValue */
+export function validatePreflightReceipt(value, contextValue) {
+  const receipt = preflightReceiptSchema.parse(value);
+  const context = resolveReceiptContext(contextValue);
+  if (context.receiptState.consumedReceiptIds.has(receipt.receiptId)) {
+    throw new Error("Preflight receipt ID has already been consumed and cannot be reused.");
+  }
+  if (context.receiptState.validatedPreflights.has(receipt.receiptId)) {
+    throw new Error("Preflight receipt ID has already been validated and cannot be reused.");
+  }
+  assertReceiptBinding(receipt, expectedReceiptBinding(context), context.executionSurface);
+  const observedAt = receiptTimestamp(receipt.observedAt, "Preflight observedAt");
+  const expiresAt = receiptTimestamp(receipt.expiresAt, "Preflight expiresAt");
+  if (observedAt.milliseconds > context.now.milliseconds) throw new Error("Preflight receipt observation is dated in the future.");
+  if (expiresAt.milliseconds <= context.now.milliseconds) throw new Error("Preflight receipt is expired or stale.");
+  if (expiresAt.milliseconds <= observedAt.milliseconds || expiresAt.milliseconds - observedAt.milliseconds > 120_000) {
+    throw new Error("Preflight receipt validity window must be positive and no longer than two minutes.");
+  }
+  const identity = evaluateAccountObservation(context.authority, {
+    service: receipt.service,
+    account: receipt.accountObservation,
+    target: receipt.targetObservation,
+  });
+  if (identity.accountRef !== context.validatedRequest.resolvedAccountRef) throw new Error("Preflight account reference mismatch.");
+  if (identity.targetRef !== context.validatedRequest.resolvedTargetRef) throw new Error("Preflight target reference mismatch.");
+  const validated = {
+    ok: true,
+    receiptId: receipt.receiptId,
+    requestId: receipt.requestId,
+    issue: context.contract.issue,
+    service: receipt.service,
+    operatorLabel: receipt.operatorLabel,
+    executionRole: receipt.executionRole,
+    executionSurface: receipt.executionSurface,
+    authorityDigest: receipt.authorityDigest,
+    issueContractDigest: receipt.issueContractDigest,
+    authorizationDigest: receipt.authorizationDigest,
+    requestDigest: receipt.requestDigest,
+    mutationDigest: receipt.mutationDigest,
+    accountRefDigest: digestValue(identity.accountRef),
+    targetRefDigest: digestValue(identity.targetRef),
+    accountObservationDigest: digestValue(receipt.accountObservation),
+    targetObservationDigest: digestValue(receipt.targetObservation),
+    observedAt: receipt.observedAt,
+    expiresAt: receipt.expiresAt,
+    warnings: identity.warnings,
+  };
+  context.receiptState.validatedPreflights.set(receipt.receiptId, {
+    ...validated,
+    receiptDigest: digestValue(receipt),
+  });
+  return validated;
+}
+
+/** @param {unknown} value @param {unknown} contextValue */
+export function validateOperationResult(value, contextValue) {
+  const result = operationResultSchema.parse(value);
+  const context = resolveReceiptContext(contextValue);
+  if (context.receiptState.consumedReceiptIds.has(result.receiptId)) {
+    throw new Error("Preflight receipt ID has already been consumed; result receipt reuse is forbidden.");
+  }
+  const preflight = context.receiptState.validatedPreflights.get(result.receiptId);
+  if (!preflight) throw new Error("Operation result requires a valid preflight receipt before execution.");
+  assertReceiptBinding(result, expectedReceiptBinding(context), context.executionSurface);
+  if (result.preflight.observedAt !== preflight.observedAt) throw new Error("Result preflight observation timestamp mismatch.");
+  const postObservedAt = receiptTimestamp(result.postflight.observedAt, "Result postflight observedAt");
+  if (postObservedAt.milliseconds < Date.parse(result.preflight.observedAt)) throw new Error("Result postflight observation predates preflight.");
+  if (postObservedAt.milliseconds >= Date.parse(preflight.expiresAt)) throw new Error("Operation result was observed after the preflight receipt expired.");
+  if (postObservedAt.milliseconds > context.now.milliseconds) throw new Error("Operation result observation is dated in the future.");
+  if (context.now.milliseconds - postObservedAt.milliseconds > 120_000) throw new Error("Operation result observation is stale.");
+  const identity = evaluateAccountObservation(context.authority, {
+    service: result.service,
+    account: result.postflight.accountObservation,
+    target: result.postflight.targetObservation,
+    previousAccount: result.preflight.accountObservation,
+    previousTarget: result.preflight.targetObservation,
+  });
+  if (digestValue(result.preflight.accountObservation) !== preflight.accountObservationDigest) {
+    throw new Error("Result preflight account observation does not match the validated receipt.");
+  }
+  if (digestValue(result.preflight.targetObservation) !== preflight.targetObservationDigest) {
+    throw new Error("Result preflight target observation does not match the validated receipt.");
+  }
+  if (digestValue(identity.accountRef) !== preflight.accountRefDigest) throw new Error("Result account reference does not match preflight.");
+  if (digestValue(identity.targetRef) !== preflight.targetRefDigest) throw new Error("Result target reference does not match preflight.");
+  const validated = {
+    ok: true,
+    consumed: true,
+    receiptId: result.receiptId,
+    requestId: result.requestId,
+    issue: context.contract.issue,
+    service: result.service,
+    operatorLabel: result.operatorLabel,
+    executionRole: result.executionRole,
+    executionSurface: result.executionSurface,
+    authorityDigest: result.authorityDigest,
+    issueContractDigest: result.issueContractDigest,
+    authorizationDigest: result.authorizationDigest,
+    requestDigest: result.requestDigest,
+    mutationDigest: result.mutationDigest,
+    accountRefDigest: digestValue(identity.accountRef),
+    targetRefDigest: digestValue(identity.targetRef),
+    outcome: result.outcome.status,
+    evidenceDigest: result.outcome.evidenceDigest,
+    observedAt: result.postflight.observedAt,
+    warnings: identity.warnings,
+  };
+  context.receiptState.validatedPreflights.delete(result.receiptId);
+  context.receiptState.consumedReceiptIds.add(result.receiptId);
+  return validated;
 }
 
 /** @param {string} candidate */
@@ -706,7 +964,7 @@ export async function readExternalOperationRequest(root, requestPath) {
   resolveInside(root, actual, path.join(".artifacts", "ops-requests"));
   const request = validateExternalOperationRequest(JSON.parse(await readFile(actual, "utf8")), root);
   let gate = null;
-  if (["github.merge_pr", "vercel.deploy_production", "cloudflare.upsert_dns"].includes(request.operation)) {
+  if (requiresAuthoritativeHead(request.operation)) {
     gate = await runAuthoritativePremergeGate(root, request.issue);
     if ("headSha" in request.inputs && request.inputs.headSha !== gate.headSha) {
       throw new Error("External operation Head SHA does not match the authoritative review gate.");
@@ -1041,10 +1299,15 @@ export async function renderAuthoritativePullRequestBody(root, issue) {
   return renderPullRequestBody(await loadAuthoritativeGateInput(root, issue));
 }
 
-/** @param {string} root @param {number} issue @param {number} prNumber */
-export async function createMergeOperationRequest(root, issue, prNumber) {
+/** @param {string} root @param {number} issue @param {number} prNumber @param {unknown} operatorMetadata */
+export async function createMergeOperationRequest(root, issue, prNumber, operatorMetadata) {
   const input = await loadAuthoritativeGateInput(root, issue);
   const gate = runPremergeGate(input);
+  const operator = z.object({
+    operatorLabel: operatorLabelSchema,
+    executionRole: externalOperatorRoleSchema,
+    executionSurface: executionSurfaceSchema,
+  }).strict().parse(operatorMetadata);
   const request = {
     schemaVersion: 1,
     requestId: `issue-${issue}-github-merge-pr-1`,
@@ -1053,6 +1316,7 @@ export async function createMergeOperationRequest(root, issue, prNumber) {
     target: { kind: "github.repository", identifier: targetSources.github },
     environment: "production",
     reasonCode: "reviewed-release",
+    ...operator,
     inputs: { issue, prNumber, headSha: gate.headSha, method: "squash" },
   };
   const validated = validateExternalOperationRequest(request, root, input.contract);
@@ -1296,7 +1560,11 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const gate = runPremergeGate(authoritativeInput);
   const prBody = renderPullRequestBody(authoritativeInput);
   await writeFile(path.join(headRoot, "pull-request.md"), prBody, "utf8");
-  const merge = await createMergeOperationRequest(root, contract.issue, fixture.prNumber);
+  const merge = await createMergeOperationRequest(root, contract.issue, fixture.prNumber, {
+    operatorLabel: fixture.primaryModel,
+    executionRole: "implementer",
+    executionSurface: "github-cli",
+  });
 
   return { gate, state, branch, baseSha, headSha, request: merge.request, paths: {
     contract: contractPathRelative,

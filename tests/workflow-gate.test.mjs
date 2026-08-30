@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  loadProtectedAuthority,
   prepareReviewArtifacts,
   readExternalOperationRequest,
+  requiresAuthoritativeHead,
   resolveInside,
   runAuthoritativePremergeGate,
   runPremergeGate,
@@ -21,6 +23,19 @@ async function readJson(filePath) {
 }
 
 describe("current-Head pre-merge gate", () => {
+  it("centrally classifies repository-derived high-risk operations", () => {
+    for (const operation of [
+      "github.merge_pr",
+      "github.update_ruleset",
+      "supabase.apply_migrations",
+      "vercel.deploy_production",
+      "cloudflare.upsert_dns",
+    ]) {
+      expect(requiresAuthoritativeHead(operation), operation).toBe(true);
+    }
+    expect(requiresAuthoritativeHead("github.read_issue")).toBe(false);
+  });
+
   /** @type {string} */
   let root;
   /** @type {any} */
@@ -124,13 +139,11 @@ describe("current-Head pre-merge gate", () => {
     await mkdir(path.join(renameRoot, "config"), { recursive: true });
     await mkdir(path.join(renameRoot, "src", "lib", "auth"), { recursive: true });
     await writeFile(path.join(renameRoot, ".gitignore"), ".artifacts/\n", "utf8");
-    await writeFile(path.join(renameRoot, "config", "ownership.json"), JSON.stringify({
-      schemaVersion: 1,
-      github: { owner: "yuto1201", repository: "Web-Template" },
-      supabase: { projectRef: null },
-      vercel: { projectId: null },
-      cloudflare: { zoneId: null },
-    }), "utf8");
+    await writeFile(
+      path.join(renameRoot, "config", "ownership.json"),
+      await readFile(path.resolve("config/ownership.json"), "utf8"),
+      "utf8",
+    );
     await writeFile(path.join(renameRoot, "src", "lib", "auth", "session.ts"), "export const session = true;\n", "utf8");
     expect(git("add", ".").status).toBe(0);
     expect(git("commit", "-m", "base auth file").status).toBe(0);
@@ -138,14 +151,14 @@ describe("current-Head pre-merge gate", () => {
     expect(git("mv", "src/lib/auth/session.ts", "src/lib/session.ts").status).toBe(0);
     expect(git("commit", "-m", "move auth file").status).toBe(0);
     const contract = snapshotIssueContract({
-      schemaVersion: 1,
+      schemaVersion: 2,
       issue: 42,
       repository: "yuto1201/Web-Template",
       goal: "Review both sides of a privileged rename.",
       acceptanceCriteria: [{ id: "AC-1", text: "Rename is reviewed." }],
       dependencies: [],
-      externalOperations: [],
-    }, "2026-08-21T01:00:00+09:00");
+      externalAuthorizations: [],
+    }, "2026-08-21T01:00:00+09:00", loadProtectedAuthority(renameRoot, "main"));
     await mkdir(path.join(renameRoot, ".artifacts", "issues", "42"), { recursive: true });
     await writeFile(path.join(renameRoot, ".artifacts", "issues", "42", "issue-contract.json"), `${JSON.stringify(contract, null, 2)}\n`, "utf8");
     const prepared = await prepareReviewArtifacts(renameRoot, {
