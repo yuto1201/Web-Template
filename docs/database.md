@@ -8,7 +8,7 @@ Create every migration through the repository-pinned CLI, then edit the generate
 npm exec -- supabase migration new describe_the_change
 ```
 
-Never edit a migration already applied to a hosted project. Add a forward-only recovery migration instead. Hosted link, push, reset, and SQL execution are Codex-only external operations after the personal project identity is verified.
+Never edit a migration already applied to a hosted project. Add a forward-only recovery migration instead. Hosted link, push, reset, and SQL execution require an implementer or external-operator using account-bound authority: protected-main Supabase account and exact project ref, frozen Issue purpose and migration digests, fresh preflight/claim/result receipts, and exact-Head review for hosted migration or Auth-policy changes. A missing project ref fails closed.
 
 ## Exposed schema checklist
 
@@ -28,6 +28,8 @@ The baseline pgTAP suite also walks every table, view, and security-definer func
 Local API defaults are `public` and `graphql_public`, a 1,000-row response limit, PostgreSQL 17, one-hour JWTs, and email sign-up enabled without local email confirmation. Product auth policy is configured separately from this database baseline.
 
 Private schemas, idempotency keys, revision columns, RPC functions, and audit tables are optional product patterns. They are not installed by this neutral baseline.
+
+Destructive hosted reset, schema drop, or down migration is not implied by a normal migration authorization. Use expand → deploy → contract; a contract step needs its own explicit authorization, exact target, reviewed recovery plan, and fresh provider evidence.
 
 ## Verification
 

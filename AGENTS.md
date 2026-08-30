@@ -21,6 +21,7 @@ Do not silently resolve a material conflict. Record the decision or ask the user
 - Work on one GitHub Issue per branch and pull request.
 - The only exception is a Dependabot GitHub Actions version-only pull request that passes the pinned bot, same-repository branch, workflow-path, action allowlist, and diff-shape checks in `tools/github-review-gate.mjs`; it does not require a synthetic Issue or opposite-model body evidence.
 - Branch names use `codex/<issue-number>-<slug>` for Codex-led work and `claude/<issue-number>-<slug>` for Claude-led local work.
+- Branch prefixes and operator labels describe the execution surface; they do not grant authority or prove an authenticated account.
 - Read the Issue before editing. Keep changes inside its scope.
 - Add or update tests with behavior changes.
 - Run `npm run check` before review and again before merge.
@@ -31,13 +32,14 @@ Do not silently resolve a material conflict. Record the decision or ask the user
 
 ## Authority boundary
 
-- Codex is the only actor allowed to authenticate to or operate GitHub, Supabase, Vercel, Cloudflare, DNS, hosted databases, deployment environments, or other personal external services.
-- Claude may inspect and edit ordinary local application files when explicitly assigned implementation work. Claude must not run shell commands, invoke network or MCP tools, change repository policy/configuration, use remote Git, deploy, or access secret stores. Codex performs validation and Git operations for Claude-led changes.
-- Start Claude Code from the repository root. A session started in a nested directory must stop unless it can verify that the root `.claude/settings.json` and PreToolUse hook are active.
-- If Claude needs external information or action, it must return a structured delegation request for Codex. See `docs/authority.md`.
-- Provider ownership must match `config/ownership.json` before a Codex external write.
+- Claude acting in implementer and external-operator roles has the same account-bound authority as Codex. `operatorLabel` (`claude` or `codex`) is audit metadata, not an authentication factor.
+- Keep `operatorLabel`, `executionRole`, `modelFamily`, authenticated account identity, service mode, and exact resource target separate. Evaluator and auditor roles remain read-only, and `modelFamily` is used to preserve opposite-model review independence.
+- `config/ownership.json` is the canonical account, service-policy, and target registry. Runtime authorization comes from a protected-`main` authority snapshot frozen into the Issue contract; a candidate branch cannot authorize itself by retargeting that file.
+- GitHub, Supabase, Vercel, and Cloudflare are `repository-active`, but every authenticated use still needs the Issue's declared purpose and exact frozen authorization. Linear is `explicit-user-purpose-only`; without a user-stated purpose and non-null stable workspace, user, and team IDs in protected-main authority, reads and writes fail closed.
+- Repository-approved authenticated operations use the guarded request → preflight receipt → one-time execution claim → result/finalize path. Re-read account and target before execution, never switch accounts automatically, and do not retry an ambiguous result without first observing provider state.
+- High-risk writes derived from repository content—including merge, hosted migration/Auth policy, deployment/configuration, DNS, and rollback—must rerun the authoritative exact-Head gate. Destructive actions require exact scope, reversibility or recovery evidence, and explicit authorization.
 
-This is an operational policy implemented with repository hooks and least-privilege agents. It is not OS-level or cryptographic isolation when both tools run as the same Windows user.
+This is an operational repository policy, not OS-level or cryptographic isolation. Claude and Codex running as the same OS user may be able to bypass repository adapters; stronger prevention requires separate OS credentials, a container/VM, keychain mediation, or provider-token mediation. See `docs/authority.md`.
 
 ## Engineering rules
 

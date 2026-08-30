@@ -7,10 +7,18 @@ The template is complete only when all of the following are evidenced:
 - Supabase migrations apply in order to a clean database and pass RLS/grant tests for anonymous and authenticated roles.
 - Sign-in, sign-out, refresh, and protected-route behavior work with real Supabase sessions.
 - Pull requests receive CI and independent cross-model review before squash merge.
+- Claude and Codex have equal account-bound authority in implementer/external-operator roles, while evaluator/auditor roles remain read-only and cannot self-approve.
+- Operator label, execution role, model family, account identity, service mode, and exact target are recorded and validated as independent values.
+- Provider authorization is derived from protected `main`, frozen to an Issue purpose and exact target, and cannot be changed by candidate-branch retargeting.
+- GitHub, Supabase, Vercel, and Cloudflare remain repository-active only within Issue scope; Linear denies reads and writes without an explicit user purpose and non-null stable IDs.
+- Preflight receipts, one-time execution claims, redacted results, and finalization prove pre/post account and target continuity without automatic switching or ambiguous retries.
+- Every repository-content-derived high-risk write reruns the authoritative exact-Head gate; destructive actions also prove exact scope and recovery.
 - Preview deployment works without production-only secrets.
 - Production deployment is linked to the verified personal Vercel scope.
 - Cloudflare DNS ownership is verified before records are created, and routing works without an unintended proxy layer.
 - A new repository can be instantiated from the template with stale identifiers detected by automated checks.
+- Clean-room initialization replaces or deactivates source account/target identity, detects source IDs and email fingerprints, and remains same-input idempotent.
 - The final audit records GitHub, Supabase, Vercel, and Cloudflare ownership without recording credentials.
+- Logs, Issues, PRs, receipts, and screenshots contain no raw personal email address, token, cookie, or secret value.
 
 Each active Issue may add stricter acceptance criteria. Passing an individual Issue does not imply the template-level criteria are complete.

@@ -4,9 +4,9 @@ Vercel serves the Next.js application; Cloudflare remains the registrar and auth
 
 ## Authority and linkage
 
-Codex is the only Vercel operator. Before any mutation it verifies the authenticated personal team and exact project, records their public IDs in `config/ownership.json`, and creates an ignored `.vercel/project.json` link. The preflight command compares that local link only with the canonical repository ownership record; `--root` overrides are rejected. It fails at checkpoint `link` or `ownership` before deploy. `.vercel/`, tokens, cookies, and environment values are never committed.
+Claude and Codex have equal account-bound authority in implementer and external-operator roles. Before any Vercel mutation, the active operator verifies the provider-reported personal team name, slug, stable team ID, required plan, and exact non-null project ID against the protected-main authority frozen in the Issue contract. The operator label is audit metadata and never substitutes for those fields. The ignored `.vercel/project.json` link is compared with the same canonical target; `--root` overrides are rejected. A mismatch fails at checkpoint `link` or `ownership` without switching accounts, teams, or projects. `.vercel/`, tokens, cookies, and environment values are never committed.
 
-The Git integration model is one production branch (`main`) plus Preview deployments for non-production branches and pull requests. Manual Connector/CLI deployments are permitted only as Codex-operated bootstrap or recovery steps and must still produce the same SHA-bound release evidence.
+Vercel is `repository-active`, so use also requires the Issue's declared purpose, environment, operation constraints, and fresh guarded receipts. The Git integration model is one production branch (`main`) plus Preview deployments for non-production branches and pull requests. Manual Connector/CLI deployments are permitted only as reviewed bootstrap or recovery operations and must produce the same SHA-bound release evidence.
 
 ## Names-only environment policy
 
@@ -41,7 +41,7 @@ node tools/deployment-workflow.mjs preflight --env-snapshot <names-only.json>
 
 ## Release evidence and smoke checks
 
-Production deployment is allowed only for an already verified 40-character commit SHA. After the Vercel API reports `READY`, Codex records a names-only/provider-derived evidence object containing the canonical team ID, project ID, deployment ID, credential-free HTTPS Vercel origin, provider-reported commit SHA, timestamp, and smoke results, then runs:
+Production deployment is allowed only for an already verified 40-character commit SHA, after rerunning the authoritative exact-Head gate. After the Vercel API reports `READY`, the authorized operator records a names-only/provider-derived evidence object containing the canonical team ID, project ID, deployment ID, credential-free HTTPS Vercel origin, provider-reported commit SHA, timestamp, and smoke results, then runs:
 
 ```powershell
 node tools/deployment-workflow.mjs verify-release --evidence .artifacts/vercel-release-evidence.json --expected-sha <verified-sha>
@@ -52,9 +52,9 @@ Evidence older than 30 minutes or dated more than five minutes into the future i
 - `/` returns 200 and contains the non-secret marker `Start with the boundaries already drawn.`;
 - `/health` returns 200 with JSON `status: ok`.
 
-Preview protection stays enabled. Codex uses the authenticated Vercel fetch/curl surface rather than disabling protection. Production is checked through its public deployment URL. Runtime/build errors are inspected without printing environment values.
+Preview protection stays enabled. The same authenticated surface used for the preflight performs the protected fetch rather than disabling protection. Production is checked through its public deployment URL. Runtime/build errors are inspected without printing environment values.
 
-Release evidence is never accepted from a pull request, downloaded artifact, or user-supplied path. Codex creates `.artifacts/vercel-release-evidence.json` directly from the Vercel API response and the two live smoke responses, consumes it in the same operator run, and leaves it git-ignored. The CLI rejects every other evidence path.
+Release evidence is never accepted from a pull request, downloaded artifact, or user-supplied path. The guarded adapter creates `.artifacts/vercel-release-evidence.json` directly from the Vercel API response and the two live smoke responses, consumes it in the same operator run, and leaves it git-ignored. The CLI rejects every other evidence path. Its result is linked to the preflight receipt, one-time mutation claim, and finalized result receipt.
 
 ## Remote schema ordering
 
@@ -72,7 +72,7 @@ Production `database.reset`, down migrations, and schema drops are forbidden aut
 
 ## Failure and recovery
 
-- `link` / `ownership`: relink only after Codex re-verifies team and project.
+- `link` / `ownership`: stop; relink only through a new authorization after the operator re-verifies team and project.
 - `environment:*`: add only the missing allowed key to that environment; never copy Production wholesale into Preview.
 - `release-sha`: do not promote; deploy the reviewed commit.
 - `smoke`: keep the previous production deployment available and inspect build/runtime logs before retrying.

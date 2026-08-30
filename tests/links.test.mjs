@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest";
 import { findBrokenMarkdownLinks } from "../tools/verify-links.mjs";
 
 describe("Markdown link verification", () => {
+  it("keeps every repository Markdown link resolvable", async () => {
+    await expect(findBrokenMarkdownLinks(path.resolve("."))).resolves.toEqual([]);
+  });
+
   it("accepts repository-local and external links", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "link-check-"));
     await mkdir(path.join(root, "docs"));

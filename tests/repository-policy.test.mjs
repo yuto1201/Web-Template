@@ -10,6 +10,84 @@ import {
 } from "../tools/repository-policy.mjs";
 
 describe("repository policy", () => {
+  it("migrates normative policy to account-bound operator parity", async () => {
+    const normativePaths = [
+      "AGENTS.md",
+      "README.md",
+      ".github/pull_request_template.md",
+      "docs/authority.md",
+      "docs/security.md",
+      "docs/workflow.md",
+      "docs/database.md",
+      "docs/deployment.md",
+      "docs/domain.md",
+      "docs/activation.md",
+      "docs/verification.md",
+      "docs/onboarding-macos.md",
+      "specs/product.md",
+      "specs/architecture.md",
+      "specs/acceptance.md",
+      "specs/completion-audit.md",
+    ];
+    const contents = new Map(await Promise.all(normativePaths.map(async (relative) => [
+      relative,
+      await readFile(path.resolve(relative), "utf8"),
+    ])));
+    const obsoleteClaims = [
+      "Codex is the only actor",
+      "Codex-only external operations",
+      "External merge remains a Codex operation",
+      "Claude shell execution is disabled",
+      "Authenticated provider work stays with Codex",
+    ];
+
+    for (const [relative, content] of contents) {
+      for (const claim of obsoleteClaims) {
+        expect(content, `${relative} retains obsolete actor-specific policy: ${claim}`).not.toContain(claim);
+      }
+      expect(detectActorAsymmetry(content), `${relative} contains actor-specific normative policy`).toBeNull();
+    }
+
+    for (const relative of ["AGENTS.md", "README.md", "docs/authority.md", "specs/product.md", "specs/architecture.md"]) {
+      const content = contents.get(relative);
+      expect(content, `${relative} must name account-bound authority`).toMatch(/account-bound authority/iu);
+      expect(content, `${relative} must name Claude`).toMatch(/Claude/u);
+      expect(content, `${relative} must name Codex`).toMatch(/Codex/u);
+    }
+
+    const authority = contents.get("docs/authority.md");
+    expect(authority).toMatch(/repository-active/iu);
+    expect(authority).toMatch(/explicit-user-purpose-only/iu);
+    expect(authority).toMatch(/Linear[^\n]*(?:deny|denies|denial|denied|block|fail closed)/iu);
+  });
+
+  it("preserves D-003 as superseded history and records accepted D-007", async () => {
+    const decisions = await readFile(path.resolve("specs/decisions.md"), "utf8");
+    const d003 = decisions.match(/## D-003:[\s\S]*?(?=\n## D-|$)/u)?.[0] ?? "";
+    const d007 = decisions.match(/## D-007:[\s\S]*?(?=\n## D-|$)/u)?.[0] ?? "";
+
+    expect(d003).toContain("Codex-only");
+    expect(d007).toMatch(/Status:\s*accepted/iu);
+    expect(d007).toContain("Supersedes: D-003 and actor-specific portions of D-004/D-006");
+    expect(d007).toMatch(/account-bound authority/iu);
+  });
+
+  it("keeps acceptance Issues sorted, unique, and traces Issue #33", async () => {
+    const trace = JSON.parse(await readFile(path.resolve("config/acceptance.json"), "utf8"));
+    const issues = trace.issues.map((entry) => entry.issue);
+
+    expect(issues).toEqual([...new Set(issues)].toSorted((left, right) => left - right));
+    expect(issues).toContain(33);
+    expect(trace.issues.find((entry) => entry.issue === 33)).toMatchObject({
+      evidence: expect.arrayContaining([
+        "specs/account-bound-authority.md",
+        "tools/authority-core.mjs",
+        "tools/issue-workflow.mjs",
+        "tools/verify-template-instantiation.mjs",
+      ]),
+    });
+  });
+
   it("keeps required policy, ownership, agent, and secret boundaries valid", async () => {
     const authority = JSON.parse(await readFile(path.resolve("config/ownership.json"), "utf8"));
     const template = JSON.parse(await readFile(path.resolve("config/template.json"), "utf8"));

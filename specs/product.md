@@ -14,8 +14,8 @@ The repository owner creates a new repository from this GitHub template, fills i
 - Supabase Postgres and Auth
 - Vercel Git integration for preview and production deployment
 - Cloudflare as registrar and authoritative DNS
-- Codex as primary developer and sole external-service operator
-- Claude as independent evaluator or optional local implementation partner
+- Claude and Codex as equal implementers and external operators under account-bound authority
+- Opposite-model evaluator and auditor roles that remain independent and read-only
 
 ## Required qualities
 
@@ -24,10 +24,13 @@ The repository owner creates a new repository from this GitHub template, fills i
 - Issue-driven and resumable after interruption
 - Reviewable by a second model with bounded evidence
 - Clear separation between reusable template behavior and product-specific choices
+- Explicit separation of operator label, execution role, model family, authenticated account, service mode, and exact target
+- Provider use constrained by a frozen Issue purpose, protected-main authority, guarded receipts, and exact-Head review for high-risk writes
 
 ## Non-goals
 
 - A universal framework generator supporting every frontend or cloud provider
-- Automatic production deployment, DNS mutation, or database migration without a Codex preflight
+- Automatic production deployment, DNS mutation, or database migration without an account-bound preflight, one-time claim, and finalized result
 - OS-level isolation between local AI tools running as the same user
 - A default billing, roles, organization, or audit-log product schema
+- General Linear access: it remains explicit-user-purpose-only and fails closed while stable IDs are incomplete

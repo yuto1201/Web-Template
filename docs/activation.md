@@ -17,13 +17,13 @@
 
 ## 2. ローカル準備完了を確認する
 
-`npm run readiness` の `local.status` が `ready` なら、アプリ名、package slug、所有者設定、公開ホスト名、ローカルポートの整合が取れています。プロバイダーごとの `needs-codex` はエラーではなく、ライブ有効化が未完了という独立状態です。
+`npm run readiness` の `local.status` が `ready` なら、アプリ名、package slug、所有者設定、公開ホスト名、ローカルポートの整合が取れています。プロバイダーごとの `needs-codex` はライブ有効化が未完了という既存の機械可読 status 名であり、operator authority を Codex に限定する意味ではありません。
 
 `.env.example` を `.env.local` へコピーし、ブラウザ公開可能な Supabase URL と publishable key だけを設定します。service-role key やプロバイダートークンを `NEXT_PUBLIC_*` に設定してはいけません。
 
-## 3. Codex がライブ接続を有効化する
+## 3. Account-bound operator がライブ接続を有効化する
 
-外部操作は [authority boundary](authority.md) に従い Codex だけが行います。
+Claude と Codex は implementer / external-operator として同じ account-bound authority を持ちます。外部操作は [authority boundary](authority.md) に従い、protected `main` authority、Issue の宣言目的、service mode、exact target、fresh receipt が一致した operator だけが行います。operator label は認証情報ではなく、自動 account switch は禁止です。
 
 1. `config/ownership.json` の GitHub owner/repository が生成先と一致することを確認する。
 2. 個人 Supabase organization を確認し、プロジェクト作成または既存 project ref の採用を事前報告する。
@@ -34,7 +34,9 @@
 7. 個人 Cloudflare account/zone を確認し、対象1件だけを DNS-only で適用する。
 8. DNS、TLS、`/`、`/health` を確認してライブ準備完了を記録する。
 
-provider ID は資格情報ではありませんが、別アカウントへの誤操作を防ぐ所有境界です。トークン、cookie、secret、service-role key は設定ファイル、Issue、PR、スクリーンショット、監査成果物へ保存しません。
+GitHub・Supabase・Vercel・Cloudflare は `repository-active` ですが、Issue scope を超えて使えるという意味ではありません。Linear は `explicit-user-purpose-only` で、ユーザーが目的を明示し、protected-main authority に workspace/user/team の stable IDs がすべて登録されるまでは read/write とも fail closed です。高リスク write は exact-Head gate を再実行し、preflight → one-time claim → result/finalize の順に redacted receipt を残します。
+
+provider ID は資格情報ではありませんが、別アカウントへの誤操作を防ぐ所有境界です。トークン、cookie、secret、service-role key、個人メール生値は設定ファイル、Issue、PR、スクリーンショット、監査成果物へ保存しません。テンプレート生成では account/target を明示入力するか inactive placeholder を使い、source identity の残留と異なる authority fingerprint での再初期化を拒否します。
 
 ## 4. 完了監査
 

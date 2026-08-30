@@ -1,6 +1,6 @@
 # Web Template
 
-Codex を主担当、Claude を独立評価者または相談者として使う、個人向け Web アプリ開発の guarded golden template です。標準構成は Next.js App Router、strict TypeScript、Supabase、Vercel、Cloudflare DNS です。
+Claude と Codex が implementer / external-operator として同じ account-bound authority を持ち、反対モデルを独立評価者として使う、個人向け Web アプリ開発の guarded golden template です。標準構成は Next.js App Router、strict TypeScript、Supabase、Vercel、Cloudflare DNS です。
 
 このリポジトリは最小のコード断片ではありません。生成後のアプリにも、Auth/RLS、秘密情報境界、Preview/Production、DNS、反対モデル評価を実際に検査するガードを残します。サンプル業務機能は含めず、ライブ Supabase・Vercel・Cloudflare の有効化は選択可能な別工程です。
 
@@ -41,9 +41,9 @@ npm run workstation:doctor -- --require-env --require-docker
 `npm run readiness` は次を別々に表示します。
 
 - `local.status: ready`: package slug、所有者設定、URL、ローカルポートが整合し、ローカル実装を開始できる。
-- `liveProviders.*.status: needs-codex`: 対象の個人アカウントや hosted project がまだ確定していない。
+- `liveProviders.*.status: needs-codex`: 対象の個人アカウントや hosted project がまだ確定していないことを示す既存の機械可読 status 名。operator 権限を Codex に限定する意味ではありません。
 
-ローカル準備完了は、デプロイやドメイン公開の成功を意味しません。Supabase、Vercel、Cloudflare、GitHub の認証済み外部操作は Codex だけが行います。Claude はローカル実装と読み取り評価に使い、外部情報が必要な場合は Codex へ委譲します。
+ローカル準備完了は、デプロイやドメイン公開の成功を意味しません。Claude と Codex は implementer / external-operator として同権ですが、operator label と実際のアカウント認証は別物です。認証済み操作は protected `main` の authority、Issue の宣言目的、service mode、exact target、fresh receipt が一致した場合だけ行います。GitHub・Supabase・Vercel・Cloudflare は `repository-active`、Linear は `explicit-user-purpose-only` で、ユーザーが目的を明示し stable IDs が登録されるまでは read/write とも fail closed です。
 
 ## 環境変数
 
@@ -82,10 +82,11 @@ npm run audit:completion -- --include-integration --require-all
 
 - [AGENTS.md](AGENTS.md): 全モデル共通の実行規約
 - [specs/README.md](specs/README.md): 仕様の正本と更新ルール
-- [completion audit trace](specs/completion-audit.md): Issue #1–#8・#19 と現在の実装/検証の対応
+- [completion audit trace](specs/completion-audit.md): Issue #1–#8・#19・#33 と現在の実装/検証の対応
+- [account-bound authority design](specs/account-bound-authority.md): operator parity、service mode、receipt、enforcement boundary
 - [authority boundary](docs/authority.md): アカウントと外部操作の権限境界
 - [workflow](docs/workflow.md): Issue から squash merge までの標準手順
-- [security](docs/security.md): 秘密情報と Claude 実行ガード
+- [security](docs/security.md): 秘密情報、共有 operator guard、same-OS-user 境界
 - [verification](docs/verification.md): 必須検証と証跡
 - [macOS onboarding](docs/onboarding-macos.md): fresh cloneによる作業PC移行と完了ゲート
 

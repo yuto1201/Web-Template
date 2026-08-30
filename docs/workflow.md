@@ -12,15 +12,15 @@ The canonical state names, transitions, reviewer mapping, and privileged-path co
 ## 2. Branch
 
 - Start from updated `main`.
-- Use `codex/<number>-<slug>` for Codex-led work or `claude/<number>-<slug>` for Claude-led local work.
-- For Claude-led work, Codex creates the branch, runs validation, commits, pushes, and performs all GitHub operations. Claude only edits the explicitly assigned local application files.
+- Use `codex/<number>-<slug>` for Codex-labeled work or `claude/<number>-<slug>` for Claude-labeled work. The prefix is audit metadata, not authority.
+- Claude and Codex have equal account-bound authority in implementer and external-operator roles. Git and GitHub operations still require the protected-main account/target, Issue purpose, guarded receipts, and exact-Head review where applicable.
 - Confirm the working tree and preserve unrelated user changes.
 
 ## 3. Implement
 
 - Read `AGENTS.md`, the Issue, relevant specs, and existing tests.
 - Make the smallest complete change that satisfies the Issue.
-- Keep external provider operations separate from local code changes and run them only through Codex preflight.
+- Keep external provider operations separate from local code changes and run them only through the shared account-bound request/preflight/claim/result path.
 - Update durable specifications and decisions in the same change.
 - Persist state transitions so an interrupted run resumes from recorded evidence instead of inference.
 
@@ -39,7 +39,7 @@ The canonical state names, transitions, reviewer mapping, and privileged-path co
 - The reviewer remains read-only and returns severity-ranked findings.
 - Address material findings or record a concrete rationale before merge.
 - Follow `docs/agent-contracts/review-packet.md`. A new commit makes the packet and review stale.
-- Codex records the opposite model's strict JSON with `record-review`; the reviewer cannot write Issue evidence directly.
+- The implementer records the opposite model's strict JSON with `record-review`; the reviewer cannot write Issue evidence directly or self-approve.
 - If the opposite model is unavailable or returns invalid output, record `blocked:review`; self-approval is forbidden.
 
 ## 6. Pull request and merge
@@ -49,15 +49,15 @@ The canonical state names, transitions, reviewer mapping, and privileged-path co
 - Mark ready only after local checks and independent review.
 - The `Exact Head review policy` workflow reads the GitHub event file and compares the PR body's reviewed SHA with the current GitHub-supplied Head. It derives changed paths from the Git merge-base so a base-only commit cannot expand the PR's review scope. It also enforces the configured opposite-model mapping and required contracts for changed privileged paths. Editing the body reruns the check; any new commit makes the prior reviewed SHA stale.
 - Wait for required CI. Squash merge and verify `main` contains the result and the Issue is closed.
-- Run the current-Head gate before rendering the PR body or requesting merge. External merge remains a Codex operation.
+- Run the current-Head gate before rendering the PR body or requesting merge. Merge is a GitHub high-risk write available equally to either operator label only after protected-main account/target checks, one-time receipt claim, and exact-Head authorization.
 
 ### GitHub evidence boundary
 
-The PR body is an auditable mirror of local exact-Head evidence, not an authenticated identity for Codex or Claude. The GitHub check prevents stale or malformed review claims and runs the verifier from the base branch after initial rollout, but a repository administrator or a malicious workflow change can bypass it. Local `.artifacts/` remain ignored and authoritative for Codex's merge request gate. Do not use `pull_request_target`, interpolate PR body text into shell commands, or add path/job filters to the required workflow.
+The PR body is an auditable mirror of local exact-Head evidence, not an authenticated account identity or proof of authority for either operator label. The GitHub check prevents stale or malformed review claims and runs the verifier from the base branch after initial rollout, but a repository administrator or a malicious workflow change can bypass it. Local `.artifacts/` remain ignored and authoritative for the merge request gate. Do not use `pull_request_target`, interpolate PR body text into shell commands, or add path/job filters to the required workflow.
 
 The single Issue/branch/PR rule has one narrow exception: Dependabot GitHub Actions updates. The exception passes only when GitHub reports the pinned `dependabot[bot]` identity, the branch belongs to the same repository and uses the `dependabot/github_actions/` prefix, every changed file is an allowlisted workflow YAML path, and every changed diff line only replaces the version of an allowlisted `uses:` action. npm and application dependency PRs, forks, new actions, workflow logic changes, and mixed changes require the normal Issue and opposite-model review path.
 
-The workflow initially falls back to the candidate verifier only for the fixed #22 branch on its recorded pre-gate base SHA and only when the Head and base repositories are identical; any other missing base verifier fails closed. The one-shot guard intentionally remains as unreachable compatibility code after `main` advances beyond that SHA. Codex enables the branch ruleset only after the bootstrap PR is merged and a base-sourced live run passes. The active ruleset name and required check name are fixed in `config/workflow.json`, and the exported ruleset pins the exact-Head check plus all three repository CI jobs to the GitHub Actions App. Changing any of these requires a reviewed migration and corresponding provider update. Strict status checks intentionally require an updated branch and a fresh opposite-model review after concurrent changes land on `main`.
+The workflow initially falls back to the candidate verifier only for the fixed #22 branch on its recorded pre-gate base SHA and only when the Head and base repositories are identical; any other missing base verifier fails closed. The one-shot guard intentionally remains as unreachable compatibility code after `main` advances beyond that SHA. An authorized external operator enables the branch ruleset only after the bootstrap PR is merged and a base-sourced live run passes. The active ruleset name and required check name are fixed in `config/workflow.json`, and the exported ruleset pins the exact-Head check plus all three repository CI jobs to the GitHub Actions App. Changing any of these requires a reviewed migration and corresponding provider update. Strict status checks intentionally require an updated branch and a fresh opposite-model review after concurrent changes land on `main`.
 
 ## State machine
 
@@ -70,15 +70,15 @@ proposed -> approved -> claimed -> in-progress -> verify-passed
 
 Review findings return to `changes-requested -> in-progress`. Blocked states record the prior state as `resumeState` and may recover only to that exact state. This prevents a resumed run from skipping verification or review.
 
-## Fixed external-operation transport
+## Account-bound external-operation transport
 
-Claude may write only a strict request under `.artifacts/ops-requests/<request-id>.json`. It cannot execute the request. Codex validates it with:
+An implementer or external-operator creates a strict request under `.artifacts/ops-requests/<request-id>.json`. The request records `operatorLabel`, `executionRole`, execution surface, frozen authorization, intent, reversibility, and mutation inputs; it does not grant authority. Validate it with:
 
 ```powershell
 npm run workflow -- validate-request --file .artifacts/ops-requests/<request-id>.json
 ```
 
-Requests use `schemaVersion: 1`, a fixed operation allowlist, an ownership-config identifier, an operation-specific environment and reason code, a request ID bound to the Issue/operation, and strict inputs. The request operation must also appear in the frozen Issue contract; requests are therefore available only after Codex snapshots the Issue. Unknown or out-of-scope operations, free-form targets, additional fields such as `prompt` or `force`, path escapes, malformed JSON, and mismatched Issue inputs are rejected. The validator resolves the actual target from `config/ownership.json`; a missing target blocks execution. Merge and production release/DNS requests additionally rerun the authoritative review gate, and any supplied Head SHA must match it. Expected evidence is derived by the validator, never supplied as free-form reviewer authority. Results belong in `.artifacts/ops-results/<request-id>.result.json` after Codex preflight and execution.
+Requests use strict schema v2 Issue `externalAuthorizations`, a fixed operation allowlist, an operation-specific environment and purpose code, and inputs bound to the Issue. The frozen contract includes a protected-main authority commit and digest; candidate ownership edits never authorize the current branch. Unknown or out-of-scope operations, free-form accounts/targets, additional fields such as `prompt` or `force`, path escapes, malformed JSON, and mismatched Issue inputs are rejected. Missing targets block execution. Repository-content-derived high-risk writes rerun the authoritative review gate, and any supplied Head SHA must match it. Provider adapters create a fresh preflight receipt, `claim-execution` consumes the mutation once, and `validate-result` checks redacted post-state before finalization. Account/target switches and unchanged-input retries after ambiguous results are forbidden.
 
 ## Commands
 
@@ -107,4 +107,4 @@ npm run workflow -- cleanup-check --file <cleanup-plan.json>
 
 ## Cleanup
 
-Cleanup is never inferred from Git ancestry because squash merge replaces commit identity. Codex first supplies redacted provider evidence for an exact `MERGED` PR, non-null merge commit, matching `headRefOid`, recorded Head SHA, and confirmed exact remote-branch deletion. `cleanup-check` then independently re-derives the local branch SHA, matching Issue branches/worktrees, and target worktree cleanliness from Git. The validator returns the two exact local actions; Codex performs them separately. Dirty, unmerged, ambiguous, stale, escaped, or unrelated targets are refused and unrelated worktrees/branches are preserved. The validator cannot authenticate provider evidence itself; that evidence comes from Codex's personal-account preflight and post-check.
+Cleanup is never inferred from Git ancestry because squash merge replaces commit identity. The authorized operator supplies redacted provider evidence for an exact `MERGED` PR, non-null merge commit, matching `headRefOid`, recorded Head SHA, and confirmed exact remote-branch deletion. `cleanup-check` then independently re-derives the local branch SHA, matching Issue branches/worktrees, and target worktree cleanliness from Git. The validator returns the two exact local actions; the operator performs them separately through the same account-bound boundary. Dirty, unmerged, ambiguous, stale, escaped, or unrelated targets are refused and unrelated worktrees/branches are preserved. Cleanup is destructive and must never broaden the frozen target.

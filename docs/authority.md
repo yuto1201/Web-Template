@@ -1,72 +1,59 @@
-# Authority and account boundary
+# Account-bound authority and external operations
 
-## Fixed ownership rule
+## Independent identity and role axes
 
-Codex is the only actor allowed to authenticate to or mutate personal external services. Claude is a consultant, evaluator, or local implementation partner only.
+Claude acting in implementer and external-operator roles has the same account-bound authority as Codex. Authorization never comes from a model or tool name. Keep these values distinct in requests, evidence, and reviews:
 
-| Surface | Expected personal target | Operator |
+| Axis | Meaning | Authority effect |
 | --- | --- | --- |
-| GitHub repository | `yuto1201/Web-Template` or the instantiated repository owner | Codex |
-| Supabase organization | `yuto1201's Org` | Codex |
-| Vercel scope/project | Filled and verified during setup | Codex |
-| Cloudflare account | `Yuto Dev` | Codex |
-| Local repository files | Current workspace | Codex; Claude only when explicitly assigned |
+| `operatorLabel` | `claude` or `codex`, identifying the active development surface | Audit metadata; grants no authority |
+| `executionRole` | `implementer`, `external-operator`, `change-evaluator`, or `security-auditor` | Only the first two may request external operations |
+| `modelFamily` | `gpt` or `claude` | Selects cross-model review independence; grants no operator authority |
+| Account identity | Provider-derived stable account fields | Must match protected-main authority |
+| Service mode | Repository policy for the provider | Determines whether the requested purpose is eligible |
+| Exact target | Repository, project, zone/hostname, or workspace/team/object | Must match the frozen Issue authorization and live observation |
 
-Machine-readable expected values live in `config/ownership.json`. They are public identifiers, not proof of authentication.
+Evaluator and auditor roles are read-only regardless of operator label or model family. They cannot access secrets, execute provider operations, create receipts, mutate repository state, or approve their own implementation.
 
-## External operation definition
+## Canonical authority and service modes
 
-External operations include reads as well as writes when they require an authenticated personal account:
+`config/ownership.json` schema v2 is the canonical account, service-policy, resource-target, and warning-only observation registry. Names and IDs are public identifiers, not proof of current authentication. Runtime authorization uses the version loaded from the protected `main` commit recorded in the frozen Issue contract. A candidate branch that changes ownership cannot use its candidate bytes to authorize its own push, PR, merge, deployment, or cleanup; those changes become usable only by a later Issue after reviewed merge to protected `main`.
 
-- GitHub Issues, pull requests, branches, repository settings, or remote Git transport
-- Supabase organizations, projects, hosted SQL, Auth, logs, Edge Functions, or secrets
-- Vercel projects, deployments, environment variables, domains, logs, or integrations
-- Cloudflare accounts, zones, DNS records, registrar settings, Workers, Pages, or tokens
-- Any provider CLI, authenticated API, MCP connector, credential store, or secret manager
+- GitHub, Supabase, Vercel, and Cloudflare are `repository-active`. This means they are eligible for repository work, not generally authorized. Every authenticated read or write still needs an Issue-scoped declared purpose, a frozen account reference, an exact target, environment and operation constraints, and any required exact-Head review.
+- Linear is `explicit-user-purpose-only`. Account registration alone denies all authenticated reads and writes. The user must explicitly state the purpose, the Issue must freeze that purpose as `user-directed`, and protected-main authority must already contain non-null stable workspace, user, and team IDs. While those IDs are null, Linear access fails closed.
+- `user-directed` is invalid for repository-active services and cannot bypass normal Issue scope.
 
-Claude must not use these surfaces even for a read-only check. Codex performs the check and returns redacted evidence.
+Email identity is normalized and compared locally by SHA-256 fingerprint. Commit only the configured masked hint and fingerprint where required; never emit a raw address in requests, receipts, Issues, PRs, logs, screenshots, or review packets. Mutable observations such as display name or public repository count can warn, but cannot override a stable-identity mismatch or grant access.
 
-## Codex preflight
+## Frozen Issue authorization
 
-Before any external write, Codex must record or report:
+The Issue contract schema v2 records the protected-main authority commit and digest plus strict `externalAuthorizations`. Each authorization binds service, operation, purpose code and text, account and target references, environment, operation-specific constraints, and whether authoritative exact-Head review is required. Examples include repository/branch/PR/Head for GitHub, project ref and migration digests for Supabase, project/environment/commit for Vercel, zone/hostname/record/routing source for Cloudflare, and workspace/team/object/filter/result limit for Linear.
 
-1. Current authenticated identity or scope, using the actual connector/CLI involved.
-2. Exact target organization, project, repository, zone, branch, or environment.
-3. Intended change and whether it is reversible.
-4. Relevant local verification and diff.
-5. Resulting remote state after the operation.
+An operator request declares only its operator label, eligible execution role and surface, authorization reference, intent, reversibility, and mutation inputs. It cannot inject a free-form account or target, token, approval claim, or evidence. Validate it with:
 
-Do not treat tool availability as proof that authentication is valid. Never print access tokens, service-role keys, cookies, or complete secret values.
-
-## Claude delegation request
-
-When Claude needs an external action, it writes one versioned request beneath `.artifacts/ops-requests/` and continues with any remaining local work. This example is accepted by the strict runtime validator:
-
-```json
-{
-  "schemaVersion": 1,
-  "requestId": "issue-5-supabase-apply-migrations-1",
-  "issue": 5,
-  "operation": "supabase.apply_migrations",
-  "target": {
-    "kind": "supabase.project",
-    "identifier": "config/ownership.json#supabase.projectRef"
-  },
-  "environment": "production",
-  "reasonCode": "acceptance-evidence",
-  "inputs": {
-    "projectRefSource": "config/ownership.json",
-    "migrations": ["supabase/migrations/20260821010000_example.sql"]
-  }
-}
+```powershell
+npm run workflow -- validate-request --file .artifacts/ops-requests/<request-id>.json
 ```
 
-The request is not authorization. Codex validates it with `npm run workflow -- validate-request`, resolves the fixed identifier from `config/ownership.json`, performs the preflight, and follows the frozen Issue scope. Unknown operations, free-form targets or instructions, invalid operation/environment/reason combinations, mismatched request IDs, caller-supplied evidence or approval claims, additional inputs, and paths outside the request directory fail closed. Required post-operation evidence is derived from the operation allowlist.
+## Request, receipt, claim, and result
 
-## Enforcement limits
+Repository-approved authenticated operations use this sequence:
 
-`.claude/settings.json` and `tools/guard-claude-tool.mjs` deny shell execution, PowerShell and background execution, Claude network tools, MCP calls, sensitive paths, and changes to policy/configuration or `.git`. Generated evaluator agents are read-only. A Claude implementation session may edit assigned application source, but its only writable workflow artifact surface is a one-level `.json` file in `.artifacts/ops-requests/`; Issue evidence, reviews, state, and operation results are Codex-owned. `reviewerModel` is structured evidence, not an authenticated identity by itself, so the write boundary and opposite-model invocation record remain part of the control.
+1. The guarded provider adapter reads the current account and exact target through the same authenticated surface and creates a fresh preflight receipt bound to the authority, Issue, request, mutation, surface, timestamps, expiry, account, and target digests.
+2. `validate-preflight` verifies the receipt, including service purpose, stable identity, target, freshness, and exact-Head gate where required.
+3. `claim-execution` atomically consumes the mutation once. Immediately before mutation, the adapter re-reads account and target and rejects any switch. Automatic logout, login, profile, team, project, or account switching is forbidden.
+4. The adapter performs only the frozen operation, then produces a redacted result receipt with provider-derived post-state. `validate-result` checks receipt linkage, result shape, timestamps, and pre/post account and target continuity before finalizing the claim.
 
-If the hook cannot start or is syntactically broken, Claude Code may fall back to its ordinary permission handling; the committed deny rules remain a second layer but are not a complete sandbox. Search tools normally respect ignored files, and explicit secret paths are rejected, but these controls are not a substitute for keeping credentials outside the working account. A process running under the same Windows user can potentially access the same filesystem and credentials. Strong isolation requires a separate OS account, VM, or container with no personal credentials.
+Do not retry an ambiguous result with unchanged inputs. Read provider state and resume only the missing phase. A failed or ambiguous finalized mutation records `retryPolicy: forbidden`; a new reviewed authorization is required for another mutation.
 
-Claude Code must be launched from the repository root. Live validation showed that a nested-directory launch did not reliably apply the root project hook, while a root launch denied the non-allowlisted `Task/general-purpose` call. If the project hook is not visible in `/hooks` or hook debug output, stop the Claude session and restart it from the root; do not continue on ordinary permission prompts.
+## Common safeguards
+
+- Never expose tokens, cookies, private keys, service-role keys, raw email addresses, complete authentication responses, or secret values.
+- Read-only authenticated access still needs account, service, purpose, and exact-target validation. If it exposes protected provider data or supplies evidence for a mutation, it also needs authoritative exact-Head review.
+- Every repository-content-derived high-risk write reruns the current authoritative gate: GitHub merge and ruleset changes, hosted Supabase migrations/Auth policy, Vercel configuration/deployment, Cloudflare DNS, and rollback.
+- A destructive action needs explicit Issue authorization, exact resources, a reviewed diff, recovery/rollback evidence, and a fresh preflight. Never broaden a target or infer bulk cleanup.
+- Repository policy, secrets, exact-Head review, protected-main authority, receipt claim/finalize, database expand/deploy/contract, Preview-before-Production, DNS-only default, and template clean-room leakage checks remain in force for both operator labels.
+
+## Enforcement boundary
+
+These controls govern repository-approved workflows and the evidence accepted by CI. They do not provide OS-level or cryptographic isolation. Claude and Codex running under the same OS user may be able to bypass adapters and invoke an arbitrary CLI, browser, API, MCP tool, filesystem credential, or keychain entry. Stronger prevention requires a separate OS user, container/VM, keychain mediation, or provider-token mediation. An ordinary application permission prompt is not evidence that account-bound authorization passed.

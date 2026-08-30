@@ -8,18 +8,17 @@
 - Treat `NEXT_PUBLIC_*` as public and inspect browser bundles for accidental server-secret exposure.
 - Preview deployments do not receive production secrets by default.
 
-## Claude guard
+## Shared operator guard
 
-Claude Code loads `.claude/settings.json`, which runs `tools/guard-claude-tool.mjs` before every tool call.
+Claude and Codex have equal account-bound authority when acting as implementer or external-operator. The operator label does not authenticate a provider account, and normal application permission prompts do not replace repository authorization. Every repository-approved authenticated use must match the protected-main authority snapshot, Issue purpose, service mode, exact target, execution role, and guarded receipt flow described in [the authority runbook](authority.md).
 
-The guard is default-deny:
+- GitHub, Supabase, Vercel, and Cloudflare are `repository-active` only within frozen Issue scope.
+- Linear is `explicit-user-purpose-only`; a missing explicit user purpose or null stable workspace/user/team ID denies both reads and writes.
+- Evaluator and auditor roles are read-only and cannot access secrets, execute operations, create receipts, or self-approve. Cross-model independence remains mandatory.
+- Account or target mismatch fails closed without automatic account, profile, team, or project switching.
+- High-risk writes rerun exact-Head review, and destructive actions require exact target and recovery evidence.
 
-- Local reads, searches, and edits inside the repository are allowed, except secret and protected policy paths.
-- Shell execution and Claude network tools are denied. Codex runs installation, tests, builds, Git commands, and provider operations.
-- MCP tools and credential paths are denied.
-- Only the two generated read-only evaluator agents may be spawned.
-
-Run `npm test -- guard-claude-tool` after changing the guard. Codex owns changes to policy, specifications, tooling, project configuration, generated assets, and shared agent instruction files. Claude-led application work is limited to ordinary product source and test files; Codex performs its validation and Git operations.
+Repository checks detect actor-specific deny/delegation text and require the generated operator entrypoints to remain in parity. This is workflow enforcement, not an OS sandbox: processes sharing an OS user may reach the same filesystem, keychain, browser, CLI, API, or MCP credentials.
 
 ## Database
 
@@ -34,7 +33,7 @@ Run `npm test -- guard-claude-tool` after changing the guard. Codex owns changes
 - Use the committed lockfile and `npm ci` in CI.
 - Pin the Node and npm major versions.
 - Review dependency changes separately from feature behavior.
-- Do not run `npx` or ad-hoc downloaded executables from Claude sessions.
+- Do not run unreviewed `npx` or ad-hoc downloaded executables from either operator surface.
 
 ## Build artifact scope
 
@@ -42,4 +41,4 @@ The CI scanner checks public static assets plus prerendered HTML and RSC payload
 
 ## Reporting
 
-If a secret may have been exposed, stop using it, avoid reproducing it in output, rotate it through Codex on the verified personal account, and document only the secret name, scope, and rotation time.
+If a secret may have been exposed, stop using it, avoid reproducing it in output, and rotate it only through a verified account-bound operator authorization. Document only the secret name, scope, and rotation time.

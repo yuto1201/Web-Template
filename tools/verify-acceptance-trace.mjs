@@ -7,8 +7,12 @@ try {
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   if (trace.schemaVersion !== 1 || !Array.isArray(trace.issues)) throw new Error("config/acceptance.json is malformed.");
   const issueNumbers = trace.issues.map(/** @param {Record<string, any>} entry */ (entry) => entry.issue);
-  if (JSON.stringify(issueNumbers) !== JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8, 19])) {
-    throw new Error("Acceptance trace must cover Issues #1 through #8 and #19 exactly once and in order.");
+  if (issueNumbers.some((issue) => !Number.isSafeInteger(issue) || issue <= 0)) {
+    throw new Error("Acceptance trace Issue IDs must be positive integers.");
+  }
+  const sortedUniqueIssueNumbers = [...new Set(issueNumbers)].toSorted((left, right) => left - right);
+  if (JSON.stringify(issueNumbers) !== JSON.stringify(sortedUniqueIssueNumbers)) {
+    throw new Error("Acceptance trace Issue IDs must be unique and sorted in ascending order.");
   }
   let evidenceCount = 0;
   for (const entry of trace.issues) {

@@ -1,6 +1,6 @@
 # Cloudflare DNS-only domain boundary
 
-Cloudflare is authoritative DNS; Vercel serves the application. Codex is the only operator for both providers. The canonical target is `web-template.yutodev.com`, owned by the personal Cloudflare account `Yuto Dev` and the personal Vercel project recorded in `config/ownership.json`.
+Cloudflare is authoritative DNS; Vercel serves the application. Claude and Codex have equal account-bound authority as implementer or external-operator, but neither operator label proves provider authentication. The exact Cloudflare account ID, allowed `Free` zone plan, zone ID, hostname `web-template.yutodev.com`, and Vercel team/project must match the protected-main authority and frozen Issue purpose. A mismatch fails closed without switching accounts or targets.
 
 ## Safe ordering
 
@@ -12,7 +12,7 @@ Cloudflare is authoritative DNS; Vercel serves the application. Codex is the onl
 6. Re-read the target and unrelated record identities, then run `verify-dns`. This creates a plan-bound SHA-256 proof and retains the live record ID needed for rollback.
 7. Wait for Vercel domain verification and TLS, then verify `/` and `/health` over the custom hostname. Run `verify-release` within ten minutes with `--evidence`, `--plan`, and `--dns`; stale, expired/wrong-host TLS, or evidence from another DNS plan is rejected.
 
-The desired content is accepted only from a `source: vercel-api` observation bound to the canonical Vercel team, project, and hostname. Because the CLI cannot cryptographically attest a hand-built JSON file, Codex must copy the value from the live provider response and preserve the observation evidence. CNAME targets must match Vercel's documented `*.vercel-dns[-N].com` form; other targets fail closed.
+The desired content is accepted only from a `source: vercel-api` observation bound to the canonical Vercel team, project, and hostname. Because the CLI cannot cryptographically attest a hand-built JSON file, the guarded operator must obtain the value from the live provider response through the same authenticated surface and preserve the observation evidence. CNAME targets must match Vercel's documented `*.vercel-dns[-N].com` form; other targets fail closed.
 
 ## Diff and rollback
 
@@ -24,7 +24,7 @@ Rollback is deliberately narrow:
 - if the plan action was `update`, `rollback-preflight` permits restoration of only the exact prior record ID and body captured in `rollback.priorTargetRecords`;
 - never bulk-replace the zone or infer a rollback from current state.
 
-Before executing either rollback, re-read Cloudflare and run `rollback-preflight --current <current> --plan <plan>` within two minutes of that read. Execute only its returned request. Restore or delete DNS first. Removing the hostname from the Vercel project is a separate Codex-only recovery action after DNS state is confirmed and only when the project-domain association was created by this change.
+Before executing either rollback, re-read Cloudflare and run `rollback-preflight --current <current> --plan <plan>` within two minutes of that read. Execute only its returned request. Restore or delete DNS first. Removing the hostname from the Vercel project is a separate destructive recovery authorization after DNS state is confirmed and only when the project-domain association was created by this change. DNS apply and rollback both require fresh receipts and an authoritative exact-Head gate.
 
 ## Explicit approval boundary
 
