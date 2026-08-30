@@ -291,6 +291,11 @@ export async function runCli(argv = process.argv.slice(2)) {
   if (["validate-preflight", "claim-execution", "validate-result"].includes(command) && options.now !== undefined) {
     throw new Error("--now is not accepted by production receipt commands; the trusted runtime clock is used.");
   }
+  if (["validate-preflight", "claim-execution", "validate-result"].includes(command)) {
+    throw new Error(
+      `Unsupported caller-authored receipt command: ${command}. Execution authority is available only through a provider-specific guarded adapter that collects live observations internally.`,
+    );
+  }
 
   if (command === "snapshot") {
     const input = await readJson(required(options, "input"));

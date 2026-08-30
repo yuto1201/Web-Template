@@ -376,6 +376,33 @@ function observedIdentity(service, accountValue, targetValue) {
   };
 }
 
+/**
+ * Normalizes a transient provider observation for receipt persistence. Raw email may be
+ * accepted from the in-process provider client, but only its normalized fingerprint leaves
+ * this function.
+ * @param {unknown} authorityValue @param {unknown} observationValue
+ */
+export function normalizeProviderObservation(authorityValue, observationValue) {
+  const authority = parseAuthority(authorityValue);
+  const observation = observationSchema.omit({ previousAccount: true, previousTarget: true }).parse(observationValue);
+  evaluateIdentity(authority, observation.service, observation.account, observation.target);
+  const normalized = observedIdentity(observation.service, observation.account, observation.target);
+  if (observation.service === "github") {
+    const account = githubObservationAccountSchema.parse(observation.account);
+    return {
+      account: {
+        ...normalized.account,
+        ...(account.displayName === undefined ? {} : { displayName: account.displayName }),
+        ...(account.createdAt === undefined ? {} : { createdAt: account.createdAt }),
+        ...(account.publicRepositories === undefined ? {} : { publicRepositories: account.publicRepositories }),
+        ...(account.observedAt === undefined ? {} : { observedAt: account.observedAt }),
+      },
+      target: normalized.target,
+    };
+  }
+  return normalized;
+}
+
 /** @param {unknown} authorityValue @param {unknown} observationValue */
 export function evaluateAccountObservation(authorityValue, observationValue) {
   const authority = parseAuthority(authorityValue);
