@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { deriveReviewRisk, evaluateGitHubReviewGate, parseReviewBody } from "../tools/github-review-gate.mjs";
 
 const headSha = "a".repeat(40);
+const lowDoc = "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md";
 const executionPolicy = JSON.parse(await readFile(path.resolve("config/execution.json"), "utf8"));
 const workflow = {
   reviewerMap: { codex: "claude", claude: "codex" },
@@ -55,6 +56,15 @@ function highRiskBody(override = {}) {
       { family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
       { family: "openai", configured: "gpt-5.6-sol[effort=high]", observed: "gpt-5.6-sol", fallback: "false", verdict: "approved", contracts: "change-evaluator" },
     ],
+    ...override,
+  });
+}
+
+function lowRiskBody(override = {}) {
+  return reviewBody({
+    risk: "low",
+    riskReasons: `path:${lowDoc}`,
+    reviewers: [],
     ...override,
   });
 }
@@ -129,6 +139,53 @@ describe("GitHub exact-Head review gate", () => {
     });
   });
 
+  it("accepts canonical low-risk evidence without an independent reviewer", () => {
+    expect(parseReviewBody(lowRiskBody())).toMatchObject({
+      risk: { level: "low", reasons: [`path:${lowDoc}`] },
+      reviews: [],
+      reviewedSha: headSha,
+    });
+    expect(evaluateGitHubReviewGate({
+      event: event(lowRiskBody()),
+      changedPaths: [lowDoc],
+      diff: "",
+      workflow,
+      executionPolicy,
+    })).toMatchObject({ ok: true, mode: "independent-review", risk: "low", reviewers: [] });
+  });
+
+  it("evaluates a pre-migration protected policy conservatively instead of deadlocking rollout", () => {
+    const legacyPolicy = /** @type {Record<string, any>} */ (structuredClone(executionPolicy));
+    delete legacyPolicy.lowRiskPathRules;
+    delete legacyPolicy.verificationPathRules;
+    expect(evaluateGitHubReviewGate({
+      event: event(reviewBody()),
+      changedPaths: ["README.md"],
+      diff: "",
+      workflow,
+      executionPolicy: /** @type {any} */ (legacyPolicy),
+    })).toMatchObject({ ok: true, risk: "normal", reviewers: ["anthropic"] });
+  });
+
+  it("rejects low-risk claims outside the protected allowlist or with extra reviewer evidence", () => {
+    for (const changedPath of ["README.md", "specs/account-bound-authority.md", "specs/architecture.md", "src/app/page.tsx", "docs/agent-contracts/change-evaluator.md", ".github/workflows/ci.yml"]) {
+      expect(() => evaluateGitHubReviewGate({
+        event: event(lowRiskBody()),
+        changedPaths: [changedPath],
+        diff: "",
+        workflow,
+        executionPolicy,
+      })).toThrow(/Risk claim|cannot reduce|low/iu);
+    }
+    expect(() => evaluateGitHubReviewGate({
+      event: event(lowRiskBody({ reviewers: [{ family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] })),
+      changedPaths: [lowDoc],
+      diff: "",
+      workflow,
+      executionPolicy,
+    })).toThrow(/low-risk|reviewer/iu);
+  });
+
   it("accepts normal-risk different-family and high-risk dual-family evidence", () => {
     expect(evaluateGitHubReviewGate({ event: event(), changedPaths: ["src/app/page.tsx"], diff: "", workflow, executionPolicy })).toMatchObject({
       ok: true,
@@ -142,14 +199,6 @@ describe("GitHub exact-Head review gate", () => {
       reviewers: ["anthropic", "openai"],
       risk: "high",
     });
-    expect(evaluateGitHubReviewGate({
-      event: event(reviewBody({ reviewers: [{ family: "anthropic", configured: "claude-opus-5[effort=high]", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator, supabase-auditor" }] })),
-      changedPaths: ["README.md"],
-      diff: "",
-      workflow,
-      executionPolicy,
-    })).toMatchObject({ ok: true, risk: "normal" });
-
     const bootstrap = event(highRiskBody({
       executionSurface: "codex-local",
       primaryConfigured: "gpt-5.6-sol",
@@ -216,7 +265,7 @@ describe("GitHub exact-Head review gate", () => {
 
   it("rejects invalid family, fallback, verdict, contract, and path-derived risk evidence", () => {
     /** @param {string} body @param {string[]} [changedPaths] */
-    const evaluate = (body, changedPaths = ["README.md"]) => evaluateGitHubReviewGate({ event: event(body), changedPaths, diff: "", workflow, executionPolicy });
+    const evaluate = (body, changedPaths = ["src/app/page.tsx"]) => evaluateGitHubReviewGate({ event: event(body), changedPaths, diff: "", workflow, executionPolicy });
     expect(() => evaluate(reviewBody({ reviewers: [{ family: "cursor", configured: "composer-2.5", observed: "composer-2.5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/different from the primary/u);
     expect(() => evaluate(reviewBody({ reviewers: [{ family: "unknown", configured: "future-model", observed: "future-model", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/unknown reviewer model family/u);
     expect(() => evaluate(reviewBody({ reviewers: [{ family: "anthropic", configured: "gpt-5.6-sol[effort=high]", observed: "gpt-5.6-sol", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] }))).toThrow(/mismatched reviewer model family/u);
@@ -306,11 +355,12 @@ describe("GitHub exact-Head review gate", () => {
       git("init", "-b", "main");
       git("config", "user.name", "Template Test");
       git("config", "user.email", "template-test@example.invalid");
-      await writeFile(path.join(root, "README.md"), "base\n", "utf8");
-      git("add", "README.md");
+      await mkdir(path.dirname(path.join(root, lowDoc)), { recursive: true });
+      await writeFile(path.join(root, lowDoc), "base\n", "utf8");
+      git("add", lowDoc);
       git("commit", "-m", "base");
       git("switch", "-c", "feature");
-      await writeFile(path.join(root, "README.md"), "base\nfeature\n", "utf8");
+      await writeFile(path.join(root, lowDoc), "base\nfeature\n", "utf8");
       git("commit", "-am", "feature");
       const featureSha = git("rev-parse", "HEAD");
       git("switch", "main");
@@ -323,7 +373,7 @@ describe("GitHub exact-Head review gate", () => {
       const configRoot = path.join(root, "config");
       await mkdir(configRoot, { recursive: true });
       const workflowPath = path.join(configRoot, "workflow.json");
-      await writeFile(eventPath, `${JSON.stringify({ pull_request: { ...event(reviewBody({ sha: featureSha, executionSurface: "codex-local", primaryConfigured: "gpt-5.6-sol", primaryObserved: "gpt-5.6-sol", primaryFamily: "openai", reviewers: [{ family: "anthropic", configured: "claude-opus-5", observed: "claude-opus-5", fallback: "false", verdict: "approved", contracts: "change-evaluator" }] })).pull_request, base: { sha: baseSha, repo: { full_name: "yuto1201/Web-Template" } }, head: { sha: featureSha, ref: "codex/29-feature", repo: { full_name: "yuto1201/Web-Template" } } } })}\n`, "utf8");
+      await writeFile(eventPath, `${JSON.stringify({ pull_request: { ...event(lowRiskBody({ sha: featureSha, executionSurface: "codex-local", primaryConfigured: "gpt-5.6-sol", primaryObserved: "gpt-5.6-sol", primaryFamily: "openai" })).pull_request, base: { sha: baseSha, repo: { full_name: "yuto1201/Web-Template" } }, head: { sha: featureSha, ref: "codex/29-feature", repo: { full_name: "yuto1201/Web-Template" } } } })}\n`, "utf8");
       await writeFile(workflowPath, `${JSON.stringify(workflow)}\n`, "utf8");
       await writeFile(path.join(configRoot, "execution.json"), `${JSON.stringify(executionPolicy)}\n`, "utf8");
       const output = execFileSync(process.execPath, [path.resolve("tools/github-review-gate.mjs"), "--event", eventPath, "--repository", root, "--workflow", workflowPath, "--base", baseSha, "--head", featureSha], { encoding: "utf8" });

@@ -4,7 +4,7 @@ import { z } from "zod";
 
 const knownFamilies = ["openai", "anthropic", "cursor", "xai"];
 const familySchema = z.enum([...knownFamilies, "unknown"]);
-const riskSchema = z.enum(["normal", "high"]);
+const riskSchema = z.enum(["low", "normal", "high"]);
 const surfaceSchema = z.enum(["codex-local", "claude-local", "cursor-cloud"]);
 
 /** @param {string} family */
@@ -87,7 +87,7 @@ const exactRuleSchema = z.object({
   path: canonicalPathSchema,
 }).strict();
 
-const executionPolicySchema = z.object({
+const commonExecutionPolicyShape = {
   schemaVersion: z.literal(1),
   surfaces: z.object({
     "codex-local": z.object({ branchPrefix: z.literal("codex"), providerOperator: z.literal(true) }).strict(),
@@ -107,10 +107,31 @@ const executionPolicySchema = z.object({
   highRiskPathRules: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
   routineDeliveryOperations: z.array(operationSchema).min(1),
   highRiskOperations: z.array(operationSchema).min(1),
-}).strict().superRefine((value, context) => {
-  const ruleKeys = value.highRiskPathRules.map((rule) => `${rule.type}:${rule.path}`);
-  if (new Set(ruleKeys).size !== ruleKeys.length) {
-    context.addIssue({ code: "custom", path: ["highRiskPathRules"], message: "High-risk path rules must be unique." });
+};
+
+const verificationPathRulesSchema = z.object({
+  databaseAuth: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+  browser: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+  macos: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+  template: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+}).strict();
+
+/** @param {any} value @param {z.RefinementCtx} context */
+function refineExecutionPolicy(value, context) {
+  for (const [key, label] of /** @type {const} */ ([
+    ["lowRiskPathRules", "Low-risk"],
+    ["highRiskPathRules", "High-risk"],
+  ])) {
+    const ruleKeys = value[key].map(/** @param {{type:string,path:string}} rule */ (rule) => `${rule.type}:${rule.path}`);
+    if (new Set(ruleKeys).size !== ruleKeys.length) {
+      context.addIssue({ code: "custom", path: [key], message: `${label} path rules must be unique.` });
+    }
+  }
+  for (const [key, rules] of Object.entries(value.verificationPathRules)) {
+    const ruleKeys = /** @type {Array<{type:string,path:string}>} */ (rules).map((rule) => `${rule.type}:${rule.path}`);
+    if (new Set(ruleKeys).size !== ruleKeys.length) {
+      context.addIssue({ code: "custom", path: ["verificationPathRules", key], message: `${key} verification path rules must be unique.` });
+    }
   }
 
   for (const key of /** @type {Array<"routineDeliveryOperations" | "highRiskOperations">} */ (["routineDeliveryOperations", "highRiskOperations"])) {
@@ -118,10 +139,29 @@ const executionPolicySchema = z.object({
       context.addIssue({ code: "custom", path: [key], message: `${key} must be unique.` });
     }
   }
-  if (value.routineDeliveryOperations.some((operation) => value.highRiskOperations.includes(operation))) {
+  if (value.routineDeliveryOperations.some(/** @param {string} operation */ (operation) => value.highRiskOperations.includes(operation))) {
     context.addIssue({ code: "custom", message: "Routine and high-risk operations must not overlap." });
   }
-});
+}
+
+const runtimeExecutionPolicySchema = z.object({
+  ...commonExecutionPolicyShape,
+  lowRiskPathRules: z.array(z.union([exactRuleSchema, prefixRuleSchema])),
+  verificationPathRules: verificationPathRulesSchema,
+}).strict().superRefine(refineExecutionPolicy);
+
+export const executionPolicySchema = z.object({
+  ...commonExecutionPolicyShape,
+  lowRiskPathRules: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+  verificationPathRules: z.object({
+    databaseAuth: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+    browser: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+    macos: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+    template: z.array(z.union([exactRuleSchema, prefixRuleSchema])).min(1),
+  }).strict(),
+}).strict().superRefine(refineExecutionPolicy);
+
+const legacyExecutionPolicySchema = z.object(commonExecutionPolicyShape).strict();
 
 const modelIdentityInputSchema = z.object({
   configured: z.string().min(1),
@@ -130,8 +170,25 @@ const modelIdentityInputSchema = z.object({
 }).strict();
 
 /**
- * @typedef {z.infer<typeof executionPolicySchema>} ExecutionPolicy
+ * @typedef {z.infer<typeof runtimeExecutionPolicySchema>} ExecutionPolicy
  */
+
+/**
+ * Parse policy from a protected branch. The pre-migration schema is accepted
+ * conservatively: it has no low-risk paths and cannot reduce verification.
+ * @param {unknown} value
+ * @returns {ExecutionPolicy}
+ */
+export function parseProtectedExecutionPolicy(value) {
+  const current = executionPolicySchema.safeParse(value);
+  if (current.success) return current.data;
+  const legacy = legacyExecutionPolicySchema.parse(value);
+  return runtimeExecutionPolicySchema.parse({
+    ...legacy,
+    lowRiskPathRules: [],
+    verificationPathRules: { databaseAuth: [], browser: [], macos: [], template: [] },
+  });
+}
 
 /** @param {string} root @returns {Promise<ExecutionPolicy>} */
 export async function loadExecutionPolicy(root) {
@@ -161,7 +218,7 @@ function classifyModelFamily(observed, policy) {
  */
 export function normalizeModelIdentity(configured, observed, parameters, policy) {
   const input = modelIdentityInputSchema.parse({ configured, observed, parameters });
-  executionPolicySchema.parse(policy);
+  runtimeExecutionPolicySchema.parse(policy);
   return {
     configured: input.configured,
     observed: input.observed,
@@ -181,7 +238,7 @@ export function validateBranchForSurface(branch, issue, surface, policy) {
   const parsedSurface = surfaceSchema.parse(surface);
   const parsedIssue = z.number().int().positive().parse(issue);
   const parsedBranch = z.string().parse(branch);
-  const parsedPolicy = executionPolicySchema.parse(policy);
+  const parsedPolicy = runtimeExecutionPolicySchema.parse(policy);
   const prefix = parsedPolicy.surfaces[parsedSurface].branchPrefix;
   const issuePrefix = `${prefix}/${parsedIssue}-`;
 
@@ -201,15 +258,15 @@ function matchesPathRule(changedPath, rule) {
 }
 
 const riskInputSchema = z.object({
-  changedPaths: z.array(canonicalPathSchema),
+  changedPaths: z.array(canonicalPathSchema).min(1, "At least one changed path is required."),
   externalOperations: z.array(z.string()),
 }).strict();
 
 /** @param {{ changedPaths: string[], externalOperations: string[] }} input @param {ExecutionPolicy} policy */
 export function classifyRisk(input, policy) {
   const parsedInput = riskInputSchema.parse(input);
-  const parsedPolicy = executionPolicySchema.parse(policy);
-  const reasons = new Set();
+  const parsedPolicy = runtimeExecutionPolicySchema.parse(policy);
+  const highReasons = new Set();
 
   for (const operation of parsedInput.externalOperations) {
     if (!executionOperationNames.includes(operation)) throw new Error(`Unknown external operation ${operation}.`);
@@ -217,36 +274,77 @@ export function classifyRisk(input, policy) {
 
   for (const changedPath of parsedInput.changedPaths) {
     for (const rule of parsedPolicy.highRiskPathRules) {
-      if (matchesPathRule(changedPath, rule)) reasons.add(`path:${rule.path}`);
+      if (matchesPathRule(changedPath, rule)) highReasons.add(`path:${rule.path}`);
     }
   }
   for (const operation of parsedInput.externalOperations) {
-    if (parsedPolicy.highRiskOperations.includes(operation)) reasons.add(`operation:${operation}`);
+    if (parsedPolicy.highRiskOperations.includes(operation)) highReasons.add(`operation:${operation}`);
   }
 
-  const sortedReasons = [...reasons].sort(compareCodePoints);
-  return { level: sortedReasons.length === 0 ? "normal" : "high", reasons: sortedReasons };
+  const sortedHighReasons = [...highReasons].sort(compareCodePoints);
+  if (sortedHighReasons.length > 0) return { level: "high", reasons: sortedHighReasons };
+  if (parsedInput.externalOperations.length === 0) {
+    const lowReasons = new Set();
+    const everyPathIsLow = parsedInput.changedPaths.every((changedPath) => {
+      const matchingRules = parsedPolicy.lowRiskPathRules.filter((rule) => matchesPathRule(changedPath, rule));
+      matchingRules.forEach((rule) => lowReasons.add(`path:${rule.path}`));
+      return matchingRules.length > 0;
+    });
+    if (everyPathIsLow) return { level: "low", reasons: [...lowReasons].sort(compareCodePoints) };
+  }
+  return { level: "normal", reasons: [] };
 }
 
-/** @param {{ risk: "normal" | "high", primaryFamily: string }} input */
+/** @param {string[]} changedPaths @param {Array<{ type: "exact" | "prefix", path: string }>} rules */
+function matchesAnyPathRule(changedPaths, rules) {
+  return changedPaths.some((changedPath) => rules.some((rule) => matchesPathRule(changedPath, rule)));
+}
+
+/** @param {{ changedPaths: string[], externalOperations: string[] }} input @param {ExecutionPolicy} policy */
+export function deriveVerificationPlan(input, policy) {
+  const parsedInput = riskInputSchema.parse(input);
+  const parsedPolicy = runtimeExecutionPolicySchema.parse(policy);
+  const risk = classifyRisk(parsedInput, parsedPolicy);
+  if (risk.level === "high") {
+    return { risk, repository: "full", databaseAuth: true, browser: true, macos: true, template: true };
+  }
+  if (risk.level === "low") {
+    return { risk, repository: "docs", databaseAuth: false, browser: false, macos: false, template: false };
+  }
+  return {
+    risk,
+    repository: "full",
+    databaseAuth: matchesAnyPathRule(parsedInput.changedPaths, parsedPolicy.verificationPathRules.databaseAuth),
+    browser: matchesAnyPathRule(parsedInput.changedPaths, parsedPolicy.verificationPathRules.browser),
+    macos: matchesAnyPathRule(parsedInput.changedPaths, parsedPolicy.verificationPathRules.macos),
+    template: matchesAnyPathRule(parsedInput.changedPaths, parsedPolicy.verificationPathRules.template),
+  };
+}
+
+/** @param {{ risk: "low" | "normal" | "high", primaryFamily: string }} input */
 export function requiredReviewerFamilies(input) {
   const risk = riskSchema.parse(input.risk);
   const primaryFamily = familySchema.parse(input.primaryFamily);
   if (primaryFamily === "unknown") throw new Error("unknown primary model family cannot satisfy review policy.");
+  if (risk === "low") return [];
   if (risk === "high") return ["anthropic", "openai"];
   return [primaryFamily === "anthropic" ? "openai" : "anthropic"];
 }
 
-/** @param {{ risk: "normal" | "high", primaryFamily: string, reviewerFamilies: string[] }} input */
+/** @param {{ risk: "low" | "normal" | "high", primaryFamily: string, reviewerFamilies: string[] }} input */
 export function validateReviewerFamilies(input) {
   const parsed = z.object({
     risk: riskSchema,
     primaryFamily: familySchema,
-    reviewerFamilies: z.array(familySchema).min(1),
+    reviewerFamilies: z.array(familySchema),
   }).strict().parse(input);
   if (parsed.reviewerFamilies.includes("unknown")) throw new Error("Unknown reviewer model family cannot satisfy review policy.");
   if (new Set(parsed.reviewerFamilies).size !== parsed.reviewerFamilies.length) {
     throw new Error("Reviewer families must be unique.");
+  }
+
+  if (parsed.risk === "low" && parsed.reviewerFamilies.length > 0) {
+    throw new Error("Low-risk review must not contain independent reviewer families.");
   }
 
   if (parsed.risk === "normal" && !parsed.reviewerFamilies.some((family) => family !== parsed.primaryFamily)) {

@@ -15,6 +15,10 @@
     "openai": "gpt-5.6-sol[effort=high]",
     "anthropic": "claude-opus-5[effort=high]"
   },
+  "lowRiskPathRules": [
+    { "type": "exact", "path": "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md" },
+    { "type": "exact", "path": "docs/superpowers/plans/2026-08-30-account-bound-authority.md" }
+  ],
   "highRiskPathRules": [
     { "type": "exact", "path": "AGENTS.md" },
     { "type": "prefix", "path": ".cursor/" },
@@ -22,14 +26,21 @@
     { "type": "prefix", "path": ".codex/" },
     { "type": "prefix", "path": ".github/" },
     { "type": "prefix", "path": "config/" },
+    { "type": "prefix", "path": "evidence/external-operations/" },
+    { "type": "exact", "path": "next.config.mjs" },
     { "type": "exact", "path": "docs/activation.md" },
     { "type": "exact", "path": "docs/authority.md" },
+    { "type": "prefix", "path": "docs/agent-contracts/" },
+    { "type": "exact", "path": "docs/authentication.md" },
+    { "type": "exact", "path": "docs/database.md" },
+    { "type": "exact", "path": "docs/deployment.md" },
+    { "type": "exact", "path": "docs/domain.md" },
+    { "type": "exact", "path": "docs/onboarding-macos.md" },
     { "type": "exact", "path": "docs/onboarding-cursor-cloud.md" },
     { "type": "exact", "path": "docs/security.md" },
     { "type": "exact", "path": "docs/verification.md" },
     { "type": "exact", "path": "docs/workflow.md" },
-    { "type": "exact", "path": "specs/cursor-cloud.md" },
-    { "type": "exact", "path": "specs/decisions.md" },
+    { "type": "prefix", "path": "specs/" },
     { "type": "prefix", "path": "tools/" },
     { "type": "prefix", "path": "supabase/" },
     { "type": "prefix", "path": "src/app/api/" },
@@ -38,6 +49,40 @@
     { "type": "prefix", "path": "src/lib/supabase/" },
     { "type": "exact", "path": "src/proxy.ts" }
   ],
+  "verificationPathRules": {
+    "databaseAuth": [
+      { "type": "exact", "path": "package.json" },
+      { "type": "exact", "path": "package-lock.json" },
+      { "type": "prefix", "path": "supabase/" },
+      { "type": "prefix", "path": "src/app/api/" },
+      { "type": "prefix", "path": "src/lib/auth/" },
+      { "type": "prefix", "path": "src/lib/supabase/" },
+      { "type": "exact", "path": "src/proxy.ts" },
+      { "type": "exact", "path": "tests/auth-policy.test.ts" },
+      { "type": "exact", "path": "tests/supabase-clients.test.ts" },
+      { "type": "exact", "path": "tests/supabase-migrations.test.mjs" }
+    ],
+    "browser": [
+      { "type": "exact", "path": "package.json" },
+      { "type": "exact", "path": "package-lock.json" },
+      { "type": "exact", "path": "next.config.mjs" },
+      { "type": "prefix", "path": "src/" },
+      { "type": "prefix", "path": "tests/e2e/" },
+      { "type": "exact", "path": "playwright.config.ts" }
+    ],
+    "macos": [
+      { "type": "exact", "path": ".node-version" },
+      { "type": "exact", "path": "package.json" },
+      { "type": "exact", "path": "package-lock.json" },
+      { "type": "exact", "path": "tests/workstation-doctor.test.mjs" }
+    ],
+    "template": [
+      { "type": "exact", "path": "package.json" },
+      { "type": "exact", "path": "package-lock.json" },
+      { "type": "exact", "path": "tests/template-initializer.test.mjs" },
+      { "type": "exact", "path": "tests/generated-assets.test.mjs" }
+    ]
+  },
   "routineDeliveryOperations": ["github.push_branch", "github.create_pr", "github.delete_branch"],
   "highRiskOperations": [
     "github.merge_pr",

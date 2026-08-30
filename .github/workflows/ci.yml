@@ -15,8 +15,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: Trusted change classification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      risk: ${{ steps.plan.outputs.risk }}
+      repository: ${{ steps.plan.outputs.repository }}
+      database_auth: ${{ steps.plan.outputs.database_auth }}
+      browser: ${{ steps.plan.outputs.browser }}
+      macos: ${{ steps.plan.outputs.macos }}
+      template: ${{ steps.plan.outputs.template }}
+
+    steps:
+      - name: Check out candidate Head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+
+      - name: Check out trusted base
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: trusted
+
+      - name: Set up trusted Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: ${{ github.event_name == 'pull_request' && 'trusted/.node-version' || 'candidate/.node-version' }}
+
+      - name: Derive conservative plan
+        id: plan
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" && -f trusted/tools/ci-change-plan.mjs ]]; then
+            npm ci --ignore-scripts --prefix trusted
+            node trusted/tools/ci-change-plan.mjs \
+              --root candidate \
+              --base "$BASE_SHA" \
+              --head "$HEAD_SHA" \
+              --policy trusted/config/execution.json \
+              --github-output "$GITHUB_OUTPUT"
+          else
+            {
+              echo "risk=high"
+              echo "repository=full"
+              echo "database_auth=true"
+              echo "browser=true"
+              echo "macos=true"
+              echo "template=true"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     name: Repository checks
+    needs: classify
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -38,22 +102,24 @@ jobs:
       - name: Install dependencies from lockfile
         run: npm ci
 
+      - name: Run documentation checks
+        if: needs.classify.result == 'success' && needs.classify.outputs.repository == 'docs'
+        run: npm run check:docs
+
       - name: Run policy, lint, types, and tests
+        if: needs.classify.result != 'success' || needs.classify.outputs.repository != 'docs'
         run: npm run check
 
-      - name: Enforce deployment workflow safety
-        run: npm run deployment:lint
-
-      - name: Enforce custom-domain workflow safety
-        run: npm run domain:lint
-
       - name: Install Chromium
+        if: needs.classify.result != 'success' || needs.classify.outputs.browser != 'false'
         run: npx playwright install --with-deps chromium
 
       - name: Run desktop and mobile browser checks
+        if: needs.classify.result != 'success' || needs.classify.outputs.browser != 'false'
         run: npm run test:e2e
 
       - name: Verify clean-room template instantiation
+        if: needs.classify.result != 'success' || needs.classify.outputs.template != 'false'
         run: npm run template:verify
 
       - name: Check patch whitespace
@@ -67,67 +133,93 @@ jobs:
 
   database:
     name: Database and Auth policy checks
+    needs: classify
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
     steps:
       - name: Check out repository
+        if: needs.classify.result != 'success' || needs.classify.outputs.database_auth != 'false'
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        if: needs.classify.result != 'success' || needs.classify.outputs.database_auth != 'false'
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: npm
 
       - name: Pin npm
+        if: needs.classify.result != 'success' || needs.classify.outputs.database_auth != 'false'
         run: npm install --global npm@11.6.2
 
       - name: Install dependencies from lockfile
+        if: needs.classify.result != 'success' || needs.classify.outputs.database_auth != 'false'
         run: npm ci
 
       - name: Reset, lint, test, and compare generated types
+        if: needs.classify.result != 'success' || needs.classify.outputs.database_auth != 'false'
         run: npm run db:verify
 
       - name: Verify real local JWTs preserve RLS isolation
+        if: needs.classify.result != 'success' || needs.classify.outputs.database_auth != 'false'
         run: npm run auth:verify
 
       - name: Stop local Supabase
-        if: always()
+        if: always() && (needs.classify.result != 'success' || needs.classify.outputs.database_auth != 'false')
         continue-on-error: true
         run: npm run db:stop
 
+      - name: Confirm database checks are not required
+        if: needs.classify.result == 'success' && needs.classify.outputs.database_auth == 'false'
+        run: echo "Trusted change plan does not require database or auth verification."
+
   macos:
     name: macOS onboarding and browser checks
-    runs-on: macos-latest
+    needs: classify
+    if: always()
+    runs-on: ${{ (needs.classify.result != 'success' || needs.classify.outputs.macos != 'false') && 'macos-latest' || 'ubuntu-latest' }}
     timeout-minutes: 20
 
     steps:
       - name: Check out repository
+        if: needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
+        if: needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: npm
 
       - name: Pin npm
+        if: needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'
         run: npm install --global npm@11.6.2
 
       - name: Install dependencies from lockfile
+        if: needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'
         run: npm ci
 
       - name: Verify workstation contract
+        if: needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'
         run: npm run workstation:doctor
 
       - name: Run policy, lint, types, and tests
+        if: needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'
         run: npm run check
 
       - name: Install Chromium
+        if: needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'
         run: npx playwright install chromium
 
       - name: Run desktop and mobile browser checks
+        if: needs.classify.result != 'success' || needs.classify.outputs.macos != 'false'
         run: npm run test:e2e
+
+      - name: Confirm macOS checks are not required
+        if: needs.classify.result == 'success' && needs.classify.outputs.macos == 'false'
+        run: echo "Trusted change plan does not require macOS verification."

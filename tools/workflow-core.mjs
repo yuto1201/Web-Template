@@ -11,6 +11,7 @@ import {
   classifyRisk,
   normalizeModelIdentity,
   operationModelFamily,
+  parseProtectedExecutionPolicy,
   requiredReviewerFamilies,
   validateBranchForSurface,
   validateReviewerFamilies,
@@ -56,9 +57,16 @@ export const modelIdentitySchema = z.object({
   }
 });
 export const riskSchema = z.object({
-  level: z.enum(["normal", "high"]),
+  level: z.enum(["low", "normal", "high"]),
   reasons: z.array(z.string().min(1)),
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (value.level === "normal" && value.reasons.length > 0) {
+    context.addIssue({ code: "custom", path: ["reasons"], message: "Normal risk must not include reasons." });
+  }
+  if (value.level !== "normal" && value.reasons.length === 0) {
+    context.addIssue({ code: "custom", path: ["reasons"], message: `${value.level} risk requires at least one reason.` });
+  }
+});
 const contractNameSchema = z.enum(["change-evaluator", "supabase-auditor"]);
 const acceptanceIdSchema = z.string().regex(/^AC-[1-9][0-9]*$/u);
 const relativeFileSchema = z.string().min(1).superRefine((value, context) => {
@@ -729,7 +737,7 @@ const verificationSchema = z.object({
   primaryOperatorLabel: operatorLabelSchema,
   primaryModel: modelIdentitySchema,
   risk: riskSchema,
-  requiredReviewerFamilies: z.array(knownFamilySchema).min(1),
+  requiredReviewerFamilies: z.array(knownFamilySchema),
   baseSha: shaSchema,
   headSha: shaSchema,
   contractDigest: digestSchema,
@@ -825,7 +833,7 @@ const reviewPacketSchema = z.object({
   primaryOperatorLabel: operatorLabelSchema,
   primaryModel: modelIdentitySchema,
   risk: riskSchema,
-  requiredReviewerFamilies: z.array(knownFamilySchema).min(1),
+  requiredReviewerFamilies: z.array(knownFamilySchema),
   baseSha: shaSchema,
   headSha: shaSchema,
   verifySha: shaSchema,
@@ -1578,10 +1586,11 @@ export function validateReviewPacket(value, root, contractValue) {
   }
   if (contractValue !== undefined) {
     const contract = validateIssueContract(contractValue);
+    const protectedExecutionPolicy = loadProtectedExecutionPolicy(root);
     const expectedRisk = classifyRisk({
       changedPaths: packet.changedPaths,
       externalOperations: contract.externalAuthorizations.map(({ operation }) => operation),
-    }, executionPolicy);
+    }, protectedExecutionPolicy);
     if (canonicalJson(packet.risk) !== canonicalJson(expectedRisk)) {
       throw new Error("Review packet risk does not match execution policy.");
     }
@@ -2012,7 +2021,7 @@ export function runPremergeGate(input) {
   const contract = validateIssueContract(input.contract);
   const verification = validateVerification(input.verification);
   const packet = validateReviewPacket(input.packet, input.root, contract);
-  const reviewValues = z.array(z.unknown()).min(1).parse(input.reviews);
+  const reviewValues = z.array(z.unknown()).parse(input.reviews);
   const reviews = reviewValues.map((review) => validateReviewAgainstPacket(review, packet, input.root, contract));
   const reviewerFamilies = reviews.map(({ reviewerModel }) => reviewerModel.family);
   validateReviewerFamilies({ risk: packet.risk.level, primaryFamily: packet.primaryModel.family, reviewerFamilies });
@@ -2077,6 +2086,21 @@ function runGit(root, args) {
   return result.stdout;
 }
 
+/**
+ * Load execution policy from the protected ref so candidate changes cannot
+ * lower their own classification. Legacy protected policy is conservative.
+ * @param {string} root
+ * @param {string} [ref]
+ */
+export function loadProtectedExecutionPolicy(root, ref = protectedAuthorityRef) {
+  if (ref !== protectedAuthorityRef && ref !== `refs/heads/${protectedAuthorityRef}`) {
+    throw new Error("Protected execution policy requires protected main; candidate-configured refs are not trusted.");
+  }
+  const branchRef = `refs/heads/${protectedAuthorityRef}`;
+  const source = runGit(root, ["show", `${branchRef}:config/execution.json`]);
+  return parseProtectedExecutionPolicy(JSON.parse(source));
+}
+
 /** @param {string} root @param {string} relativePath */
 async function readArtifactJson(root, relativePath) {
   const absolute = resolveInside(root, relativePath, ".artifacts");
@@ -2092,10 +2116,11 @@ async function readArtifactJson(root, relativePath) {
  */
 export async function prepareReviewArtifacts(root, value) {
   const evidence = verificationInputSchema.parse(value);
+  const protectedExecutionPolicy = loadProtectedExecutionPolicy(root);
   const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
-  validateBranchForSurface(currentBranch, evidence.issue, evidence.executionSurface, executionPolicy);
+  validateBranchForSurface(currentBranch, evidence.issue, evidence.executionSurface, protectedExecutionPolicy);
   const currentHeadSha = runGit(root, ["rev-parse", "HEAD"]).trim();
-  const baseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
+  const baseSha = runGit(root, ["merge-base", `refs/heads/${protectedAuthorityRef}`, currentHeadSha]).trim();
   shaSchema.parse(currentHeadSha);
   shaSchema.parse(baseSha);
   if (runGit(root, ["status", "--porcelain=v1", "--untracked-files=no"]).trim()) {
@@ -2118,7 +2143,7 @@ export async function prepareReviewArtifacts(root, value) {
   const risk = riskSchema.parse(classifyRisk({
     changedPaths,
     externalOperations: contract.externalAuthorizations.map(({ operation }) => operation),
-  }, executionPolicy));
+  }, protectedExecutionPolicy));
   const reviewerFamilies = requiredReviewerFamilies({ risk: risk.level, primaryFamily: evidence.primaryModel.family });
   const verification = validateVerification({
     schemaVersion: evidence.schemaVersion,
@@ -2200,10 +2225,10 @@ export async function loadAuthoritativeGateInput(root, issue) {
   const validatedPacket = validateReviewPacket(packet, root, contract);
   const verification = await readArtifactJson(root, `${headRoot}/verify.json`);
   const currentBranch = runGit(root, ["branch", "--show-current"]).trim();
-  validateBranchForSurface(currentBranch, issue, validatedPacket.executionSurface, executionPolicy);
+  validateBranchForSurface(currentBranch, issue, validatedPacket.executionSurface, loadProtectedExecutionPolicy(root));
   const reviews = await Promise.all(validatedPacket.requiredReviewerFamilies.map((family) =>
     readArtifactJson(root, `${headRoot}/reviews/${family}.json`)));
-  const authoritativeBaseSha = runGit(root, ["merge-base", workflowConfiguration.baseRef, currentHeadSha]).trim();
+  const authoritativeBaseSha = runGit(root, ["merge-base", `refs/heads/${protectedAuthorityRef}`, currentHeadSha]).trim();
   if (validatedPacket.baseSha !== authoritativeBaseSha) throw new Error("Review packet base SHA does not match the authoritative base ref.");
 
   const verifyDigest = digestValue(verification);
@@ -2396,6 +2421,7 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   );
   await mkdir(path.join(root, "config"), { recursive: true });
   await writeFile(path.join(root, ".gitignore"), ".artifacts/\n", "utf8");
+  await writeJson(path.join(root, "config", "execution.json"), executionPolicy);
   await writeJson(path.join(root, "config", "ownership.json"), {
     schemaVersion: 2,
     authorization: {
@@ -2459,7 +2485,7 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   runGit(root, ["init", "--initial-branch=main"]);
   runGit(root, ["config", "user.name", "Workflow Fixture"]);
   runGit(root, ["config", "user.email", "workflow@example.invalid"]);
-  runGit(root, ["add", ".gitignore", "README.md", "config/ownership.json"]);
+  runGit(root, ["add", ".gitignore", "README.md", "config/execution.json", "config/ownership.json"]);
   runGit(root, ["commit", "-m", "fixture base"]);
   const baseSha = runGit(root, ["rev-parse", "HEAD"]).trim();
   runGit(root, ["switch", "-c", branch]);

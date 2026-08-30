@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   containsPotentialSecret,
   detectActorAsymmetry,
+  hasConservativeMacosRouting,
   hasCanonicalOperatorParityStatement,
   operatorParityErrors,
   validateCursorHookPolicy,
@@ -12,6 +13,56 @@ import {
 import { evaluateGitHubReviewGate } from "../tools/github-review-gate.mjs";
 
 describe("repository policy", () => {
+  it("routes stable required CI contexts from a trusted-base classifier with full fallback", async () => {
+    const ci = await readFile(path.resolve(".github/workflows/ci.yml"), "utf8");
+    for (const name of ["Repository checks", "Database and Auth policy checks", "macOS onboarding and browser checks"]) {
+      expect(ci).toContain(`name: ${name}`);
+    }
+    expect(ci).toMatch(/^  classify:\s*$/mu);
+    expect(ci).toContain("path: trusted");
+    expect(ci).toContain("path: candidate");
+    expect(ci).toContain("github.event.pull_request.base.sha");
+    expect(ci).toContain("github.event.pull_request.head.sha");
+    expect(ci).toContain("trusted/tools/ci-change-plan.mjs");
+    for (const fallback of ["risk=high", "repository=full", "database_auth=true", "browser=true", "macos=true", "template=true"]) {
+      expect(ci).toContain(fallback);
+    }
+    expect(ci).toMatch(/if:\s*always\(\)/u);
+    expect(ci).toContain("needs.classify.result != 'success'");
+    for (const output of ["database_auth", "browser", "macos", "template"]) {
+      expect(ci).toContain(`needs.classify.outputs.${output} != 'false'`);
+    }
+    expect(ci.match(/npm run deployment:lint/gu)).toBeNull();
+    expect(ci.match(/npm run domain:lint/gu)).toBeNull();
+    expect(ci).not.toContain("pull_request_target");
+    expect(hasConservativeMacosRouting(ci)).toBe(true);
+    expect(hasConservativeMacosRouting("runs-on: ${{ false && 'macos-latest' || 'ubuntu-latest' }}\nrun: npm run workstation:doctor\n"))
+      .toBe(false);
+  });
+
+  it("defines a fast inner loop and bounded review-efficiency policy", async () => {
+    const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
+    const workflowConfig = JSON.parse(await readFile(path.resolve("config/workflow.json"), "utf8"));
+    const guidance = await Promise.all([
+      "AGENTS.md",
+      "docs/workflow.md",
+      "docs/verification.md",
+    ].map((relative) => readFile(path.resolve(relative), "utf8")));
+    const combined = guidance.join("\n");
+
+    expect(packageJson.scripts["check:fast"]).toBe("npm run lint && npm run typecheck && npm test");
+    expect(packageJson.scripts["check:docs"]).toBe("npm run template:source-check && npm run policy && npm run check:links && npm run audit:trace && npm run check:generated");
+    expect(workflowConfig.efficiency).toEqual({
+      targetReviewRounds: 2,
+      changedFileAdvisoryLimit: 30,
+      changedLineAdvisoryLimit: 3000,
+    });
+    expect(combined).toMatch(/batch[^.\n]*findings|findings[^.\n]*batch/iu);
+    expect(combined).toMatch(/oversized[^.\n]*(?:split|justif)|(?:split|justif)[^.\n]*oversized/iu);
+    expect(combined).toMatch(/normal[^.\n]*high[^.\n]*one final[^.\n]*`npm run check`/iu);
+    expect(combined).toMatch(/completion audit[^.\n]*high-risk[^.\n]*template-release[^.\n]*milestone/iu);
+  });
+
   it("requires every supported Cursor hook to remain finite and fail closed", async () => {
     const hooksConfig = JSON.parse(await readFile(path.resolve(".cursor/hooks.json"), "utf8"));
     const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
@@ -36,10 +87,10 @@ describe("repository policy", () => {
       .replace(/^- Primary observed model:.*$/mu, "- Primary observed model: gpt-5.6-sol")
       .replace(/^- Primary family:.*$/mu, "- Primary family: openai")
       .replace(/^- Primary fallback:.*$/mu, "- Primary fallback: false")
-      .replace(/^- Risk:.*$/mu, "- Risk: normal")
-      .replace(/^- Risk reasons:.*$/mu, "- Risk reasons: none")
+      .replace(/^- Risk:.*$/mu, "- Risk: low")
+      .replace(/^- Risk reasons:.*$/mu, "- Risk reasons: path:docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md")
       .replace(/^- Reviewed SHA:.*$/mu, `- Reviewed SHA: \`${headSha}\``)
-      .replace(/^- Reviewer anthropic:.*$/mu, "- Reviewer anthropic: claude-opus-5[effort=high] | claude-opus-5 | anthropic | false | approved | change-evaluator")
+      .replace(/^- Reviewer anthropic:.*\n/mu, "")
       .replace(/^- Reviewer openai:.*\n/mu, "");
 
     expect(() => evaluateGitHubReviewGate({
@@ -51,7 +102,7 @@ describe("repository policy", () => {
           user: { login: "yuto1201", id: 50611866, type: "User" },
         },
       },
-      changedPaths: ["README.md"],
+      changedPaths: ["docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md"],
       diff: "",
       workflow,
       executionPolicy,

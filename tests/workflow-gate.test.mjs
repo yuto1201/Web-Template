@@ -5,6 +5,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   loadProtectedAuthority,
+  loadProtectedExecutionPolicy,
   prepareReviewArtifacts,
   readExternalOperationRequest,
   requiresAuthoritativeHead,
@@ -67,6 +68,129 @@ describe("current-Head pre-merge gate", () => {
     });
   });
 
+  it("approves exact-Head low-risk evidence without review artifacts and still requires reviews above low", async () => {
+    const lowRoot = await mkdtemp(path.join(os.tmpdir(), "web-template-low-gate-"));
+    const lowDoc = "docs/superpowers/plans/2026-08-22-cursor-cloud-development-mode.md";
+    /** @param {string[]} args */
+    const git = (...args) => spawnSync("git", args, { cwd: lowRoot, encoding: "utf8", windowsHide: true });
+    expect(git("init", "--initial-branch=main").status).toBe(0);
+    expect(git("config", "user.name", "Low Risk Fixture").status).toBe(0);
+    expect(git("config", "user.email", "low-risk@example.invalid").status).toBe(0);
+    await mkdir(path.join(lowRoot, "config"), { recursive: true });
+    await writeFile(path.join(lowRoot, ".gitignore"), ".artifacts/\n", "utf8");
+    await mkdir(path.dirname(path.join(lowRoot, lowDoc)), { recursive: true });
+    await writeFile(path.join(lowRoot, lowDoc), "# Base\n", "utf8");
+    await writeFile(path.join(lowRoot, "config", "ownership.json"), await readFile(path.resolve("config/ownership.json"), "utf8"), "utf8");
+    await writeFile(path.join(lowRoot, "config", "execution.json"), await readFile(path.resolve("config/execution.json"), "utf8"), "utf8");
+    expect(git("add", ".").status).toBe(0);
+    expect(git("commit", "-m", "base").status).toBe(0);
+    expect(git("switch", "-c", "codex/42-low-risk").status).toBe(0);
+    await writeFile(path.join(lowRoot, lowDoc), "# Base\n\nClarified wording.\n", "utf8");
+    expect(git("commit", "-am", "docs update").status).toBe(0);
+    const contract = snapshotIssueContract({
+      schemaVersion: 2,
+      issue: 42,
+      repository: "yuto1201/Web-Template",
+      goal: "Clarify non-operational documentation.",
+      acceptanceCriteria: [{ id: "AC-1", text: "Documentation remains valid." }],
+      dependencies: [],
+      externalAuthorizations: [],
+    }, "2026-08-30T01:00:00+09:00", loadProtectedAuthority(lowRoot, "main"));
+    await mkdir(path.join(lowRoot, ".artifacts", "issues", "42"), { recursive: true });
+    await writeFile(path.join(lowRoot, ".artifacts", "issues", "42", "issue-contract.json"), `${JSON.stringify(contract, null, 2)}\n`, "utf8");
+    const prepared = await prepareReviewArtifacts(lowRoot, {
+      schemaVersion: 2,
+      issue: 42,
+      executionSurface: "codex-local",
+      primaryOperatorLabel: "codex",
+      primaryModel: {
+        configured: "gpt-5.6-sol[effort=high]",
+        observed: "gpt-5.6-sol",
+        family: "openai",
+        fallback: false,
+        parameters: [{ id: "effort", value: "high" }],
+      },
+      status: "passed",
+      commands: [{ command: "npm run check:docs", status: "passed", summary: "Documentation checks passed." }],
+      acceptanceEvidence: [{ id: "AC-1", status: "supported", evidence: [lowDoc] }],
+      externalChanges: [],
+      remainingWork: [],
+      completedAt: "2026-08-30T01:10:00+09:00",
+    });
+    expect(runPremergeGate({
+      currentHeadSha: prepared.packet.headSha,
+      contract,
+      verification: prepared.verification,
+      packet: prepared.packet,
+      reviews: [],
+      root: lowRoot,
+    })).toMatchObject({ risk: { level: "low" }, reviewers: [] });
+    expect(() => runPremergeGate({ ...bundle, reviews: [] })).toThrow(/reviewer|family|review evidence/iu);
+  });
+
+  it("uses protected-main policy when the candidate attempts to lower its own source risk", async () => {
+    const policyRoot = await mkdtemp(path.join(os.tmpdir(), "web-template-protected-policy-"));
+    /** @param {string[]} args */
+    const git = (...args) => spawnSync("git", args, { cwd: policyRoot, encoding: "utf8", windowsHide: true });
+    expect(git("init", "--initial-branch=main").status).toBe(0);
+    expect(git("config", "user.name", "Protected Policy Fixture").status).toBe(0);
+    expect(git("config", "user.email", "protected-policy@example.invalid").status).toBe(0);
+    await mkdir(path.join(policyRoot, "config"), { recursive: true });
+    await mkdir(path.join(policyRoot, "src", "app"), { recursive: true });
+    await writeFile(path.join(policyRoot, ".gitignore"), ".artifacts/\n", "utf8");
+    await writeFile(path.join(policyRoot, "config", "ownership.json"), await readFile(path.resolve("config/ownership.json"), "utf8"), "utf8");
+    const protectedPolicy = await readJson(path.resolve("config/execution.json"));
+    await writeFile(path.join(policyRoot, "config", "execution.json"), `${JSON.stringify(protectedPolicy, null, 2)}\n`, "utf8");
+    await writeFile(path.join(policyRoot, "src", "app", "page.tsx"), "export default function Page() { return null; }\n", "utf8");
+    expect(git("add", ".").status).toBe(0);
+    expect(git("commit", "-m", "base").status).toBe(0);
+    expect(git("switch", "-c", "codex/42-policy-downgrade").status).toBe(0);
+    protectedPolicy.lowRiskPathRules.push({ type: "exact", path: "src/app/page.tsx" });
+    await writeFile(path.join(policyRoot, "config", "execution.json"), `${JSON.stringify(protectedPolicy, null, 2)}\n`, "utf8");
+    await writeFile(path.join(policyRoot, "src", "app", "page.tsx"), "export default function Page() { return <main>Changed</main>; }\n", "utf8");
+    expect(git("add", ".").status).toBe(0);
+    expect(git("commit", "-m", "attempt policy downgrade").status).toBe(0);
+    expect(loadProtectedExecutionPolicy(policyRoot, "main").lowRiskPathRules)
+      .not.toContainEqual({ type: "exact", path: "src/app/page.tsx" });
+    expect(loadProtectedExecutionPolicy(policyRoot).lowRiskPathRules)
+      .not.toContainEqual({ type: "exact", path: "src/app/page.tsx" });
+    for (const ref of ["codex/42-policy-downgrade", "refs/heads/codex/42-policy-downgrade", "HEAD", "refs/remotes/origin/main"]) {
+      expect(() => loadProtectedExecutionPolicy(policyRoot, ref), ref).toThrow(/protected.*main/iu);
+    }
+    const contract = snapshotIssueContract({
+      schemaVersion: 2,
+      issue: 42,
+      repository: "yuto1201/Web-Template",
+      goal: "Reject candidate-controlled risk reduction.",
+      acceptanceCriteria: [{ id: "AC-1", text: "Protected policy controls classification." }],
+      dependencies: [],
+      externalAuthorizations: [],
+    }, "2026-08-30T02:00:00+09:00", loadProtectedAuthority(policyRoot, "main"));
+    await mkdir(path.join(policyRoot, ".artifacts", "issues", "42"), { recursive: true });
+    await writeFile(path.join(policyRoot, ".artifacts", "issues", "42", "issue-contract.json"), `${JSON.stringify(contract, null, 2)}\n`, "utf8");
+    const prepared = await prepareReviewArtifacts(policyRoot, {
+      schemaVersion: 2,
+      issue: 42,
+      executionSurface: "codex-local",
+      primaryOperatorLabel: "codex",
+      primaryModel: {
+        configured: "gpt-5.6-sol[effort=high]",
+        observed: "gpt-5.6-sol",
+        family: "openai",
+        fallback: false,
+        parameters: [{ id: "effort", value: "high" }],
+      },
+      status: "passed",
+      commands: [{ command: "npm run check", status: "passed", summary: "Checks passed." }],
+      acceptanceEvidence: [{ id: "AC-1", status: "supported", evidence: ["protected policy test"] }],
+      externalChanges: [],
+      remainingWork: [],
+      completedAt: "2026-08-30T02:10:00+09:00",
+    });
+    expect(prepared.packet.risk).toEqual({ level: "high", reasons: ["path:config/"] });
+    expect(prepared.packet.requiredReviewerFamilies).toEqual(["anthropic", "openai"]);
+  });
+
   it("fails closed when verification or review is stale", () => {
     expect(() => runPremergeGate({ ...bundle, currentHeadSha: "9".repeat(40) })).toThrow(/Verification evidence is stale/u);
     const staleReview = { ...bundle.reviews[0], headSha: "9".repeat(40), verifySha: "9".repeat(40) };
@@ -101,7 +225,7 @@ describe("current-Head pre-merge gate", () => {
         ...bundle.packet,
         changedPaths: [...bundle.packet.changedPaths, "evidence/external-operations/merge/result.json"],
       },
-    })).toThrow(/external change|lifecycle|committed artifact/iu);
+    })).toThrow(/risk|external change|lifecycle|committed artifact/iu);
   });
 
   it("rejects evidence for a silently changed Issue contract", () => {
@@ -159,6 +283,11 @@ describe("current-Head pre-merge gate", () => {
     await writeFile(
       path.join(renameRoot, "config", "ownership.json"),
       await readFile(path.resolve("config/ownership.json"), "utf8"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(renameRoot, "config", "execution.json"),
+      await readFile(path.resolve("config/execution.json"), "utf8"),
       "utf8",
     );
     await writeFile(path.join(renameRoot, "src", "lib", "auth", "session.ts"), "export const session = true;\n", "utf8");

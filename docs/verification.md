@@ -1,13 +1,16 @@
 # Verification and evidence
 
-## Required for every pull request
+## Required by risk
 
-1. `npm run check`
-2. Issue-specific acceptance checks
-3. Independent cross-model review
-4. Clean diff check and confirmation that unrelated user files were not staged
-5. CI result on the pull request
-6. For authenticated operations, protected-main authority digest, declared purpose, service mode, exact account/target, fresh preflight, one-time claim, and finalized result receipt
+Risk is derived from the protected-base policy and the actual merge-base diff. It cannot be selected in the PR body or lowered by editing candidate configuration.
+
+- Low: only the exact historical-plan Markdown files allowlisted in protected policy, `npm run check:docs` once at final Head, no independent reviewer. README and new documentation default to normal; normative `specs/**` stays high.
+- Normal: focused tests or `npm run check:fast` during editing, then one final `npm run check`, Issue-specific acceptance checks, and one different observed reviewer family at the exact Head.
+- High: the full normal gate plus every relevant database/auth, browser, macOS, template, deployment, or domain integration and approved OpenAI and Anthropic family reviews at the exact Head.
+
+Every tier still needs a clean diff, confirmation that unrelated user files were not staged, and required CI on the pull request. Successful CI on the exact unchanged Head satisfies the before-merge rerun; rerun local full verification only after code or generated artifacts change. Completion audit is reserved for high-risk, template-release, or milestone work.
+
+For authenticated operations, evidence also requires the protected-main authority digest, declared purpose, service mode, exact account/target, fresh preflight, one-time claim, and finalized result receipt. Such work cannot be low risk.
 
 ## Evidence quality
 
@@ -21,6 +24,8 @@ Evidence states what was actually observed. Keep these categories separate:
 Do not infer one category from another. For example, a local Git remote does not prove which GitHub connector identity is authenticated, and a configured plugin does not prove its account connection works.
 
 Keep operator label, execution role, model identity, account identity, service mode, and exact target separate. Claude and Codex have equal account-bound authority in operator roles; evaluator and auditor roles remain read-only. Normal risk needs an independent opposite-family review, while high risk needs both OpenAI and Anthropic. All repository-content-derived high-risk writes must show a fresh authoritative exact-Head gate. Candidate-branch ownership bytes are never accepted as the authority that delivers that branch.
+
+Batch reviewer findings into one revision pass where possible and target no more than two review rounds. Oversized work above 30 changed files or 3,000 changed lines should be split into independently safe Issues or carry a written atomicity justification; those thresholds never waive a security check.
 
 ## Failure handling
 

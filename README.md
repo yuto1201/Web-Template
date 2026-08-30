@@ -55,9 +55,16 @@ npm run workstation:doctor -- --require-env --require-docker
 
 ## 検証
 
-日常の全検証は次です。
+編集途中は変更箇所に応じたテストを優先し、通常のコード変更では高速チェックを使います。
 
 ```powershell
+npm run check:fast
+```
+
+最終 Head ではリスク別に検証します。限定されたドキュメント変更は `check:docs`、通常変更は `check` を1回実行し、その後にコードが変わった場合だけ再実行します。高リスク変更は関連する統合検証と exact-Head の OpenAI / Anthropic 評価も維持します。同一 Head の必須 CI 成功は、儀式的な同一ローカル再実行の代わりになります。
+
+```powershell
+npm run check:docs
 npm run check
 npm run test:e2e
 ```
@@ -73,6 +80,8 @@ npm run db:stop
 ```
 
 Docker daemon に接続できない場合は `NOT RUN` と exit code 2 を返し、成功として扱いません。最終完了監査は全項目を個別ステータスで保存します。
+
+完了監査は高リスク、テンプレートリリース、またはマイルストーン作業に限定し、通常の編集ループでは実行しません。
 
 ```powershell
 npm run audit:completion -- --include-integration --require-all
