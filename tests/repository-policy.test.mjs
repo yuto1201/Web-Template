@@ -68,6 +68,8 @@ describe("repository policy", () => {
     "Codex may not deploy production.",
     "Claude shall not change DNS.",
     "Codex is barred from external operations.",
+    "Claude and Codex must delegate external operations to Codex.",
+    "Claude and Codex may operate, but only Codex owns deployments.",
   ])("detects actor-asymmetric operator restriction: %s", (content) => {
     expect(detectActorAsymmetry(content)).toMatch(/actor-specific/iu);
   });
@@ -77,6 +79,8 @@ describe("repository policy", () => {
     "Claude and Codex reviewers remain read-only.",
     "Claude reviews Codex implementations, and Codex reviews Claude implementations to preserve cross-model review independence.",
     "Generated evaluator and auditor roles remain read-only, and model family is used only for independent cross-model review.",
+    "Claude and Codex must not switch authenticated accounts automatically.",
+    "Only Claude and Codex in operator roles may use account-bound receipts.",
   ])("allows shared authority and read-only independent review policy: %s", (content) => {
     expect(detectActorAsymmetry(content)).toBeNull();
   });
