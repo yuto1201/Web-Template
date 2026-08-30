@@ -16,8 +16,8 @@ Closes #
 
 ## Opposite-model review
 
-- Primary: `codex` or `claude`
-- Reviewer: the configured opposite model
+- Primary operator: `codex` or `claude`
+- Reviewer operator: `codex` or `claude`
 - Primary model family: `gpt` or `claude`
 - Reviewer model family: the opposite model family
 - Reviewed SHA: `current-head-sha`

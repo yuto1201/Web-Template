@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "artifactRoot": ".artifacts",
   "baseRef": "main",
-  "reviewerMap": { "codex": "claude", "claude": "codex" },
+  "reviewerModelFamilyMap": { "gpt": "claude", "claude": "gpt" },
   "githubReviewGate": {
     "checkName": "Exact Head review policy",
     "dependabot": {

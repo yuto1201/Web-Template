@@ -11,7 +11,7 @@ const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(moduleDirectory, "..");
 const protectedAuthorityRef = "main";
 const workflowConfiguration = /** @type {{
-  reviewerMap: Record<"codex" | "claude", "codex" | "claude">,
+  reviewerModelFamilyMap: Record<"gpt" | "claude", "gpt" | "claude">,
   baseRef: string,
   states: string[],
   transitions: Record<string, string[]>,
@@ -21,7 +21,7 @@ const workflowConfiguration = /** @type {{
 const shaSchema = z.string().regex(/^[0-9a-f]{40}$/u);
 const digestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 const timestampSchema = z.iso.datetime({ offset: true });
-const modelSchema = z.enum(["codex", "claude"]);
+const modelFamilySchema = z.enum(["gpt", "claude"]);
 const contractNameSchema = z.enum(["change-evaluator", "supabase-auditor"]);
 const acceptanceIdSchema = z.string().regex(/^AC-[1-9][0-9]*$/u);
 const relativeFileSchema = z.string().min(1).superRefine((value, context) => {
@@ -536,7 +536,9 @@ const verificationInputSchema = verificationSchema.omit({
   headSha: true,
   contractDigest: true,
 }).extend({
-  primaryModel: modelSchema,
+  primaryOperatorLabel: operatorLabelSchema,
+  reviewerOperatorLabel: operatorLabelSchema,
+  primaryModelFamily: modelFamilySchema,
 }).strict();
 
 const findingSchema = z.object({
@@ -557,8 +559,10 @@ const reviewAssessmentSchema = z.object({
 const reviewResultObjectSchema = z.object({
   schemaVersion: z.literal(1),
   issue: z.number().int().positive(),
-  primaryModel: modelSchema,
-  reviewerModel: modelSchema,
+  primaryOperatorLabel: operatorLabelSchema,
+  reviewerOperatorLabel: operatorLabelSchema,
+  primaryModelFamily: modelFamilySchema,
+  reviewerModelFamily: modelFamilySchema,
   headSha: shaSchema,
   verifySha: shaSchema,
   contractDigest: digestSchema,
@@ -572,8 +576,8 @@ const reviewResultObjectSchema = z.object({
 export const reviewResultKeys = Object.keys(reviewResultObjectSchema.shape)
   .filter((key) => key !== "unavailableReason");
 const reviewResultSchema = reviewResultObjectSchema.superRefine((value, context) => {
-  if (value.primaryModel === value.reviewerModel) {
-    context.addIssue({ code: "custom", path: ["reviewerModel"], message: "Self-approval is forbidden." });
+  if (value.primaryModelFamily === value.reviewerModelFamily) {
+    context.addIssue({ code: "custom", path: ["reviewerModelFamily"], message: "Self-approval by the same model family is forbidden." });
   }
   if (value.headSha !== value.verifySha) {
     context.addIssue({ code: "custom", path: ["verifySha"], message: "Review Head and verification SHA must match." });
@@ -593,8 +597,10 @@ const reviewPacketSchema = z.object({
   schemaVersion: z.literal(1),
   issue: z.number().int().positive(),
   repository: repositorySchema,
-  primaryModel: modelSchema,
-  reviewerModel: modelSchema,
+  primaryOperatorLabel: operatorLabelSchema,
+  reviewerOperatorLabel: operatorLabelSchema,
+  primaryModelFamily: modelFamilySchema,
+  reviewerModelFamily: modelFamilySchema,
   baseSha: shaSchema,
   headSha: shaSchema,
   verifySha: shaSchema,
@@ -1274,9 +1280,9 @@ export function validateReviewResult(value) {
 /** @param {unknown} value @param {string} root */
 export function validateReviewPacket(value, root) {
   const packet = reviewPacketSchema.parse(value);
-  if (packet.primaryModel === packet.reviewerModel) throw new Error("Review packet cannot request self-review.");
-  if (workflowConfiguration.reviewerMap[packet.primaryModel] !== packet.reviewerModel) {
-    throw new Error("Review packet does not use the opposite model.");
+  if (packet.primaryModelFamily === packet.reviewerModelFamily) throw new Error("Review packet cannot request same-model-family self-review.");
+  if (workflowConfiguration.reviewerModelFamilyMap[packet.primaryModelFamily] !== packet.reviewerModelFamily) {
+    throw new Error("Review packet does not use the opposite model family.");
   }
   if (packet.headSha !== packet.verifySha) throw new Error("Review packet verification SHA is stale.");
   const issueRoot = path.join(".artifacts", "issues", String(packet.issue));
@@ -1302,8 +1308,10 @@ export function validateReviewAgainstPacket(reviewValue, packetValue, root) {
   const packet = validateReviewPacket(packetValue, root);
   const review = validateReviewResult(reviewValue);
   if (review.issue !== packet.issue) throw new Error("Review issue does not match the packet.");
-  if (review.primaryModel !== packet.primaryModel) throw new Error("Review primaryModel does not match the packet.");
-  if (review.reviewerModel !== packet.reviewerModel) throw new Error("Review reviewerModel does not match the packet.");
+  if (review.primaryOperatorLabel !== packet.primaryOperatorLabel) throw new Error("Review primaryOperatorLabel does not match the packet.");
+  if (review.reviewerOperatorLabel !== packet.reviewerOperatorLabel) throw new Error("Review reviewerOperatorLabel does not match the packet.");
+  if (review.primaryModelFamily !== packet.primaryModelFamily) throw new Error("Review primaryModelFamily does not match the packet.");
+  if (review.reviewerModelFamily !== packet.reviewerModelFamily) throw new Error("Review reviewerModelFamily does not match the packet.");
   if (review.headSha !== packet.headSha) throw new Error("Review headSha does not match the packet.");
   if (review.verifySha !== packet.verifySha) throw new Error("Review verifySha does not match the packet.");
   if (review.contractDigest !== packet.contractDigest) throw new Error("Review contractDigest does not match the packet.");
@@ -1407,7 +1415,8 @@ export function runPremergeGate(input) {
     issue: contract.issue,
     headSha: input.currentHeadSha,
     contractDigest: contract.digest,
-    reviewer: review.reviewerModel,
+    reviewerOperatorLabel: review.reviewerOperatorLabel,
+    reviewerModelFamily: review.reviewerModelFamily,
     reviewedAt: review.reviewedAt,
   };
 }
@@ -1475,8 +1484,10 @@ export async function prepareReviewArtifacts(root, value) {
     schemaVersion: 1,
     issue: evidence.issue,
     repository: contract.repository,
-    primaryModel: evidence.primaryModel,
-    reviewerModel: workflowConfiguration.reviewerMap[evidence.primaryModel],
+    primaryOperatorLabel: evidence.primaryOperatorLabel,
+    reviewerOperatorLabel: evidence.reviewerOperatorLabel,
+    primaryModelFamily: evidence.primaryModelFamily,
+    reviewerModelFamily: workflowConfiguration.reviewerModelFamilyMap[evidence.primaryModelFamily],
     baseSha,
     headSha: currentHeadSha,
     verifySha: currentHeadSha,
@@ -1609,7 +1620,7 @@ export function renderPullRequestBody(input) {
   const remainingWork = verification.remainingWork.length === 0
     ? "- None for this Issue."
     : verification.remainingWork.map((item) => `- ${safe(item)}`).join("\n");
-  return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Head SHA: \`${gate.headSha}\`\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Opposite-model review\n- Primary: ${review.primaryModel}\n- Reviewer: ${review.reviewerModel}\n- Reviewed SHA: \`${review.headSha}\`\n- Verdict: ${review.verdict}\n- Contracts: ${review.contracts.join(", ")}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
+  return `Closes #${gate.issue}\n\n## Summary\n- ${safe(contract.goal)}\n\n## Verification\n- Head SHA: \`${gate.headSha}\`\n- Contract digest: \`${gate.contractDigest}\`\n${commands}\n\n## Acceptance evidence\n${evidence}\n\n## Opposite-model review\n- Primary operator: ${review.primaryOperatorLabel}\n- Reviewer operator: ${review.reviewerOperatorLabel}\n- Primary model family: ${review.primaryModelFamily}\n- Reviewer model family: ${review.reviewerModelFamily}\n- Reviewed SHA: \`${review.headSha}\`\n- Verdict: ${review.verdict}\n- Contracts: ${review.contracts.join(", ")}\n\n## External changes\n${externalChanges}\n\n## Remaining work\n${remainingWork}\n`;
 }
 
 /** @param {unknown} value @param {string} root */
@@ -1685,7 +1696,9 @@ const fixtureSchema = z.object({
   reviewedAt: timestampSchema,
   issueContract: issueContractInputSchema,
   slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u),
-  primaryModel: modelSchema,
+  primaryOperatorLabel: operatorLabelSchema,
+  reviewerOperatorLabel: operatorLabelSchema,
+  primaryModelFamily: modelFamilySchema,
   changedPaths: z.array(relativeFileSchema).min(1),
   commands: verificationSchema.shape.commands,
   acceptanceEvidence: verificationSchema.shape.acceptanceEvidence,
@@ -1699,7 +1712,7 @@ const fixtureSchema = z.object({
 /** @param {unknown} fixtureValue @param {string} root */
 export async function simulateWorkflowFixture(fixtureValue, root) {
   const fixture = fixtureSchema.parse(fixtureValue);
-  const branch = `${fixture.primaryModel}/${fixture.issueContract.issue}-${fixture.slug}`;
+  const branch = `${fixture.primaryOperatorLabel}/${fixture.issueContract.issue}-${fixture.slug}`;
   await mkdir(path.join(root, "config"), { recursive: true });
   await writeFile(path.join(root, ".gitignore"), ".artifacts/\n", "utf8");
   await writeJson(path.join(root, "config", "ownership.json"), {
@@ -1789,7 +1802,9 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const prepared = await prepareReviewArtifacts(root, {
     schemaVersion: 1,
     issue: contract.issue,
-    primaryModel: fixture.primaryModel,
+    primaryOperatorLabel: fixture.primaryOperatorLabel,
+    reviewerOperatorLabel: fixture.reviewerOperatorLabel,
+    primaryModelFamily: fixture.primaryModelFamily,
     status: "passed",
     commands: fixture.commands,
     acceptanceEvidence: fixture.acceptanceEvidence,
@@ -1801,8 +1816,10 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const recorded = await recordReviewResult(root, contract.issue, {
     schemaVersion: 1,
     issue: contract.issue,
-    primaryModel: packet.primaryModel,
-    reviewerModel: packet.reviewerModel,
+    primaryOperatorLabel: packet.primaryOperatorLabel,
+    reviewerOperatorLabel: packet.reviewerOperatorLabel,
+    primaryModelFamily: packet.primaryModelFamily,
+    reviewerModelFamily: packet.reviewerModelFamily,
     headSha: packet.headSha,
     verifySha: packet.verifySha,
     contractDigest: contract.digest,
@@ -1826,7 +1843,7 @@ export async function simulateWorkflowFixture(fixtureValue, root) {
   const prBody = renderPullRequestBody(authoritativeInput);
   await writeFile(path.join(headRoot, "pull-request.md"), prBody, "utf8");
   const merge = await createMergeOperationRequest(root, contract.issue, fixture.prNumber, {
-    operatorLabel: fixture.primaryModel,
+    operatorLabel: fixture.primaryOperatorLabel,
     executionRole: "implementer",
     executionSurface: "github-cli",
   });

@@ -7,7 +7,7 @@ import { evaluateGitHubReviewGate } from "../tools/github-review-gate.mjs";
 
 const headSha = "a".repeat(40);
 const workflow = {
-  reviewerMap: { codex: "claude", claude: "codex" },
+  reviewerModelFamilyMap: { gpt: "claude", claude: "gpt" },
   privilegedPathRules: [
     { type: "prefix", path: ".github/", contracts: ["change-evaluator"] },
     { type: "prefix", path: "supabase/", contracts: ["change-evaluator", "supabase-auditor"] },
@@ -29,12 +29,14 @@ function reviewBody(override = {}) {
   const values = {
     primary: "codex",
     reviewer: "claude",
+    primaryFamily: "gpt",
+    reviewerFamily: "claude",
     sha: headSha,
     verdict: "approved",
     contracts: "change-evaluator",
     ...override,
   };
-  return `Closes #22\n\n## Opposite-model review\n- Primary: ${values.primary}\n- Reviewer: ${values.reviewer}\n- Reviewed SHA: \`${values.sha}\`\n- Verdict: ${values.verdict}\n- Contracts: ${values.contracts}\n\n## Remaining work\n- None.\n`;
+  return `Closes #22\n\n## Opposite-model review\n- Primary operator: ${values.primary}\n- Reviewer operator: ${values.reviewer}\n- Primary model family: ${values.primaryFamily}\n- Reviewer model family: ${values.reviewerFamily}\n- Reviewed SHA: \`${values.sha}\`\n- Verdict: ${values.verdict}\n- Contracts: ${values.contracts}\n\n## Remaining work\n- None.\n`;
 }
 
 function event(body = reviewBody()) {
@@ -63,7 +65,8 @@ describe("GitHub exact-Head review gate", () => {
       ok: true,
       mode: "independent-review",
       headSha,
-      reviewer: "claude",
+      reviewerOperatorLabel: "claude",
+      reviewerModelFamily: "claude",
     });
   });
 
@@ -71,10 +74,12 @@ describe("GitHub exact-Head review gate", () => {
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody({ sha: "9".repeat(40) })), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/current Head/u);
     expect(() => evaluateGitHubReviewGate({ event: event(`${reviewBody()}- Reviewed SHA: \`${headSha}\`\n`), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/exactly once/u);
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody().replace("- Reviewed SHA", "```\n- Reviewed SHA")), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/fenced/u);
-    expect(() => evaluateGitHubReviewGate({ event: event(reviewBody().replace("- Primary", "<!--\n- Primary")), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/HTML comment/u);
+    expect(() => evaluateGitHubReviewGate({ event: event(reviewBody().replace("- Primary operator", "<!--\n- Primary operator")), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/HTML comment/u);
     expect(() => evaluateGitHubReviewGate({ event: event(`\`\`\`text\n${reviewBody()}\`\`\``), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/fenced/u);
     expect(() => evaluateGitHubReviewGate({ event: event(`<!--\n${reviewBody()}-->`), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/HTML comment/u);
-    expect(() => evaluateGitHubReviewGate({ event: event(reviewBody({ reviewer: "codex" })), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/opposite model/u);
+    expect(evaluateGitHubReviewGate({ event: event(reviewBody({ reviewer: "codex" })), changedPaths: ["README.md"], diff: "", workflow }))
+      .toMatchObject({ reviewerOperatorLabel: "codex", reviewerModelFamily: "claude" });
+    expect(() => evaluateGitHubReviewGate({ event: event(reviewBody({ reviewerFamily: "gpt" })), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/opposite model family|model family/u);
     expect(() => evaluateGitHubReviewGate({ event: event(reviewBody({ verdict: "changes-requested" })), changedPaths: ["README.md"], diff: "", workflow })).toThrow(/approved/u);
     expect(() => evaluateGitHubReviewGate({ event: event(), changedPaths: ["supabase/migrations/001.sql"], diff: "", workflow })).toThrow(/supabase-auditor/u);
   });

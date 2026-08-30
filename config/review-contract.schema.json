@@ -5,12 +5,12 @@
   "additionalProperties": false,
   "allOf": [
     {
-      "if": { "properties": { "primaryModel": { "const": "codex" } }, "required": ["primaryModel"] },
-      "then": { "properties": { "reviewerModel": { "const": "claude" } } }
+      "if": { "properties": { "primaryModelFamily": { "const": "gpt" } }, "required": ["primaryModelFamily"] },
+      "then": { "properties": { "reviewerModelFamily": { "const": "claude" } } }
     },
     {
-      "if": { "properties": { "primaryModel": { "const": "claude" } }, "required": ["primaryModel"] },
-      "then": { "properties": { "reviewerModel": { "const": "codex" } } }
+      "if": { "properties": { "primaryModelFamily": { "const": "claude" } }, "required": ["primaryModelFamily"] },
+      "then": { "properties": { "reviewerModelFamily": { "const": "gpt" } } }
     },
     {
       "if": { "properties": { "verdict": { "const": "unavailable" } }, "required": ["verdict"] },
@@ -31,8 +31,10 @@
   "required": [
     "schemaVersion",
     "issue",
-    "primaryModel",
-    "reviewerModel",
+    "primaryOperatorLabel",
+    "reviewerOperatorLabel",
+    "primaryModelFamily",
+    "reviewerModelFamily",
     "headSha",
     "verifySha",
     "contractDigest",
@@ -45,8 +47,10 @@
   "properties": {
     "schemaVersion": { "const": 1 },
     "issue": { "type": "integer", "minimum": 1 },
-    "primaryModel": { "enum": ["codex", "claude"] },
-    "reviewerModel": { "enum": ["codex", "claude"] },
+    "primaryOperatorLabel": { "enum": ["codex", "claude"] },
+    "reviewerOperatorLabel": { "enum": ["codex", "claude"] },
+    "primaryModelFamily": { "enum": ["gpt", "claude"] },
+    "reviewerModelFamily": { "enum": ["gpt", "claude"] },
     "headSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "verifySha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "contractDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },

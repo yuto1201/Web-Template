@@ -167,6 +167,7 @@
       "tests/domain-workflow.test.mjs": 15,
       "tests/fixtures/workflow/happy-path.json": 1,
       "tests/github-review-gate.test.mjs": 5,
+      "tests/provider-guarded-adapter.test.mjs": 1,
       "tests/repository-policy.test.mjs": 1,
       "tests/workflow-cleanup.test.mjs": 2,
       "tests/workflow-contract.test.mjs": 5,
@@ -306,6 +307,7 @@
       "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 2,
       "tests/fixtures/workflow/happy-path.json": 1,
       "tests/github-review-gate.test.mjs": 5,
+      "tests/provider-guarded-adapter.test.mjs": 1,
       "tests/workflow-cleanup.test.mjs": 2,
       "tests/workflow-contract.test.mjs": 2,
       "tests/workflow-e2e.test.mjs": 1,
@@ -318,6 +320,7 @@
       "docs/superpowers/plans/2026-08-30-account-bound-authority.md": 5,
       "tests/fixtures/workflow/happy-path.json": 1,
       "tests/github-review-gate.test.mjs": 5,
+      "tests/provider-guarded-adapter.test.mjs": 1,
       "tests/repository-policy.test.mjs": 1,
       "tests/workflow-cleanup.test.mjs": 2,
       "tests/workflow-contract.test.mjs": 5,
@@ -344,7 +347,7 @@
       "tests/domain-workflow.test.mjs": 10,
       "tests/workflow-cleanup.test.mjs": 2,
       "tests/workflow-contract.test.mjs": 2,
-      "tests/workflow-e2e.test.mjs": 5,
+      "tests/workflow-e2e.test.mjs": 2,
       "tests/workflow-gate.test.mjs": 2
     },
     "supabaseBasePort": {

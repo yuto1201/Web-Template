@@ -44,22 +44,26 @@ function parseReviewBody(body) {
   const end = tail.search(/^##\s+/mu);
   const section = end === -1 ? tail : tail.slice(0, end);
   assertReviewSectionVisible(body, headings[0].index ?? 0, section);
-  for (const label of ["Primary", "Reviewer", "Reviewed SHA", "Verdict", "Contracts"]) {
+  for (const label of ["Primary operator", "Reviewer operator", "Primary model family", "Reviewer model family", "Reviewed SHA", "Verdict", "Contracts"]) {
     assert(section.split(/\r?\n/u).filter((line) => line.startsWith(`- ${label}:`)).length === 1, `${label} must appear inside the review section.`);
   }
-  const primary = uniqueBodyField(body, "Primary");
-  const reviewer = uniqueBodyField(body, "Reviewer");
+  const primaryOperatorLabel = uniqueBodyField(body, "Primary operator");
+  const reviewerOperatorLabel = uniqueBodyField(body, "Reviewer operator");
+  const primaryModelFamily = uniqueBodyField(body, "Primary model family");
+  const reviewerModelFamily = uniqueBodyField(body, "Reviewer model family");
   const reviewedShaValue = uniqueBodyField(body, "Reviewed SHA");
   const verdict = uniqueBodyField(body, "Verdict");
   const contractsValue = uniqueBodyField(body, "Contracts");
   const reviewedSha = /^`([0-9a-f]{40})`$/u.exec(reviewedShaValue)?.[1];
   assert(reviewedSha, "Reviewed SHA must be one backtick-wrapped 40-character lowercase SHA.");
-  assert(["codex", "claude"].includes(primary), "Primary model must be codex or claude.");
-  assert(["codex", "claude"].includes(reviewer), "Reviewer model must be codex or claude.");
+  assert(["codex", "claude"].includes(primaryOperatorLabel), "Primary operator label must be codex or claude.");
+  assert(["codex", "claude"].includes(reviewerOperatorLabel), "Reviewer operator label must be codex or claude.");
+  assert(["gpt", "claude"].includes(primaryModelFamily), "Primary model family must be gpt or claude.");
+  assert(["gpt", "claude"].includes(reviewerModelFamily), "Reviewer model family must be gpt or claude.");
   assert(verdict === "approved", "Opposite-model review verdict must be approved.");
   const contracts = contractsValue.split(",").map((value) => value.trim()).filter(Boolean);
   assert(contracts.length > 0 && new Set(contracts).size === contracts.length, "Review contracts must be a unique non-empty list.");
-  return { primary, reviewer, reviewedSha, verdict, contracts };
+  return { primaryOperatorLabel, reviewerOperatorLabel, primaryModelFamily, reviewerModelFamily, reviewedSha, verdict, contracts };
 }
 
 /** @param {string[]} changedPaths @param {any} workflow */
@@ -121,10 +125,20 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow }
 
   const evidence = parseReviewBody(String(pullRequest.body ?? ""));
   assert(evidence.reviewedSha === headSha, "Reviewed SHA must match the current Head SHA.");
-  assert(workflow.reviewerMap?.[evidence.primary] === evidence.reviewer, "Reviewer must be the configured opposite model.");
+  assert(
+    workflow.reviewerModelFamilyMap?.[evidence.primaryModelFamily] === evidence.reviewerModelFamily,
+    "Reviewer must use the configured opposite model family.",
+  );
   const required = requiredContracts(changedPaths, workflow);
   for (const contract of required) assert(evidence.contracts.includes(contract), `Review evidence is missing required contract ${contract}.`);
-  return { ok: true, mode: "independent-review", headSha, reviewer: evidence.reviewer, contracts: required };
+  return {
+    ok: true,
+    mode: "independent-review",
+    headSha,
+    reviewerOperatorLabel: evidence.reviewerOperatorLabel,
+    reviewerModelFamily: evidence.reviewerModelFamily,
+    contracts: required,
+  };
 }
 
 /** @param {string[]} argv */

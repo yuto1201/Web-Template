@@ -179,8 +179,10 @@ function review(overrides = {}) {
   return {
     schemaVersion: 1,
     issue: 5,
-    primaryModel: "codex",
-    reviewerModel: "claude",
+    primaryOperatorLabel: "codex",
+    reviewerOperatorLabel: "claude",
+    primaryModelFamily: "gpt",
+    reviewerModelFamily: "claude",
     headSha,
     verifySha: headSha,
     contractDigest,
@@ -776,7 +778,11 @@ describe("workflow contracts", () => {
 
   it("blocks unavailable review and forbids self-approval", () => {
     expect(stateForReview(review({ verdict: "unavailable", unavailableReason: "timeout" }))).toBe("blocked:review");
-    expect(() => validateReviewResult(review({ reviewerModel: "codex" }))).toThrow(/Self-approval/u);
+    expect(() => validateReviewResult(review({ reviewerOperatorLabel: "claude", reviewerModelFamily: "gpt" }))).toThrow(/Self-approval|same model family/u);
+    expect(validateReviewResult(review({ reviewerOperatorLabel: "codex" }))).toMatchObject({
+      reviewerOperatorLabel: "codex",
+      reviewerModelFamily: "claude",
+    });
     expect(() => validateReviewResult(review({ verdict: "unavailable" }))).toThrow(/fixed reason/u);
     expect(() => validateReviewResult(review({ verifySha: "9".repeat(40) }))).toThrow(/must match/u);
     expect(() => validateReviewResult(review({

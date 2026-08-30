@@ -61,7 +61,8 @@ describe("current-Head pre-merge gate", () => {
       ok: true,
       issue: 42,
       headSha: bundle.currentHeadSha,
-      reviewer: "claude",
+      reviewerOperatorLabel: "claude",
+      reviewerModelFamily: "claude",
     });
   });
 
@@ -165,7 +166,9 @@ describe("current-Head pre-merge gate", () => {
     const prepared = await prepareReviewArtifacts(renameRoot, {
       schemaVersion: 1,
       issue: 42,
-      primaryModel: "codex",
+      primaryOperatorLabel: "codex",
+      reviewerOperatorLabel: "claude",
+      primaryModelFamily: "gpt",
       status: "passed",
       commands: [{ command: "npm test", status: "passed", summary: "Passed." }],
       acceptanceEvidence: [{ id: "AC-1", status: "supported", evidence: ["rename test"] }],

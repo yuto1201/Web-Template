@@ -30,7 +30,9 @@
     ]
   },
   "slug": "workflow-fixture",
-  "primaryModel": "codex",
+  "primaryOperatorLabel": "codex",
+  "reviewerOperatorLabel": "claude",
+  "primaryModelFamily": "gpt",
   "changedPaths": ["src/app/page.tsx"],
   "commands": [
     {

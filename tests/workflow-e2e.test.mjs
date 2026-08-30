@@ -29,7 +29,12 @@ describe("provider-free Issue workflow simulation", { timeout: 20_000 }, () => {
     expect(command.status, command.stderr).toBe(0);
     const result = JSON.parse(command.stdout);
     expect(result.state.current).toBe("approved-for-merge");
-    expect(result.gate).toMatchObject({ ok: true, issue: 42, reviewer: "claude" });
+    expect(result.gate).toMatchObject({
+      ok: true,
+      issue: 42,
+      reviewerOperatorLabel: "claude",
+      reviewerModelFamily: "claude",
+    });
     expect(result.request).toMatchObject({
       operation: "github.merge_pr",
       inputs: { issue: 42, method: "squash", headSha: result.headSha },
