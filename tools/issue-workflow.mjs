@@ -3,6 +3,7 @@ import { lstat, mkdir, open, readFile, realpath, writeFile } from "node:fs/promi
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  bindExternalOperationEvidence,
   collectAndValidateCleanupPlan,
   claimOperationExecution,
   createOperationReceiptState,
@@ -440,6 +441,10 @@ export async function runCli(argv = process.argv.slice(2)) {
     ));
     return;
   }
+  if (command === "bind-external-evidence") {
+    printJson(bindExternalOperationEvidence(root, required(options, "directory")));
+    return;
+  }
 
   if (command === "simulate") {
     const fixture = await readJson(required(options, "fixture"));
@@ -456,7 +461,7 @@ export async function runCli(argv = process.argv.slice(2)) {
     return;
   }
 
-  throw new Error("Usage: issue-workflow <snapshot|prepare-review|record-review|validate-request|validate-preflight|claim-execution|validate-result|gate|render-pr|request-merge|cleanup-check|simulate|transition> [options]");
+  throw new Error("Usage: issue-workflow <snapshot|prepare-review|record-review|validate-request|validate-preflight|claim-execution|validate-result|gate|render-pr|request-merge|bind-external-evidence|cleanup-check|simulate|transition> [options]");
 }
 
 runCli().catch((error) => {

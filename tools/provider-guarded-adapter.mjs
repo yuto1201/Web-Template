@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   claimOperationExecution,
@@ -16,6 +16,7 @@ import {
   normalizeProviderObservation,
   parseAuthority,
 } from "./authority-core.mjs";
+import { createGitHubCliProviderClient } from "./github-cli-provider-client.mjs";
 
 const readOnlyOperations = new Set([
   "github.read_issue",
@@ -75,27 +76,44 @@ async function claimWriteOnce(root, key, value) {
   return path.relative(root, filePath).replaceAll("\\", "/");
 }
 
-/** @param {string} operation @param {Record<string, any>} request @param {unknown} observationValue */
-export function validateLiveOperationObservation(operation, request, observationValue) {
+/** @param {string} operation @param {Record<string, any>} request @param {unknown} observationValue @param {"preflight" | "claim" | "postflight-success" | "postflight-terminal"} [phase] */
+export function validateLiveOperationObservation(operation, request, observationValue, phase = "claim") {
   if (!observationValue || typeof observationValue !== "object" || Array.isArray(observationValue)) {
     throw new Error("Provider operation observation is required.");
   }
   const observation = /** @type {Record<string, any>} */ (observationValue);
   /** @type {Record<string, string[]>} */
-  const liveBindings = {
+  /** @type {Record<string, string[]>} */
+  const scopeBindings = {
+    "github.read_issue": ["repository", "issue"],
+    "github.push_branch": ["repository"],
+    "github.create_pr": ["repository"],
+    "github.merge_pr": ["repository", "prNumber", "headSha"],
+    "github.delete_branch": ["repository", "branch", "headSha"],
+    "supabase.inspect_project": ["projectRef"],
+    "supabase.apply_migrations": ["projectRef"],
+    "vercel.inspect_project": ["projectId"],
+    "vercel.deploy_preview": ["projectId"],
+    "vercel.deploy_production": ["projectId"],
+    "cloudflare.inspect_zone": ["zoneId"],
+    "cloudflare.upsert_dns": ["zoneId", "hostname"],
+  };
+  /** @type {Record<string, string[]>} */
+  const successBindings = {
+    ...scopeBindings,
     "github.push_branch": ["repository", "branch", "headSha"],
     "github.create_pr": ["repository", "branch", "baseBranch", "headSha"],
-    "github.merge_pr": ["repository", "prNumber", "headSha", "method"],
-    "github.delete_branch": ["repository", "branch", "mergedPrNumber", "headSha"],
+    "github.delete_branch": ["repository", "branch", "headSha"],
     "supabase.apply_migrations": ["projectRef", "migrations"],
-    "vercel.deploy_preview": ["projectId", "environment", "headSha", "configuration"],
-    "vercel.deploy_production": ["projectId", "environment", "headSha", "configuration"],
-    "cloudflare.upsert_dns": ["zoneId", "hostname", "recordType", "target", "proxied", "routingSource"],
+    "vercel.deploy_preview": ["projectId", "environment", "headSha"],
+    "vercel.deploy_production": ["projectId", "environment", "headSha"],
+    "cloudflare.upsert_dns": ["zoneId", "hostname", "recordType", "target", "proxied"],
   };
-  for (const key of liveBindings[operation] ?? []) {
+  const bindings = phase === "postflight-success" ? successBindings : scopeBindings;
+  for (const key of bindings[operation] ?? []) {
     if (digestValue(observation[key]) !== digestValue(request.inputs[key])) {
       const label = key === "headSha" ? "Head" : key === "migrations" ? "migration content digest" : key;
-      throw new Error(`Live ${label} does not match the frozen mutation immediately before execution.`);
+      throw new Error(`Live ${label} does not match the frozen ${phase} binding.`);
     }
   }
   if (operation.startsWith("github.") && observation.repository !== request.resolvedTarget) {
@@ -120,7 +138,7 @@ function date(value) {
 /**
  * @param {{ service: "github" | "supabase" | "vercel" | "cloudflare", providerClient: Record<string, any>, clock?: () => Date }} configuration
  */
-export function executeGuardedProviderOperation(configuration) {
+function executeGuardedProviderOperation(configuration) {
   const { service, providerClient } = configuration;
   const clock = configuration.clock ?? (() => new Date());
   if (providerClient?.service !== service || typeof providerClient.surface !== "string") {
@@ -131,7 +149,7 @@ export function executeGuardedProviderOperation(configuration) {
   }
 
   return {
-    /** @param {{root: string, requestPath: string}} input */
+    /** @param {{root: string, requestPath: string, modelFamily?: "gpt" | "claude"}} input */
     async execute(input) {
       const loaded = await readExternalOperationRequest(input.root, input.requestPath);
       const request = loaded.request;
@@ -142,6 +160,11 @@ export function executeGuardedProviderOperation(configuration) {
       const contract = JSON.parse(await readFile(path.join(input.root, ".artifacts", "issues", String(request.issue), "issue-contract.json"), "utf8"));
       const authority = authorityAt(input.root, contract.authority.commitSha);
       const isWrite = !readOnlyOperations.has(request.operation);
+      const modelFamily = input.modelFamily;
+      if (isWrite && !["gpt", "claude"].includes(/** @type {string} */ (modelFamily))) {
+        throw new Error("Write execution requires an explicit gpt or claude model family for review evidence.");
+      }
+      const executionHeadSha = git(input.root, ["rev-parse", "HEAD"]);
       if (isWrite && providerClient.idempotencyMode(request.operation) !== "provider-enforced") {
         throw new Error(`Execution denied: ${request.operation} lacks provider-enforced idempotency across clones.`);
       }
@@ -149,7 +172,7 @@ export function executeGuardedProviderOperation(configuration) {
       const receiptState = createOperationReceiptState();
       const firstRaw = await providerClient.collectObservation({ phase: "preflight", request: structuredClone(request) });
       const first = normalizeProviderObservation(authority, { service, account: firstRaw.account, target: firstRaw.target });
-      validateLiveOperationObservation(request.operation, request, firstRaw.operation);
+      validateLiveOperationObservation(request.operation, request, firstRaw.operation, "preflight");
       const observedAt = date(clock());
       const receipt = {
         schemaVersion: 1,
@@ -187,7 +210,7 @@ export function executeGuardedProviderOperation(configuration) {
         previousAccount: first.account,
         previousTarget: first.target,
       });
-      const secondOperation = validateLiveOperationObservation(request.operation, request, secondRaw.operation);
+      const secondOperation = validateLiveOperationObservation(request.operation, request, secondRaw.operation, "claim");
       const claimObservationDigest = digestValue({ account: second.account, target: second.target, operation: secondOperation });
       const claimTime = date(clock()).toISOString();
       const baseClaim = claimOperationExecution(receipt.receiptId, { receiptState, now: claimTime });
@@ -218,7 +241,12 @@ export function executeGuardedProviderOperation(configuration) {
         previousAccount: second.account,
         previousTarget: second.target,
       });
-      validateLiveOperationObservation(request.operation, request, postRaw.operation);
+      validateLiveOperationObservation(
+        request.operation,
+        request,
+        postRaw.operation,
+        providerResult.status === "succeeded" ? "postflight-success" : "postflight-terminal",
+      );
       const postObservedAt = date(clock());
       const outcome = {
         status: providerResult.status,
@@ -259,6 +287,94 @@ export function executeGuardedProviderOperation(configuration) {
         now: date(clock()).toISOString(),
         receiptState,
       });
+      let evidence = null;
+      if (isWrite) {
+        const common = {
+          schemaVersion: 1,
+          service,
+          operation: request.operation,
+          operatorLabel: request.operatorLabel,
+          executionRole: request.executionRole,
+          modelFamily,
+          executionSurface: providerClient.surface,
+          executionHeadSha,
+          authorityDigest: receipt.authorityDigest,
+          issueContractDigest: receipt.issueContractDigest,
+          authorizationDigest: receipt.authorizationDigest,
+          requestDigest: receipt.requestDigest,
+          mutationDigest: receipt.mutationDigest,
+          requestId: request.requestId,
+        };
+        const requestArtifact = {
+          ...common,
+          phase: "request",
+          receiptId: null,
+          previousDigest: null,
+          payload: { request: rawRequest, contract },
+        };
+        const preflightArtifact = {
+          ...common,
+          phase: "preflight",
+          receiptId: receipt.receiptId,
+          previousDigest: digestValue(requestArtifact),
+          payload: { receipt },
+        };
+        const claimArtifact = {
+          ...common,
+          phase: "claim",
+          receiptId: receipt.receiptId,
+          previousDigest: digestValue(preflightArtifact),
+          payload: {
+            accountObservation: second.account,
+            targetObservation: second.target,
+            operationObservation: secondOperation,
+            observationDigest: claimObservationDigest,
+            idempotencyKeyDigest: digestValue(idempotencyKey),
+            startedAt: claim.startedAt,
+          },
+        };
+        const mutationArtifact = {
+          ...common,
+          phase: "mutation",
+          receiptId: receipt.receiptId,
+          previousDigest: digestValue(claimArtifact),
+          payload: {
+            observationDigest: claimObservationDigest,
+            idempotencyKeyDigest: digestValue(idempotencyKey),
+            startedAt: claim.startedAt,
+          },
+        };
+        const resultArtifact = {
+          ...common,
+          phase: "result",
+          receiptId: receipt.receiptId,
+          previousDigest: digestValue(mutationArtifact),
+          payload: { result: resultReceipt },
+        };
+        const finalizedArtifact = {
+          ...common,
+          phase: "finalized",
+          receiptId: receipt.receiptId,
+          previousDigest: digestValue(resultArtifact),
+          payload: {
+            outcome: validatedResult.outcome,
+            evidenceDigest: validatedResult.evidenceDigest,
+            finalizedAt: date(clock()).toISOString(),
+          },
+        };
+        const artifacts = { request: requestArtifact, preflight: preflightArtifact, claim: claimArtifact, mutation: mutationArtifact, result: resultArtifact, finalized: finalizedArtifact };
+        const directory = `evidence/external-operations/${request.requestId}`;
+        const absoluteDirectory = path.join(input.root, directory);
+        await mkdir(absoluteDirectory, { recursive: true });
+        /** @type {Record<string, string>} */
+        const references = {};
+        for (const [phase, artifact] of Object.entries(artifacts)) {
+          const reference = `${directory}/${phase}.json`;
+          await writeFile(path.join(input.root, reference), `${JSON.stringify(artifact, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+          references[phase] = reference;
+        }
+        evidence = { executionHeadSha, references };
+      }
       return {
         ok: true,
         service,
@@ -272,17 +388,47 @@ export function executeGuardedProviderOperation(configuration) {
           result: { receiptId: receipt.receiptId, digest: digestValue(resultReceipt) },
           finalized: { digest: digestValue(validatedResult) },
         },
+        evidence,
         warnings: validatedResult.warnings,
       };
     },
   };
 }
 
+/** @param {{service:"github"|"supabase"|"vercel"|"cloudflare",root:string,requestPath:string,modelFamily:"gpt"|"claude",clock?:()=>Date}} input */
+export async function executeRegisteredProviderOperation(input) {
+  if (input.service !== "github") {
+    throw new Error(`No registered production provider client exists for ${input.service}; execution fails closed.`);
+  }
+  const adapter = executeGuardedProviderOperation({
+    service: "github",
+    providerClient: createGitHubCliProviderClient(),
+    ...(input.clock ? { clock: input.clock } : {}),
+  });
+  return adapter.execute({ root: input.root, requestPath: input.requestPath, modelFamily: input.modelFamily });
+}
+
+function requireVitestFactory() {
+  if (process.env.VITEST !== "true") throw new Error("Injected provider clients are test-only; production must use a registered provider operation.");
+}
+
 /** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
-export const createGitHubGuardedAdapter = (configuration) => executeGuardedProviderOperation({ service: "github", ...configuration });
+export const createTestGitHubGuardedAdapter = (configuration) => {
+  requireVitestFactory();
+  return executeGuardedProviderOperation({ service: "github", ...configuration });
+};
 /** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
-export const createSupabaseGuardedAdapter = (configuration) => executeGuardedProviderOperation({ service: "supabase", ...configuration });
+export const createTestSupabaseGuardedAdapter = (configuration) => {
+  requireVitestFactory();
+  return executeGuardedProviderOperation({ service: "supabase", ...configuration });
+};
 /** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
-export const createVercelGuardedAdapter = (configuration) => executeGuardedProviderOperation({ service: "vercel", ...configuration });
+export const createTestVercelGuardedAdapter = (configuration) => {
+  requireVitestFactory();
+  return executeGuardedProviderOperation({ service: "vercel", ...configuration });
+};
 /** @param {{providerClient: Record<string, any>, clock?: () => Date}} configuration */
-export const createCloudflareGuardedAdapter = (configuration) => executeGuardedProviderOperation({ service: "cloudflare", ...configuration });
+export const createTestCloudflareGuardedAdapter = (configuration) => {
+  requireVitestFactory();
+  return executeGuardedProviderOperation({ service: "cloudflare", ...configuration });
+};

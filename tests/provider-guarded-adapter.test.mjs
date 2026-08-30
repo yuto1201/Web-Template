@@ -56,12 +56,14 @@ function githubClient(authority, options = {}) {
           ...authority.resourceTargets.github,
           ...(phase === "claim" && options.switchAtClaim ? { repositoryId: authority.resourceTargets.github.repositoryId + 1 } : {}),
         },
-        operation: {
-          repository: `${authority.resourceTargets.github.owner}/${authority.resourceTargets.github.repository}`,
-          prNumber: request.inputs.prNumber,
-          headSha: phase === "claim" && options.wrongHeadAtClaim ? "9".repeat(40) : request.inputs.headSha,
-          method: request.inputs.method,
-        },
+        operation: request.operation === "github.read_issue"
+          ? { repository: `${authority.resourceTargets.github.owner}/${authority.resourceTargets.github.repository}`, issue: request.inputs.issue }
+          : {
+              repository: `${authority.resourceTargets.github.owner}/${authority.resourceTargets.github.repository}`,
+              prNumber: request.inputs.prNumber,
+              headSha: phase === "claim" && options.wrongHeadAtClaim ? "9".repeat(40) : request.inputs.headSha,
+              method: request.inputs.method,
+            },
       };
     },
     /** @param {{request: Record<string, any>, idempotencyKey: string}} input */
@@ -93,13 +95,45 @@ function githubClient(authority, options = {}) {
 }
 
 describe("provider-specific guarded adapters", () => {
+  it("uses the production GitHub CLI client without switching accounts and binds the merge SHA", async () => {
+    const { createGitHubCliProviderClient } = await import("../tools/github-cli-provider-client.mjs");
+    const authority = JSON.parse(await readFile(path.resolve("config/ownership.json"), "utf8"));
+    /** @type {string[][]} */
+    const calls = [];
+    const request = {
+      operation: "github.merge_pr",
+      inputs: { issue: 33, repository: "yuto1201/Web-Template", prNumber: 44, headSha: "a".repeat(40), method: "squash" },
+    };
+    const client = createGitHubCliProviderClient({
+      now: () => new Date("2026-08-30T01:00:00Z"),
+      invoke(args) {
+        calls.push(args);
+        const joined = args.join(" ");
+        if (joined === "api user") return { login: authority.accounts.github.login, id: authority.accounts.github.userId, node_id: authority.accounts.github.nodeId, name: "Yuuuuuuuto", created_at: "2019-05-14T00:00:00Z", public_repos: 9 };
+        if (joined === "api repos/yuto1201/Web-Template") return { owner: { login: "yuto1201" }, name: "Web-Template", id: authority.resourceTargets.github.repositoryId, node_id: authority.resourceTargets.github.repositoryNodeId };
+        if (joined === "api repos/yuto1201/Web-Template/pulls/44") return { number: 44, head: { sha: request.inputs.headSha } };
+        if (joined.includes("--method PUT") && joined.includes(`sha=${request.inputs.headSha}`)) return { merged: true, sha: "b".repeat(40) };
+        if (joined === "api repos/yuto1201/Web-Template/issues/33") return { state: "closed", updated_at: "2026-08-30T01:00:10Z" };
+        throw new Error(`Unexpected fake GitHub call: ${joined}`);
+      },
+    });
+
+    await expect(client.collectObservation({ request })).resolves.toMatchObject({ operation: { headSha: request.inputs.headSha } });
+    await expect(client.execute({ request, operation: request.operation })).resolves.toMatchObject({
+      status: "succeeded",
+      evidence: { mergeCommitSha: "b".repeat(40), issueClosed: true },
+    });
+    expect(calls.flat()).not.toContain("auth");
+    expect(calls.flat()).not.toContain("login");
+  });
+
   it("collects preflight, claim, and postflight from one provider surface and executes only the frozen mutation", async () => {
-    const { createGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
+    const { createTestGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
     const { root, simulated, authority } = await repositoryFixture();
     const client = githubClient(authority);
-    const adapter = createGitHubGuardedAdapter({ providerClient: client, clock: clock() });
+    const adapter = createTestGitHubGuardedAdapter({ providerClient: client, clock: clock() });
 
-    const result = await adapter.execute({ root, requestPath: simulated.paths.mergeRequest });
+    const result = await adapter.execute({ root, requestPath: simulated.paths.mergeRequest, modelFamily: "gpt" });
 
     expect(result).toMatchObject({
       ok: true,
@@ -114,34 +148,63 @@ describe("provider-specific guarded adapters", () => {
     });
     expect(client.executionCount()).toBe(1);
     expect(JSON.stringify(result)).not.toContain(authority.accounts.github.login);
-  });
+    expect(result).toMatchObject({
+      evidence: {
+        executionHeadSha: expect.stringMatching(/^[0-9a-f]{40}$/u),
+        references: {
+          request: expect.stringMatching(/^evidence\/external-operations\/.+\/request\.json$/u),
+          preflight: expect.stringMatching(/^evidence\/external-operations\/.+\/preflight\.json$/u),
+          claim: expect.stringMatching(/^evidence\/external-operations\/.+\/claim\.json$/u),
+          mutation: expect.stringMatching(/^evidence\/external-operations\/.+\/mutation\.json$/u),
+          result: expect.stringMatching(/^evidence\/external-operations\/.+\/result\.json$/u),
+          finalized: expect.stringMatching(/^evidence\/external-operations\/.+\/finalized\.json$/u),
+        },
+      },
+    });
+    if (!result.evidence) throw new Error("Expected write lifecycle evidence.");
+    for (const reference of Object.values(result.evidence.references)) {
+      await expect(readFile(path.join(root, reference), "utf8")).resolves.toMatch(/"phase"/u);
+    }
+    git(root, ["add", "--", ...Object.values(result.evidence.references)]);
+    git(root, ["commit", "-m", "test: bind lifecycle evidence"]);
+    const { bindExternalOperationEvidence } = await import("../tools/workflow-core.mjs");
+    expect(bindExternalOperationEvidence(root, path.posix.dirname(result.evidence.references.request))).toMatchObject({
+      executionHeadSha: result.evidence.executionHeadSha,
+      evidenceHeadSha: git(root, ["rev-parse", "HEAD"]),
+      mutationDigest: expect.stringMatching(/^sha256:/u),
+      outcome: "succeeded",
+    });
+  }, 15_000);
 
   it("rejects an account or live PR Head switch immediately before mutation", async () => {
-    const { createGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
+    const { createTestGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
     const { root, simulated, authority } = await repositoryFixture();
     const switchedClient = githubClient(authority, { switchAtClaim: true });
-    await expect(createGitHubGuardedAdapter({ providerClient: switchedClient, clock: clock() }).execute({
+    await expect(createTestGitHubGuardedAdapter({ providerClient: switchedClient, clock: clock() }).execute({
       root,
       requestPath: simulated.paths.mergeRequest,
+      modelFamily: "gpt",
     })).rejects.toThrow(/account|target switch|identity mismatch/iu);
     expect(switchedClient.executionCount()).toBe(0);
 
     const wrongHeadRoot = await repositoryFixture();
     const wrongHeadClient = githubClient(wrongHeadRoot.authority, { wrongHeadAtClaim: true });
-    await expect(createGitHubGuardedAdapter({ providerClient: wrongHeadClient, clock: clock() }).execute({
+    await expect(createTestGitHubGuardedAdapter({ providerClient: wrongHeadClient, clock: clock() }).execute({
       root: wrongHeadRoot.root,
       requestPath: wrongHeadRoot.simulated.paths.mergeRequest,
+      modelFamily: "gpt",
     })).rejects.toThrow(/live (?:PR )?Head|frozen.*Head/iu);
     expect(wrongHeadClient.executionCount()).toBe(0);
-  });
+  }, 15_000);
 
   it("requires provider-enforced idempotency for writes and shares one-use state across sibling worktrees", async () => {
-    const { createGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
+    const { createTestGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
     const fixture = await repositoryFixture();
     const unsupportedClient = githubClient(fixture.authority, { idempotency: "none" });
-    await expect(createGitHubGuardedAdapter({ providerClient: unsupportedClient, clock: clock() }).execute({
+    await expect(createTestGitHubGuardedAdapter({ providerClient: unsupportedClient, clock: clock() }).execute({
       root: fixture.root,
       requestPath: fixture.simulated.paths.mergeRequest,
+      modelFamily: "gpt",
     })).rejects.toThrow(/provider.*idempotency/iu);
     expect(unsupportedClient.executionCount()).toBe(0);
 
@@ -150,20 +213,22 @@ describe("provider-specific guarded adapters", () => {
     await mkdir(path.join(sibling, ".artifacts"), { recursive: true });
     await cp(path.join(fixture.root, ".artifacts"), path.join(sibling, ".artifacts"), { recursive: true });
     const firstClient = githubClient(fixture.authority);
-    await createGitHubGuardedAdapter({ providerClient: firstClient, clock: clock() }).execute({
+    await createTestGitHubGuardedAdapter({ providerClient: firstClient, clock: clock() }).execute({
       root: fixture.root,
       requestPath: fixture.simulated.paths.mergeRequest,
+      modelFamily: "gpt",
     });
     const secondClient = githubClient(fixture.authority);
-    await expect(createGitHubGuardedAdapter({ providerClient: secondClient, clock: clock() }).execute({
+    await expect(createTestGitHubGuardedAdapter({ providerClient: secondClient, clock: clock() }).execute({
       root: sibling,
       requestPath: fixture.simulated.paths.mergeRequest,
+      modelFamily: "gpt",
     })).rejects.toThrow(/same mutation|already claimed|terminal/iu);
     expect(secondClient.executionCount()).toBe(0);
   });
 
   it("does not permanently deduplicate repeated authorized reads", async () => {
-    const { createGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
+    const { createTestGitHubGuardedAdapter } = await import("../tools/provider-guarded-adapter.mjs");
     const { root, authority } = await repositoryFixture();
     const issue = 42;
     const contract = snapshotIssueContract({
@@ -206,7 +271,7 @@ describe("provider-specific guarded adapters", () => {
     await writeFile(contractPath, `${JSON.stringify(contract, null, 2)}\n`, "utf8");
     await writeFile(requestPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
     const client = githubClient(authority, { idempotency: "none" });
-    const adapter = createGitHubGuardedAdapter({ providerClient: client, clock: clock() });
+    const adapter = createTestGitHubGuardedAdapter({ providerClient: client, clock: clock() });
 
     await expect(adapter.execute({ root, requestPath })).resolves.toMatchObject({ outcome: "succeeded" });
     await expect(adapter.execute({ root, requestPath })).resolves.toMatchObject({ outcome: "succeeded" });
@@ -227,7 +292,25 @@ describe("provider-specific guarded adapters", () => {
     expect(() => validateLiveOperationObservation("supabase.apply_migrations", request, {
       projectRef: request.inputs.projectRef,
       migrations: [{ ...request.inputs.migrations[0], contentDigest: `sha256:${"9".repeat(64)}` }],
-    })).toThrow(/migration content digest|frozen mutation/iu);
+    }, "postflight-success")).toThrow(/migration content digest|frozen.*binding/iu);
+  });
+
+  it("allows a legitimate pre-mutation provider state and requires desired state only after success", async () => {
+    const { validateLiveOperationObservation } = await import("../tools/provider-guarded-adapter.mjs");
+    const request = {
+      inputs: {
+        zoneId: "a".repeat(32),
+        hostname: "app.example.test",
+        recordType: "CNAME",
+        target: "new.vercel-dns.com",
+        proxied: false,
+        routingSource: { provider: "vercel", projectId: "prj_Test123", recommendationDigest: `sha256:${"4".repeat(64)}` },
+      },
+    };
+    const current = { ...request.inputs, target: "old.vercel-dns.com", proxied: true };
+    expect(() => validateLiveOperationObservation("cloudflare.upsert_dns", request, current, "claim")).not.toThrow();
+    expect(() => validateLiveOperationObservation("cloudflare.upsert_dns", request, current, "postflight-terminal")).not.toThrow();
+    expect(() => validateLiveOperationObservation("cloudflare.upsert_dns", request, current, "postflight-success")).toThrow(/target|proxied|postflight/iu);
   });
 
   it("rejects caller-authored receipt JSON as an execution-authorizing production path", async () => {

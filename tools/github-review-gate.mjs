@@ -3,27 +3,12 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { externalEvidencePathPattern, operationNames, validateExternalLifecycleArtifactSet } from "./workflow-core.mjs";
 
 const modulePath = fileURLToPath(import.meta.url);
 const shaPattern = /^[0-9a-f]{40}$/u;
 const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 const receiptIdPattern = /^receipt-[a-z0-9]+(?:-[a-z0-9]+)*$/u;
-const externalEvidencePathPattern = /^evidence\/external-operations\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.json$/u;
-/** @type {Record<string, string>} */
-const operationServices = {
-  "github.read_issue": "github",
-  "github.push_branch": "github",
-  "github.create_pr": "github",
-  "github.merge_pr": "github",
-  "github.delete_branch": "github",
-  "supabase.inspect_project": "supabase",
-  "supabase.apply_migrations": "supabase",
-  "vercel.inspect_project": "vercel",
-  "vercel.deploy_preview": "vercel",
-  "vercel.deploy_production": "vercel",
-  "cloudflare.inspect_zone": "cloudflare",
-  "cloudflare.upsert_dns": "cloudflare",
-};
 
 /** @param {unknown} condition @param {string} message */
 function assert(condition, message) {
@@ -105,17 +90,19 @@ function parseExternalChanges(body) {
     }
     exactKeys(change, [
       "schemaVersion", "service", "operation", "operatorLabel", "executionRole", "modelFamily",
-      "accountRef", "targetRef", "serviceMode", "exactHeadSha", "request", "preflight", "claim",
+      "accountRef", "targetRef", "serviceMode", "executionHeadSha", "evidenceHeadSha", "mutationDigest", "request", "preflight", "claim",
       "mutation", "result", "finalized", "outcome",
     ], "Operation evidence");
     assert(change.schemaVersion === 1, "Operation evidence schemaVersion must be 1.");
-    assert(operationServices[String(change.operation)] === change.service, "Operation evidence service does not match its registered operation.");
+    assert(operationNames.includes(change.operation) && String(change.operation).split(".")[0] === change.service, "Operation evidence service does not match its registered operation.");
     assert(["codex", "claude"].includes(change.operatorLabel), "Operation evidence operator label is invalid.");
     assert(["implementer", "external-operator"].includes(change.executionRole), "Operation evidence execution role is invalid.");
     assert(["gpt", "claude"].includes(change.modelFamily), "Operation evidence model family is invalid.");
     assert(change.accountRef === `accounts.${change.service}` && change.targetRef === `resourceTargets.${change.service}`, "Operation evidence account/target refs are invalid.");
     assert(change.serviceMode === "repository-active", "Operation evidence service mode is invalid.");
-    assert(shaPattern.test(change.exactHeadSha), "Operation evidence exact Head SHA is invalid.");
+    assert(shaPattern.test(change.executionHeadSha), "Operation evidence execution Head SHA is invalid.");
+    assert(shaPattern.test(change.evidenceHeadSha), "Operation evidence evidence Head SHA is invalid.");
+    assert(digestPattern.test(change.mutationDigest), "Operation evidence mutation digest is invalid.");
     assert(["succeeded", "failed", "ambiguous"].includes(change.outcome), "Operation evidence outcome is invalid.");
     for (const phase of ["request", "preflight", "claim", "mutation", "result", "finalized"]) change[phase] = record(change[phase], `${phase} lifecycle`);
     validateLifecycleBinding(change.request, "request lifecycle");
@@ -218,9 +205,9 @@ function validateDependabotDiff(diff, policy) {
 }
 
 /**
- * @param {{event: any, changedPaths: string[], diff: string, workflow: any, artifactLoader?: (reference: string) => unknown}} input
+ * @param {{event: any, changedPaths: string[], diff: string, workflow: any, artifactLoader?: (reference: string) => unknown, authorityLoader?: (commitSha: string) => unknown, evidenceCommit?: {headSha:string,parentSha:string,changedPaths:string[]}, isAuthorityAncestor?: (authorityCommitSha:string,executionHeadSha:string)=>boolean}} input
  */
-export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, artifactLoader }) {
+export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, artifactLoader, authorityLoader, evidenceCommit, isAuthorityAncestor }) {
   const pullRequest = event?.pull_request;
   assert(pullRequest && typeof pullRequest === "object", "GitHub event must contain a pull_request object.");
   const headSha = pullRequest.head?.sha;
@@ -251,11 +238,13 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   if (externalChanges.length === 0) {
     assert(committedExternalPaths.length === 0, "Committed external-operation artifacts are missing structured external lifecycle evidence.");
   } else {
-    if (typeof artifactLoader !== "function") throw new Error("Structured external changes require a committed artifact loader.");
+    if (typeof artifactLoader !== "function" || typeof authorityLoader !== "function" || !evidenceCommit) {
+      throw new Error("Structured external changes require committed artifact, authority, and evidence-commit loaders.");
+    }
     /** @type {Set<string>} */
     const referencedPaths = new Set();
     for (const change of externalChanges) {
-      assert(change.exactHeadSha === headSha, "External change exact Head SHA must match the current Head SHA.");
+      assert(change.evidenceHeadSha === headSha, "External change evidence Head SHA must match the current Head SHA.");
       assert(change.operatorLabel === evidence.primaryOperatorLabel && change.modelFamily === evidence.primaryModelFamily, "External change operator/model must match the reviewed primary implementation.");
       /** @type {Record<string, Record<string, any>>} */
       const artifacts = {};
@@ -268,12 +257,14 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
         assert(digestValue(artifact) === binding.digest, `External change ${phase} artifact digest mismatch.`);
         artifacts[phase] = artifact;
       }
-      assert(artifacts.request.operation === change.operation && artifacts.request.operatorLabel === change.operatorLabel && artifacts.request.executionRole === change.executionRole, "External change request artifact metadata mismatch.");
-      assert(artifacts.preflight.receiptId === change.preflight.receiptId, "External change preflight receipt mismatch.");
-      assert(artifacts.claim.observationDigest === change.claim.observationDigest, "External change claim observation mismatch.");
-      assert(artifacts.mutation.idempotencyKeyDigest === change.mutation.idempotencyKeyDigest, "External change mutation idempotency mismatch.");
-      assert(artifacts.result.receiptId === change.result.receiptId, "External change result receipt mismatch.");
-      assert(artifacts.finalized.outcome === change.outcome, "External change finalized outcome mismatch.");
+      const requestArtifact = record(artifacts.request, "request committed artifact");
+      const contract = record(record(requestArtifact.payload, "request lifecycle payload").contract, "request lifecycle Issue contract");
+      const authorityCommitSha = String(record(contract.authority, "request lifecycle authority").commitSha ?? "");
+      validateExternalLifecycleArtifactSet(change, artifacts, {
+        authority: authorityLoader(authorityCommitSha),
+        evidenceCommit,
+        isAuthorityAncestor,
+      });
     }
     assert(committedExternalPaths.every((candidate) => referencedPaths.has(candidate)), "Committed external-operation artifact is missing from lifecycle evidence.");
   }
@@ -325,12 +316,21 @@ export async function runCli(argv = process.argv.slice(2)) {
   assert(shaPattern.test(diffBaseSha), "Git merge-base is invalid.");
   const changedPaths = gitBuffer("-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", diffBaseSha, headSha, "--").toString("utf8").split("\0").filter(Boolean);
   const diff = git("diff", "--unified=0", "--no-ext-diff", "--no-textconv", "--no-renames", diffBaseSha, headSha, "--");
+  const evidenceParentSha = git("rev-parse", "--verify", `${headSha}^`).trim();
+  const evidenceCommitChangedPaths = gitBuffer("-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", evidenceParentSha, headSha, "--")
+    .toString("utf8").split("\0").filter(Boolean);
   process.stdout.write(`${JSON.stringify(evaluateGitHubReviewGate({
     event,
     changedPaths,
     diff,
     workflow,
     artifactLoader: (reference) => JSON.parse(git("show", `${headSha}:${reference}`)),
+    authorityLoader: (commitSha) => JSON.parse(git("show", `${commitSha}:config/ownership.json`)),
+    evidenceCommit: { headSha, parentSha: evidenceParentSha, changedPaths: evidenceCommitChangedPaths },
+    isAuthorityAncestor: (authorityCommitSha, executionHeadSha) => {
+      const result = spawnSync("git", ["merge-base", "--is-ancestor", authorityCommitSha, executionHeadSha], { cwd: repository, encoding: "utf8", windowsHide: true });
+      return result.status === 0;
+    },
   }), null, 2)}\n`);
 }
 

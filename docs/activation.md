@@ -35,7 +35,7 @@ Claude と Codex は implementer / external-operator として同じ account-bou
 7. 個人 Cloudflare account/zone を確認し、対象1件だけを DNS-only で適用する。
 8. DNS、TLS、`/`、`/health` を確認してライブ準備完了を記録する。
 
-GitHub・Supabase・Vercel・Cloudflare は `repository-active` ですが、Issue scope を超えて使えるという意味ではありません。Linear は `explicit-user-purpose-only` で、ユーザーが目的を明示し、protected-main authority に workspace/user/team の stable IDs がすべて登録されるまでは read/write とも fail closed です。高リスク write は exact-Head gate を再実行し、preflight → one-time claim → result/finalize の順に redacted receipt を残します。
+GitHub・Supabase・Vercel・Cloudflare は `repository-active` ですが、Issue scope を超えて使えるという意味ではありません。Linear は `explicit-user-purpose-only` で、現在は操作自体が未登録のため、目的や stable IDs が揃っても read/write とも fail closed です。高リスク write は production provider client が実装済みの場合に限り、exact-Head gate を再実行し、preflight → one-time claim → result/finalize の順に redacted receipt を残します。このリリースで production client があるのは GitHub Issue read と exact-Head squash merge だけです。
 
 provider ID は資格情報ではありませんが、別アカウントへの誤操作を防ぐ所有境界です。トークン、cookie、secret、service-role key、個人メール生値は設定ファイル、Issue、PR、スクリーンショット、監査成果物へ保存しません。テンプレート生成では account/target を明示入力するか inactive placeholder を使い、source identity の残留と異なる authority fingerprint での再初期化を拒否します。
 

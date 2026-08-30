@@ -6,7 +6,7 @@ Vercel serves the Next.js application; Cloudflare remains the registrar and auth
 
 Claude and Codex have equal account-bound authority in implementer and external-operator roles. Before any Vercel mutation, the active operator verifies the provider-reported personal team name, slug, stable team ID, required plan, and exact non-null project ID against the protected-main authority frozen in the Issue contract. The operator label is audit metadata and never substitutes for those fields. The ignored `.vercel/project.json` link is compared with the same canonical target; `--root` overrides are rejected. A mismatch fails at checkpoint `link` or `ownership` without switching accounts, teams, or projects. `.vercel/`, tokens, cookies, and environment values are never committed.
 
-Vercel is `repository-active`, so use also requires the Issue's declared purpose, environment, operation constraints, and fresh guarded receipts. The Git integration model is one production branch (`main`) plus Preview deployments for non-production branches and pull requests. The only registered mutations are `vercel.deploy_preview` and `vercel.deploy_production`; both run through the Vercel guarded adapter. Ad-hoc Connector/CLI deployment, configuration mutation, and deployment rollback are not authorized compatibility paths.
+Vercel is `repository-active`, so use also requires the Issue's declared purpose, environment, operation constraints, and fresh guarded receipts. The Git integration model is one production branch (`main`) plus Preview deployments for non-production branches and pull requests. The only registered mutation contracts are `vercel.deploy_preview` and `vercel.deploy_production`. No Vercel production provider client ships in this release, so both remain fail closed until a later Issue implements and verifies that client. Ad-hoc Connector/CLI deployment, configuration mutation, and deployment rollback are not authorized compatibility paths.
 
 ## Names-only environment policy
 
@@ -39,9 +39,9 @@ The names-only object is advisory input to the registered adapter, not mutation 
 
 ## Release evidence and smoke checks
 
-Production deployment is allowed only for an already verified 40-character commit SHA, after rerunning the authoritative exact-Head gate. The authorization freezes the exact project ID, `preview` or `production` environment, commit SHA, and the `config/deployment.json` source plus content digest. The adapter re-reads the live Vercel team/project and deployment target immediately before mutation, supplies the provider idempotency key, and rejects a different project, environment, commit, or configuration digest.
+Once a production client is implemented, production deployment is allowed only for an already verified 40-character commit SHA, after rerunning the authoritative exact-Head gate. The authorization freezes the exact project ID, `preview` or `production` environment, commit SHA, and the `config/deployment.json` source plus content digest. The future client must re-read the live Vercel team/project and deployment target immediately before mutation, supply verified provider idempotency, and reject a different project, environment, commit, or configuration digest.
 
-After the Vercel API reports `READY`, the same adapter records provider-derived result evidence containing the canonical team ID, project ID, deployment ID, credential-free HTTPS Vercel origin, provider-reported commit SHA, timestamp, and smoke results. The legacy `node tools/deployment-workflow.mjs verify-release` command fails closed and cannot finalize caller-authored JSON.
+After the Vercel API reports `READY`, that future client must record provider-derived result evidence containing the canonical team ID, project ID, deployment ID, credential-free HTTPS Vercel origin, provider-reported commit SHA, timestamp, and smoke results. The legacy `node tools/deployment-workflow.mjs verify-release` command fails closed and cannot finalize caller-authored JSON.
 
 Evidence older than 30 minutes or dated more than five minutes into the future is rejected. The fixed checks are:
 
@@ -50,7 +50,7 @@ Evidence older than 30 minutes or dated more than five minutes into the future i
 
 Preview protection stays enabled. The same authenticated surface used for the preflight performs the protected fetch rather than disabling protection. Production is checked through its public deployment URL. Runtime/build errors are inspected without printing environment values.
 
-Release evidence is never accepted from a pull request, downloaded artifact, or user-supplied path. The guarded adapter creates the redacted result directly from the Vercel API response and the two live smoke responses, then links it to the preflight receipt, fresh claim observation, one-time mutation, and finalized result. Redacted audit copies use the committed `evidence/external-operations/` lifecycle required by the PR gate; tokens, raw identity observations, and environment values remain excluded.
+Release evidence is never accepted from a pull request, downloaded artifact, or user-supplied path. A future production client must create the redacted result directly from the Vercel API response and the two live smoke responses, then link it to the preflight receipt, fresh claim observation, one-time mutation, and finalized result. Redacted audit copies use the committed `evidence/external-operations/` lifecycle required by the PR gate; tokens, raw identity observations, and environment values remain excluded.
 
 ## Remote schema ordering
 

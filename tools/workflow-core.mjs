@@ -588,13 +588,58 @@ const acceptanceEvidenceSchema = z.object({
   status: z.enum(["supported", "unsupported"]),
   evidence: z.array(singleLineSchema).min(1),
 }).strict();
+export const externalEvidencePathPattern = /^evidence\/external-operations\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.json$/u;
 const externalEvidenceReferenceSchema = z.object({
-  reference: relativeFileSchema.refine(
-    (value) => value.startsWith("evidence/external-operations/") && value.endsWith(".json"),
+  reference: relativeFileSchema.regex(
+    externalEvidencePathPattern,
     "External-operation evidence must use a committed evidence/external-operations/*.json path.",
   ),
   digest: digestSchema,
 }).strict();
+const lifecyclePhaseSchema = z.enum(["request", "preflight", "claim", "mutation", "result", "finalized"]);
+const lifecycleArtifactSchema = z.object({
+  schemaVersion: z.literal(1),
+  phase: lifecyclePhaseSchema,
+  service: z.enum(["github", "supabase", "vercel", "cloudflare"]),
+  operation: operationSchema,
+  operatorLabel: operatorLabelSchema,
+  executionRole: externalOperatorRoleSchema,
+  modelFamily: modelFamilySchema,
+  executionSurface: executionSurfaceSchema,
+  executionHeadSha: shaSchema,
+  authorityDigest: digestSchema,
+  issueContractDigest: digestSchema,
+  authorizationDigest: digestSchema,
+  requestDigest: digestSchema,
+  mutationDigest: digestSchema,
+  requestId: externalRequestBaseSchema.shape.requestId,
+  receiptId: receiptIdSchema.nullable(),
+  previousDigest: digestSchema.nullable(),
+  payload: z.unknown(),
+}).strict();
+const lifecyclePayloadSchemas = {
+  request: z.object({ request: externalRequestBaseSchema, contract: issueContractSchema }).strict(),
+  preflight: z.object({ receipt: preflightReceiptSchema }).strict(),
+  claim: z.object({
+    accountObservation: persistedObservationSchema,
+    targetObservation: persistedObservationSchema,
+    operationObservation: persistedObservationSchema,
+    observationDigest: digestSchema,
+    idempotencyKeyDigest: digestSchema,
+    startedAt: timestampSchema,
+  }).strict(),
+  mutation: z.object({
+    observationDigest: digestSchema,
+    idempotencyKeyDigest: digestSchema,
+    startedAt: timestampSchema,
+  }).strict(),
+  result: z.object({ result: operationResultSchema }).strict(),
+  finalized: z.object({
+    outcome: z.enum(["succeeded", "failed", "ambiguous"]),
+    evidenceDigest: digestSchema,
+    finalizedAt: timestampSchema,
+  }).strict(),
+};
 const externalChangeEvidenceSchema = z.object({
   schemaVersion: z.literal(1),
   service: z.enum(["github", "supabase", "vercel", "cloudflare"]),
@@ -605,7 +650,9 @@ const externalChangeEvidenceSchema = z.object({
   accountRef: z.string().regex(/^accounts\.(?:github|supabase|vercel|cloudflare)$/u),
   targetRef: z.string().regex(/^resourceTargets\.(?:github|supabase|vercel|cloudflare)$/u),
   serviceMode: z.literal("repository-active"),
-  exactHeadSha: shaSchema,
+  executionHeadSha: shaSchema,
+  evidenceHeadSha: shaSchema,
+  mutationDigest: digestSchema,
   request: externalEvidenceReferenceSchema,
   preflight: externalEvidenceReferenceSchema.extend({ receiptId: receiptIdSchema }).strict(),
   claim: externalEvidenceReferenceSchema.extend({ observationDigest: digestSchema }).strict(),
@@ -881,7 +928,7 @@ export function resolveExternalAuthorization(contractValue, requestValue) {
   if (contract.issue !== request.issue) throw new Error("Operation request Issue does not match the frozen Issue contract.");
   const authorization = contract.externalAuthorizations.find(({ operation }) => operation === request.operation);
   if (!authorization) throw new Error(`Operation ${request.operation} is outside the frozen Issue contract.`);
-  const definition = operationDefinitions[request.operation];
+  const definition = operationDefinitions[/** @type {Operation} */ (request.operation)];
   const expectedPurpose = operationPurposeDefinitions[request.operation](authorization.constraints);
   if (authorization.purpose !== expectedPurpose) {
     throw new Error(`Operation ${request.operation} has an invalid frozen purpose.`);
@@ -1501,6 +1548,258 @@ function loadCommittedExternalEvidence(root, headShaValue, reference) {
   return /** @type {Record<string, any>} */ (value);
 }
 
+/** @param {Operation} operation @param {Record<string, any>} request @param {unknown} observationValue */
+function assertLifecycleOperationObservation(operation, request, observationValue) {
+  if (!observationValue || typeof observationValue !== "object" || Array.isArray(observationValue)) {
+    throw new Error("Claim lifecycle requires a structured provider operation observation.");
+  }
+  const observation = /** @type {Record<string, any>} */ (observationValue);
+  /** @type {Partial<Record<Operation, string[]>>} */
+  const liveBindings = {
+    "github.read_issue": ["repository", "issue"],
+    "github.push_branch": ["repository"],
+    "github.create_pr": ["repository"],
+    "github.merge_pr": ["repository", "prNumber", "headSha"],
+    "github.delete_branch": ["repository", "branch", "headSha"],
+    "supabase.inspect_project": ["projectRef"],
+    "supabase.apply_migrations": ["projectRef"],
+    "vercel.inspect_project": ["projectId"],
+    "vercel.deploy_preview": ["projectId"],
+    "vercel.deploy_production": ["projectId"],
+    "cloudflare.inspect_zone": ["zoneId"],
+    "cloudflare.upsert_dns": ["zoneId", "hostname"],
+  };
+  for (const key of liveBindings[operation] ?? []) {
+    if (canonicalJson(observation[key]) !== canonicalJson(request.inputs[key])) {
+      throw new Error(`Claim lifecycle operation observation does not match frozen input ${key}.`);
+    }
+  }
+}
+
+/**
+ * Re-derives the complete committed lifecycle rather than trusting caller-authored phase labels.
+ * @param {unknown} changeValue
+ * @param {Record<string, unknown>} artifactsValue
+ * @param {{ authority: unknown, evidenceCommit: { headSha: string, parentSha: string, changedPaths: string[] }, isAuthorityAncestor?: (authorityCommitSha: string, executionHeadSha: string) => boolean }} context
+ */
+export function validateExternalLifecycleArtifactSet(changeValue, artifactsValue, context) {
+  const change = externalChangeEvidenceSchema.parse(changeValue);
+  const authority = parseAuthority(context.authority);
+  const evidenceCommit = z.object({
+    headSha: shaSchema,
+    parentSha: shaSchema,
+    changedPaths: z.array(relativeFileSchema).min(1),
+  }).strict().parse(context.evidenceCommit);
+  if (change.evidenceHeadSha !== evidenceCommit.headSha) throw new Error("External evidence Head does not match the reviewed evidence commit.");
+  if (change.executionHeadSha !== evidenceCommit.parentSha) throw new Error("External execution Head must be the first parent of the evidence-only commit.");
+  if (change.executionHeadSha === change.evidenceHeadSha) throw new Error("Execution Head and evidence Head must be distinct.");
+
+  const phases = /** @type {const} */ (["request", "preflight", "claim", "mutation", "result", "finalized"]);
+  const referencedPaths = phases.map((phase) => change[phase].reference).toSorted();
+  if (canonicalJson(evidenceCommit.changedPaths.toSorted()) !== canonicalJson(referencedPaths)) {
+    throw new Error("The execution-Head successor commit must contain only the six declared lifecycle evidence files.");
+  }
+
+  /** @type {Record<string, any>} */
+  const artifacts = {};
+  let previousDigest = null;
+  for (const phase of phases) {
+    const raw = artifactsValue[phase];
+    if (rawEmailTrail(raw)) throw new Error(`External change ${phase} artifact contains a raw email.`);
+    const artifact = lifecycleArtifactSchema.parse(raw);
+    if (artifact.phase !== phase) throw new Error(`External change ${phase} artifact has the wrong phase.`);
+    const binding = change[phase];
+    const artifactDigest = digestValue(artifact);
+    if (artifactDigest !== binding.digest) throw new Error(`External change ${phase} artifact digest mismatch.`);
+    if (artifact.previousDigest !== previousDigest) throw new Error(`External change ${phase} previous-phase digest mismatch.`);
+    artifact.payload = lifecyclePayloadSchemas[phase].parse(artifact.payload);
+    artifacts[phase] = artifact;
+    previousDigest = artifactDigest;
+  }
+
+  const requestArtifact = artifacts.request;
+  const request = externalRequestBaseSchema.parse(requestArtifact.payload.request);
+  const contract = validateIssueContract(requestArtifact.payload.contract);
+  if (contract.authority.digest !== authorityDigest(authority)) throw new Error("Lifecycle protected authority digest mismatch.");
+  if (typeof context.isAuthorityAncestor === "function" && !context.isAuthorityAncestor(contract.authority.commitSha, change.executionHeadSha)) {
+    throw new Error("Lifecycle protected authority commit is not an ancestor of the execution Head.");
+  }
+  const repository = `${authority.resourceTargets.github.owner}/${authority.resourceTargets.github.repository}`;
+  if (contract.repository !== repository) throw new Error("Lifecycle Issue contract repository does not match protected authority.");
+  const authorization = resolveExternalAuthorization(contract, request);
+  assertAuthorizationResourceBindings(authority, contract.repository, authorization);
+  const definition = operationDefinitions[request.operation];
+  /** @type {Record<string, any>} */
+  const expected = {
+    service: definition.service,
+    operation: request.operation,
+    operatorLabel: request.operatorLabel,
+    executionRole: request.executionRole,
+    executionSurface: request.executionSurface,
+    executionHeadSha: change.executionHeadSha,
+    authorityDigest: contract.authority.digest,
+    issueContractDigest: contract.digest,
+    authorizationDigest: digestValue(authorization),
+    requestDigest: digestValue(request),
+    mutationDigest: digestValue({ operation: request.operation, inputs: request.inputs }),
+    requestId: request.requestId,
+  };
+  if (change.service !== expected.service || change.operation !== expected.operation || change.operatorLabel !== expected.operatorLabel || change.executionRole !== expected.executionRole) {
+    throw new Error("External change metadata does not match its strict request artifact.");
+  }
+  if (change.mutationDigest !== expected.mutationDigest) throw new Error("External change mutation digest does not match frozen request inputs.");
+  if (change.accountRef !== authorization.accountRef || change.targetRef !== authorization.targetRef) {
+    throw new Error("External change account/target refs do not match the frozen authorization.");
+  }
+  for (const phase of phases) {
+    const artifact = artifacts[phase];
+    for (const [key, value] of Object.entries(expected)) {
+      if (artifact[key] !== value) throw new Error(`External change ${phase} ${key} linkage mismatch.`);
+    }
+    if (artifact.modelFamily !== change.modelFamily) throw new Error(`External change ${phase} model-family linkage mismatch.`);
+  }
+
+  const receipt = artifacts.preflight.payload.receipt;
+  const receiptId = receipt.receiptId;
+  if (artifacts.request.receiptId !== null) throw new Error("Request lifecycle cannot claim a receipt before provider preflight.");
+  for (const phase of phases.slice(1)) {
+    if (artifacts[phase].receiptId !== receiptId) throw new Error(`External change ${phase} receipt linkage mismatch.`);
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (key === "executionHeadSha") continue;
+    if (["service", "operatorLabel", "executionRole", "executionSurface", "authorityDigest", "issueContractDigest", "authorizationDigest", "requestDigest", "mutationDigest", "requestId"].includes(key) && receipt[key] !== value) {
+      throw new Error(`Preflight receipt ${key} linkage mismatch.`);
+    }
+  }
+  const preflightIdentity = evaluateAccountObservation(authority, {
+    service: definition.service,
+    account: receipt.accountObservation,
+    target: receipt.targetObservation,
+  });
+  const claimPayload = artifacts.claim.payload;
+  evaluateAccountObservation(authority, {
+    service: definition.service,
+    account: claimPayload.accountObservation,
+    target: claimPayload.targetObservation,
+    previousAccount: receipt.accountObservation,
+    previousTarget: receipt.targetObservation,
+  });
+  assertLifecycleOperationObservation(request.operation, request, claimPayload.operationObservation);
+  const observationDigest = digestValue({
+    account: claimPayload.accountObservation,
+    target: claimPayload.targetObservation,
+    operation: claimPayload.operationObservation,
+  });
+  if (claimPayload.observationDigest !== observationDigest || change.claim.observationDigest !== observationDigest) {
+    throw new Error("Claim lifecycle observation digest mismatch.");
+  }
+  const mutationPayload = artifacts.mutation.payload;
+  if (
+    mutationPayload.observationDigest !== observationDigest ||
+    mutationPayload.idempotencyKeyDigest !== claimPayload.idempotencyKeyDigest ||
+    mutationPayload.startedAt !== claimPayload.startedAt ||
+    change.mutation.idempotencyKeyDigest !== claimPayload.idempotencyKeyDigest
+  ) throw new Error("Mutation lifecycle does not match the atomic claim.");
+
+  const result = artifacts.result.payload.result;
+  for (const key of ["receiptId", "requestId", "service", "operatorLabel", "executionRole", "executionSurface", "authorityDigest", "issueContractDigest", "authorizationDigest", "requestDigest", "mutationDigest"]) {
+    if (result[key] !== (key === "receiptId" ? receiptId : expected[key])) throw new Error(`Result receipt ${key} linkage mismatch.`);
+  }
+  evaluateAccountObservation(authority, {
+    service: definition.service,
+    account: result.postflight.accountObservation,
+    target: result.postflight.targetObservation,
+    previousAccount: claimPayload.accountObservation,
+    previousTarget: claimPayload.targetObservation,
+  });
+  const outcome = validateOperationResultEvidence(request.operation, result.outcome, {
+    inputs: request.inputs,
+    targetRef: preflightIdentity.targetRef,
+    postTarget: result.postflight.targetObservation,
+  });
+  if (outcome.status !== change.outcome) throw new Error("External change outcome does not match the strict result receipt.");
+  const finalized = artifacts.finalized.payload;
+  if (
+    finalized.outcome !== outcome.status ||
+    finalized.evidenceDigest !== outcome.evidenceDigest ||
+    Date.parse(finalized.finalizedAt) < Date.parse(result.postflight.observedAt)
+  ) throw new Error("Finalized lifecycle does not match the strict result receipt.");
+  if (change.preflight.receiptId !== receiptId || change.result.receiptId !== receiptId) throw new Error("External change receipt binding mismatch.");
+  return { change, request, contract, authorization, outcome };
+}
+
+/**
+ * Bind a completed evidence-only successor commit to one strict PR evidence entry.
+ * @param {string} root
+ * @param {string} directory
+ */
+export function bindExternalOperationEvidence(root, directory) {
+  if (!/^evidence\/external-operations\/[A-Za-z0-9_.-]+$/u.test(directory)) {
+    throw new Error("External evidence directory must be one canonical evidence/external-operations/<request> path.");
+  }
+  const evidenceHeadSha = runGit(root, ["rev-parse", "HEAD"]).trim();
+  const executionHeadSha = runGit(root, ["rev-parse", "--verify", `${evidenceHeadSha}^`]).trim();
+  const changedPaths = runGit(root, ["diff", "--name-only", "--no-renames", executionHeadSha, evidenceHeadSha, "--"])
+    .split(/\r?\n/u).filter(Boolean);
+  const phases = /** @type {const} */ (["request", "preflight", "claim", "mutation", "result", "finalized"]);
+  /** @type {Record<string, Record<string, any>>} */
+  const artifacts = {};
+  /** @type {Record<string, {reference: string, digest: string}>} */
+  const bindings = {};
+  for (const phase of phases) {
+    const reference = `${directory}/${phase}.json`;
+    const artifact = loadCommittedExternalEvidence(root, evidenceHeadSha, reference);
+    artifacts[phase] = artifact;
+    bindings[phase] = { reference, digest: digestValue(artifact) };
+  }
+  const requestArtifact = lifecycleArtifactSchema.parse(artifacts.request);
+  const requestPayload = lifecyclePayloadSchemas.request.parse(requestArtifact.payload);
+  const authorization = resolveExternalAuthorization(requestPayload.contract, requestPayload.request);
+  const preflightArtifact = lifecycleArtifactSchema.parse(artifacts.preflight);
+  const preflightPayload = lifecyclePayloadSchemas.preflight.parse(preflightArtifact.payload);
+  const claimArtifact = lifecycleArtifactSchema.parse(artifacts.claim);
+  const claimPayload = lifecyclePayloadSchemas.claim.parse(claimArtifact.payload);
+  const mutationArtifact = lifecycleArtifactSchema.parse(artifacts.mutation);
+  const mutationPayload = lifecyclePayloadSchemas.mutation.parse(mutationArtifact.payload);
+  const finalizedArtifact = lifecycleArtifactSchema.parse(artifacts.finalized);
+  const finalizedPayload = lifecyclePayloadSchemas.finalized.parse(finalizedArtifact.payload);
+  const change = {
+    schemaVersion: 1,
+    service: authorization.service,
+    operation: requestPayload.request.operation,
+    operatorLabel: requestPayload.request.operatorLabel,
+    executionRole: requestPayload.request.executionRole,
+    modelFamily: requestArtifact.modelFamily,
+    accountRef: authorization.accountRef,
+    targetRef: authorization.targetRef,
+    serviceMode: "repository-active",
+    executionHeadSha,
+    evidenceHeadSha,
+    mutationDigest: requestArtifact.mutationDigest,
+    request: bindings.request,
+    preflight: { ...bindings.preflight, receiptId: preflightPayload.receipt.receiptId },
+    claim: { ...bindings.claim, observationDigest: claimPayload.observationDigest },
+    mutation: { ...bindings.mutation, idempotencyKeyDigest: mutationPayload.idempotencyKeyDigest },
+    result: { ...bindings.result, receiptId: preflightPayload.receipt.receiptId },
+    finalized: bindings.finalized,
+    outcome: finalizedPayload.outcome,
+  };
+  const authority = loadAuthorityAtCommit(root, requestPayload.contract.authority.commitSha).authority;
+  validateExternalLifecycleArtifactSet(change, artifacts, {
+    authority,
+    evidenceCommit: { headSha: evidenceHeadSha, parentSha: executionHeadSha, changedPaths },
+    isAuthorityAncestor(authorityCommitSha, candidateExecutionHeadSha) {
+      try {
+        runGit(root, ["merge-base", "--is-ancestor", authorityCommitSha, candidateExecutionHeadSha]);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+  return externalChangeEvidenceSchema.parse(change);
+}
+
 /** @param {any[]} changes @param {any} contract @param {any} packet @param {string} currentHeadSha @param {string} root */
 function validateExternalChangeLifecycle(changes, contract, packet, currentHeadSha, root) {
   const changedPaths = /** @type {string[]} */ (packet.changedPaths);
@@ -1512,21 +1811,17 @@ function validateExternalChangeLifecycle(changes, contract, packet, currentHeadS
     return;
   }
   const referencedPaths = new Set();
+  const evidenceParentSha = runGit(root, ["rev-parse", "--verify", `${currentHeadSha}^`]).trim();
+  const evidenceCommitPaths = runGit(root, ["diff", "--name-only", "--no-renames", evidenceParentSha, currentHeadSha, "--"])
+    .split(/\r?\n/u).filter(Boolean);
   for (const change of changes) {
-    const operation = operationSchema.parse(change.operation);
-    const definition = operationDefinitions[operation];
-    const authorization = contract.externalAuthorizations.find(/** @param {any} candidate */ (candidate) => candidate.operation === operation);
-    if (!authorization) throw new Error(`External change operation ${change.operation} is absent from the frozen Issue contract.`);
-    if (change.service !== definition.service || change.accountRef !== authorization.accountRef || change.targetRef !== authorization.targetRef) {
-      throw new Error(`External change ${change.operation} does not match its frozen service/account/target authorization.`);
-    }
     if (change.serviceMode !== "repository-active") throw new Error("External change service mode is not executable.");
-    if (change.exactHeadSha !== currentHeadSha) throw new Error("External change exact Head SHA is stale.");
+    if (change.evidenceHeadSha !== currentHeadSha) throw new Error("External change evidence Head SHA is stale.");
     if (change.operatorLabel !== packet.primaryOperatorLabel || change.modelFamily !== packet.primaryModelFamily) {
       throw new Error("External change operator/model metadata does not match the reviewed primary implementation.");
     }
-    const phases = ["request", "preflight", "claim", "mutation", "result", "finalized"];
-    /** @type {Record<string, Record<string, any>>} */
+    const phases = /** @type {const} */ (["request", "preflight", "claim", "mutation", "result", "finalized"]);
+    /** @type {Record<string, unknown>} */
     const artifacts = {};
     for (const phase of phases) {
       const binding = change[phase];
@@ -1534,20 +1829,21 @@ function validateExternalChangeLifecycle(changes, contract, packet, currentHeadS
         throw new Error(`External change ${phase} reference is not a committed changed artifact.`);
       }
       referencedPaths.add(binding.reference);
-      const artifact = loadCommittedExternalEvidence(root, currentHeadSha, binding.reference);
-      if (digestValue(artifact) !== binding.digest) throw new Error(`External change ${phase} artifact digest mismatch.`);
-      artifacts[phase] = artifact;
+      artifacts[phase] = loadCommittedExternalEvidence(root, currentHeadSha, binding.reference);
     }
-    if (
-      artifacts.request.operation !== change.operation ||
-      artifacts.request.operatorLabel !== change.operatorLabel ||
-      artifacts.request.executionRole !== change.executionRole
-    ) throw new Error("External change request artifact metadata mismatch.");
-    if (artifacts.preflight.receiptId !== change.preflight.receiptId) throw new Error("External change preflight receipt linkage mismatch.");
-    if (artifacts.claim.observationDigest !== change.claim.observationDigest) throw new Error("External change claim observation digest mismatch.");
-    if (artifacts.mutation.idempotencyKeyDigest !== change.mutation.idempotencyKeyDigest) throw new Error("External change mutation idempotency digest mismatch.");
-    if (artifacts.result.receiptId !== change.result.receiptId) throw new Error("External change result receipt linkage mismatch.");
-    if (artifacts.finalized.outcome !== change.outcome) throw new Error("External change finalized outcome mismatch.");
+    const validated = validateExternalLifecycleArtifactSet(change, artifacts, {
+      authority: loadAuthorityAtCommit(root, contract.authority.commitSha).authority,
+      evidenceCommit: { headSha: currentHeadSha, parentSha: evidenceParentSha, changedPaths: evidenceCommitPaths },
+      isAuthorityAncestor(authorityCommitSha, executionHeadSha) {
+        try {
+          runGit(root, ["merge-base", "--is-ancestor", authorityCommitSha, executionHeadSha]);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+    if (validated.contract.digest !== contract.digest) throw new Error("External lifecycle Issue contract does not match the premerge contract.");
   }
   if (declaredEvidencePaths.some((candidate) => !referencedPaths.has(candidate))) {
     throw new Error("Committed external-operation artifact is missing from structured lifecycle evidence.");
@@ -1802,7 +2098,7 @@ export function renderPullRequestBody(input) {
   const evidence = verification.acceptanceEvidence.map(({ id, evidence: refs }) => `- ${id}: ${refs.map(safe).join("; ")}`).join("\n");
   const externalChanges = verification.externalChanges.length === 0
     ? "- None."
-    : verification.externalChanges.map((item) => `- Operation evidence: ${safe(canonicalJson(item))}`).join("\n");
+    : verification.externalChanges.map((item) => `- Operation evidence: ${canonicalJson(item)}`).join("\n");
   const remainingWork = verification.remainingWork.length === 0
     ? "- None for this Issue."
     : verification.remainingWork.map((item) => `- ${safe(item)}`).join("\n");

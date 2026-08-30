@@ -113,14 +113,14 @@ Issue contract schema v2 replaces the coarse string-only `externalOperations` au
 - operation-specific constraints;
 - whether authoritative exact-Head review is required.
 
-Examples of frozen constraints include repository/branch/PR/Head for GitHub, project ref and migration digests for Supabase, project/environment/commit SHA for Vercel, zone/hostname/record/proxy/routing source for Cloudflare, and workspace/team/object/filter/result limit for Linear.
+Examples of frozen constraints include repository/branch/PR/Head for GitHub, project ref and migration digests for Supabase, project/environment/commit SHA for Vercel, and zone/hostname/record/proxy/routing source for Cloudflare. Linear has no registered operation or constraint schema in this Issue.
 
 ### Request, preflight, execution, result
 
 1. A strict request declares operator label, execution role/surface, frozen authorization reference, intent, reversibility, and mutation inputs. It cannot supply free-form accounts, targets, approval claims, tokens, or evidence.
 2. A provider-specific guarded adapter reads the current authenticated identity and target, then creates a fresh preflight receipt. The receipt binds authority, Issue, request, mutation, account, target, surface, timestamp, and expiry digests.
 3. Execution consumes the receipt once, re-reads account and target through the same authenticated surface, rejects any switch, and performs only the frozen mutation.
-4. A strict result receipt records redacted provider-derived result and post-state. `validate-result` checks account continuity, target continuity, expected result shape, and receipt linkage.
+4. A strict result receipt records redacted provider-derived result and post-state. The same in-process adapter checks account continuity, target continuity, expected result shape, and receipt linkage; legacy caller-authored receipt CLI commands fail closed.
 
 No retry occurs with unchanged inputs after an ambiguous result. The operator reads provider state and resumes only the missing phase.
 
@@ -128,12 +128,7 @@ No retry occurs with unchanged inputs after an ambiguous result. The operator re
 
 The exact-Head implementation, opposite-model mapping, diff digest, verification digest, contract digest, and reviewer self-approval rejection remain unchanged.
 
-All repository-content-derived high-risk writes rerun the authoritative gate, including at least:
-
-- GitHub merge and ruleset changes;
-- hosted Supabase migrations or Auth policy changes;
-- Vercel preview/production configuration and deployments;
-- Cloudflare DNS and rollback operations.
+Registered repository-content-derived high-risk writes rerun the authoritative gate: GitHub merge, hosted Supabase migrations, Vercel preview/production deployments, and one exact Cloudflare DNS upsert. GitHub ruleset changes, Supabase Auth-policy changes, Vercel configuration or rollback, and Cloudflare rollback are explicitly unsupported. A registered contract is not itself an executable provider integration: until a provider-specific production client exists, that operation also fails closed. Issue #33 adds the GitHub CLI production client for authenticated Issue reads and exact-Head squash merge; the other production clients require later Issues.
 
 Read-only external access also requires account/service/purpose validation. Exact-Head review is required when the read exposes protected provider data or is evidence for a mutation; ordinary public unauthenticated documentation is outside this provider-account gate.
 
@@ -141,11 +136,11 @@ Read-only external access also requires account/service/purpose validation. Exac
 
 The final state contains no repository policy that restricts Claude merely because it is Claude:
 
-- remove Claude-only deny entries and the Claude-specific PreToolUse guard from `.claude/settings.json`;
+- remove Claude-only tool, shell, network, MCP, provider, and external-service deny entries and the Claude-specific PreToolUse guard from `.claude/settings.json`;
 - delete `tools/guard-claude-tool.mjs` and replace its completion/acceptance coverage with shared authority validation;
 - update the generated `CLAUDE.md` entrypoint so it grants the same implementer/operator policy rights as Codex;
 - remove Codex-only operational wording throughout the repository;
-- retain normal Claude application permission prompts and any machine/application controls not imposed by this repository.
+- retain normal application permission prompts. The exact `.env`/`.env.*` read deny remains as a secret-file protection layer, not an external-service or actor authority restriction; Codex secret access remains governed by its host/runtime boundary.
 
 The shared authority parser, service policy, frozen authority snapshot, external authorization, preflight receipt, result validator, and tests must be green before the old guard is removed. The migration lands atomically in one PR so no protected branch state exists without either the old or new boundary.
 
@@ -193,7 +188,7 @@ Tests must demonstrate:
 - read-only reviewer/auditor role enforcement and self-review rejection;
 - stable account, role, plan, service mode, target, freshness, surface, and digest mismatch failure;
 - warning-only mutable observation drift;
-- Linear default denial and exact explicit-purpose authorization;
+- Linear default denial, mandatory `user-directed` purpose metadata, and continued denial while no operation is registered;
 - protected-main authority binding and candidate-branch retarget rejection;
 - one-time preflight receipt consumption and pre/post account continuity;
 - exact-Head rerun for every high-risk write;

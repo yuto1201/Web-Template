@@ -8,7 +8,7 @@ Create every migration through the repository-pinned CLI, then edit the generate
 npm exec -- supabase migration new describe_the_change
 ```
 
-Never edit a migration already applied to a hosted project. Add a forward-only recovery migration instead. The registered hosted mutation is only `supabase.apply_migrations`: it requires an implementer or external-operator using the Supabase guarded adapter, the protected-main account and exact project ref, frozen Issue purpose, an ordered list of migration paths and content digests, fresh preflight/claim/postflight observations, provider idempotency, and exact-Head review. A missing project ref or changed migration byte fails closed. Hosted reset, arbitrary SQL execution, and Supabase Auth-policy mutation are unsupported operations; legacy CLI compatibility does not authorize them.
+Never edit a migration already applied to a hosted project. Add a forward-only recovery migration instead. The registered hosted-mutation contract is only `supabase.apply_migrations`: it requires an implementer or external-operator, the protected-main account and exact project ref, frozen Issue purpose, an ordered list of migration paths and content digests, fresh preflight/claim/postflight observations, provider idempotency, and exact-Head review. No Supabase production provider client ships in this release, so the operation currently fails closed before hosted execution. A later Issue must implement and verify that client. A missing project ref or changed migration byte also fails closed. Hosted reset, arbitrary SQL execution, and Supabase Auth-policy mutation are unsupported operations; legacy CLI compatibility does not authorize them.
 
 ## Exposed schema checklist
 

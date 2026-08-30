@@ -15,6 +15,8 @@ Claude acting in implementer and external-operator roles has the same account-bo
 
 Evaluator and auditor roles are read-only regardless of operator label or model family. They cannot access secrets, execute provider operations, create receipts, mutate repository state, or approve their own implementation.
 
+Model-family values are review metadata, not authenticated principals. The gate rejects same-family declarations and stale review artifacts, while actual model provenance remains an operational attestation from the Claude/Codex review invocation. The repository does not claim cryptographic proof of remote-model identity.
+
 ## Canonical authority and service modes
 
 `config/ownership.json` schema v2 is the canonical account, service-policy, resource-target, and warning-only observation registry. Names and IDs are public identifiers, not proof of current authentication. Runtime authorization uses the version loaded from the protected `main` commit recorded in the frozen Issue contract. A candidate branch that changes ownership cannot use its candidate bytes to authorize its own push, PR, merge, deployment, or cleanup; those changes become usable only by a later Issue after reviewed merge to protected `main`.
@@ -55,7 +57,9 @@ Do not retry an ambiguous result with unchanged inputs. Read provider state and 
 
 The executable registry supports `github.read_issue`, `github.push_branch`, `github.create_pr`, `github.merge_pr`, `github.delete_branch`, `supabase.inspect_project`, `supabase.apply_migrations`, `vercel.inspect_project`, `vercel.deploy_preview`, `vercel.deploy_production`, `cloudflare.inspect_zone`, and `cloudflare.upsert_dns`.
 
-The following high-risk operations are explicitly unsupported and fail closed until a later Issue registers their complete request, result, recovery, and idempotency contracts: GitHub ruleset updates, Supabase Auth-policy updates, Vercel configuration changes, Vercel deployment rollback, and Cloudflare DNS rollback. Compatibility with an older command is not authorization.
+The following high-risk operations are explicitly unsupported and fail closed until a later Issue registers their complete request, result, recovery, and idempotency contracts: GitHub ruleset updates, Supabase Auth-policy updates, Vercel configuration changes, Vercel deployment rollback, and Cloudflare DNS rollback. A registered operation contract also remains non-executable until a production provider client implements its authenticated observation and mutation surface. This release provides that production client only for GitHub Issue reads and exact-Head squash merge; Supabase, Vercel, and Cloudflare production clients remain fail closed. Compatibility with an older command is not authorization.
+
+The repository removes actor-specific external-service restrictions. The application settings retain only exact `.env` and `.env.*` read denials as a secret-file protection layer. No shell, network, MCP, GitHub, Supabase, Vercel, Cloudflare, or provider category is denied by operator label.
 
 ## Common safeguards
 

@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { evaluateGitHubReviewGate } from "../tools/github-review-gate.mjs";
 import { digestValue } from "../tools/workflow-core.mjs";
+import { authorityDigest } from "../tools/authority-core.mjs";
 
 const headSha = "a".repeat(40);
 const workflow = {
@@ -64,17 +66,120 @@ const actionDiff = `diff --git a/.github/workflows/ci.yml b/.github/workflows/ci
 function externalLifecycle() {
   const prefix = "evidence/external-operations/merge";
   const receiptId = "receipt-github-merge-1";
-  const observationDigest = `sha256:${"1".repeat(64)}`;
-  const idempotencyKeyDigest = `sha256:${"2".repeat(64)}`;
-  /** @type {Record<string, Record<string, any>>} */
-  const artifacts = {
-    [`${prefix}/request.json`]: { operation: "github.merge_pr", operatorLabel: "codex", executionRole: "external-operator" },
-    [`${prefix}/preflight.json`]: { receiptId },
-    [`${prefix}/claim.json`]: { observationDigest },
-    [`${prefix}/mutation.json`]: { idempotencyKeyDigest },
-    [`${prefix}/result.json`]: { receiptId },
-    [`${prefix}/finalized.json`]: { outcome: "succeeded" },
+  const executionHeadSha = "c".repeat(40);
+  const authority = JSON.parse(readFileSync(path.resolve("config/ownership.json"), "utf8"));
+  const authorization = {
+    service: "github",
+    operation: "github.merge_pr",
+    purposeCode: "reviewed-release",
+    purpose: "Merge the exact reviewed pull request for Issue 22.",
+    accountRef: "accounts.github",
+    targetRef: "resourceTargets.github",
+    environment: "production",
+    constraints: { issue: 22, repository: "yuto1201/Web-Template", prNumber: 33, headSha: executionHeadSha, method: "squash" },
+    requiresExactHead: true,
   };
+  const contractWithoutDigest = {
+    schemaVersion: 2,
+    issue: 22,
+    repository: "yuto1201/Web-Template",
+    goal: "Prove strict external lifecycle evidence.",
+    acceptanceCriteria: [{ id: "AC-1", text: "Lifecycle evidence is strict." }],
+    dependencies: [],
+    externalAuthorizations: [authorization],
+    authority: { commitSha: "b".repeat(40), digest: authorityDigest(authority) },
+    fetchedAt: "2026-08-30T01:00:00Z",
+  };
+  const contract = { ...contractWithoutDigest, digest: digestValue(contractWithoutDigest) };
+  const request = {
+    schemaVersion: 1,
+    requestId: "issue-22-github-merge-pr-1",
+    issue: 22,
+    operation: "github.merge_pr",
+    target: { kind: "github.repository", identifier: "resourceTargets.github" },
+    environment: "production",
+    reasonCode: "reviewed-release",
+    operatorLabel: "codex",
+    executionRole: "external-operator",
+    executionSurface: "github-cli",
+    intent: "Merge the exact reviewed pull request for Issue 22.",
+    reversibility: "compensating-change",
+    recovery: { strategy: "separate-reviewed-operation", instructions: "Use a separately reviewed compensating change." },
+    inputs: authorization.constraints,
+  };
+  const requestDigest = digestValue(request);
+  const mutationDigest = digestValue({ operation: request.operation, inputs: request.inputs });
+  const authorizationDigest = digestValue(authorization);
+  const common = {
+    schemaVersion: 1,
+    service: "github",
+    operation: "github.merge_pr",
+    operatorLabel: "codex",
+    executionRole: "external-operator",
+    modelFamily: "gpt",
+    executionSurface: "github-cli",
+    executionHeadSha,
+    authorityDigest: contract.authority.digest,
+    issueContractDigest: contract.digest,
+    authorizationDigest,
+    requestDigest,
+    mutationDigest,
+    requestId: request.requestId,
+  };
+  const accountObservation = { ...authority.accounts.github, ...authority.observations.github };
+  const targetObservation = authority.resourceTargets.github;
+  const receipt = {
+    schemaVersion: 1,
+    receiptId,
+    requestId: request.requestId,
+    service: "github",
+    operatorLabel: "codex",
+    executionRole: "external-operator",
+    executionSurface: "github-cli",
+    authorityDigest: contract.authority.digest,
+    issueContractDigest: contract.digest,
+    authorizationDigest,
+    requestDigest,
+    mutationDigest,
+    accountObservation,
+    targetObservation,
+    observedAt: "2026-08-30T01:00:01Z",
+    expiresAt: "2026-08-30T01:02:01Z",
+  };
+  const operationObservation = request.inputs;
+  const observationDigest = digestValue({ account: accountObservation, target: targetObservation, operation: operationObservation });
+  const idempotencyKeyDigest = `sha256:${"2".repeat(64)}`;
+  /** @type {Record<string, any>} */
+  const outcome = {
+    status: "succeeded",
+    evidence: { ...request.inputs, mergeCommitSha: "d".repeat(40), issueClosed: true },
+  };
+  outcome.evidenceDigest = digestValue(outcome.evidence);
+  const resultReceipt = {
+    schemaVersion: 1,
+    receiptId,
+    requestId: request.requestId,
+    service: "github",
+    operatorLabel: "codex",
+    executionRole: "external-operator",
+    executionSurface: "github-cli",
+    authorityDigest: contract.authority.digest,
+    issueContractDigest: contract.digest,
+    authorizationDigest,
+    requestDigest,
+    mutationDigest,
+    preflight: { accountObservation, targetObservation, observedAt: receipt.observedAt },
+    postflight: { accountObservation, targetObservation, observedAt: "2026-08-30T01:00:05Z" },
+    outcome,
+  };
+  /** @type {Record<string, Record<string, any>>} */
+  const artifacts = {};
+  artifacts[`${prefix}/request.json`] = { ...common, phase: "request", receiptId: null, previousDigest: null, payload: { request, contract } };
+  artifacts[`${prefix}/preflight.json`] = { ...common, phase: "preflight", receiptId, previousDigest: digestValue(artifacts[`${prefix}/request.json`]), payload: { receipt } };
+  artifacts[`${prefix}/claim.json`] = { ...common, phase: "claim", receiptId, previousDigest: digestValue(artifacts[`${prefix}/preflight.json`]), payload: { accountObservation, targetObservation, operationObservation, observationDigest, idempotencyKeyDigest, startedAt: "2026-08-30T01:00:02Z" } };
+  artifacts[`${prefix}/mutation.json`] = { ...common, phase: "mutation", receiptId, previousDigest: digestValue(artifacts[`${prefix}/claim.json`]), payload: { observationDigest, idempotencyKeyDigest, startedAt: "2026-08-30T01:00:02Z" } };
+  artifacts[`${prefix}/result.json`] = { ...common, phase: "result", receiptId, previousDigest: digestValue(artifacts[`${prefix}/mutation.json`]), payload: { result: resultReceipt } };
+  artifacts[`${prefix}/finalized.json`] = { ...common, phase: "finalized", receiptId, previousDigest: digestValue(artifacts[`${prefix}/result.json`]), payload: { outcome: "succeeded", evidenceDigest: outcome.evidenceDigest, finalizedAt: "2026-08-30T01:00:06Z" } };
   /** @param {string} name */
   const binding = (name) => ({ reference: `${prefix}/${name}.json`, digest: digestValue(artifacts[`${prefix}/${name}.json`]) });
   const change = {
@@ -87,7 +192,9 @@ function externalLifecycle() {
     accountRef: "accounts.github",
     targetRef: "resourceTargets.github",
     serviceMode: "repository-active",
-    exactHeadSha: headSha,
+    executionHeadSha,
+    evidenceHeadSha: headSha,
+    mutationDigest,
     request: binding("request"),
     preflight: { ...binding("preflight"), receiptId },
     claim: { ...binding("claim"), observationDigest },
@@ -96,7 +203,12 @@ function externalLifecycle() {
     finalized: binding("finalized"),
     outcome: "succeeded",
   };
-  return { artifacts, change };
+  return {
+    artifacts,
+    change,
+    authority,
+    evidenceCommit: { headSha, parentSha: executionHeadSha, changedPaths: Object.keys(artifacts) },
+  };
 }
 
 describe("GitHub exact-Head review gate", () => {
@@ -140,13 +252,16 @@ describe("GitHub exact-Head review gate", () => {
   });
 
   it("validates structured lifecycle evidence against committed artifact contents", () => {
-    const { artifacts, change } = externalLifecycle();
+    const { artifacts, change, authority, evidenceCommit } = externalLifecycle();
     const result = evaluateGitHubReviewGate({
       event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(change)}` })),
       changedPaths: Object.keys(artifacts),
       diff: "",
       workflow,
       artifactLoader: (reference) => artifacts[reference],
+      authorityLoader: () => authority,
+      evidenceCommit,
+      isAuthorityAncestor: () => true,
     });
     expect(result).toMatchObject({ ok: true, externalChanges: 1 });
 
@@ -158,7 +273,67 @@ describe("GitHub exact-Head review gate", () => {
       diff: "",
       workflow,
       artifactLoader: (reference) => artifacts[reference],
+      authorityLoader: () => authority,
+      evidenceCommit,
+      isAuthorityAncestor: () => true,
     })).toThrow(/result artifact digest mismatch/iu);
+  });
+
+  it("rejects minimally populated caller-authored lifecycle placeholders", () => {
+    const fixture = externalLifecycle();
+    const { artifacts, authority, evidenceCommit } = fixture;
+    const change = /** @type {Record<string, any>} */ (fixture.change);
+    /** @type {Record<string, any>} */
+    const minimal = {
+      request: { operation: "github.merge_pr", operatorLabel: "codex", executionRole: "external-operator" },
+      preflight: { receiptId: change.preflight.receiptId },
+      claim: { observationDigest: change.claim.observationDigest },
+      mutation: { idempotencyKeyDigest: change.mutation.idempotencyKeyDigest },
+      result: { receiptId: change.result.receiptId },
+      finalized: { outcome: "succeeded" },
+    };
+    for (const phase of Object.keys(minimal)) {
+      const reference = change[phase].reference;
+      artifacts[reference] = minimal[phase];
+      change[phase].digest = digestValue(minimal[phase]);
+    }
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(change)}` })),
+      changedPaths: Object.keys(artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => artifacts[reference],
+      authorityLoader: () => authority,
+      evidenceCommit,
+      isAuthorityAncestor: () => true,
+    })).toThrow(/strict|contract|request|receipt|lifecycle|execution Head/iu);
+  });
+
+  it("rejects execution-Head relabeling and non-evidence successor changes", () => {
+    const fixture = externalLifecycle();
+    const relabeled = structuredClone(fixture.change);
+    relabeled.executionHeadSha = "e".repeat(40);
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(relabeled)}` })),
+      changedPaths: Object.keys(fixture.artifacts),
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => fixture.artifacts[reference],
+      authorityLoader: () => fixture.authority,
+      evidenceCommit: fixture.evidenceCommit,
+      isAuthorityAncestor: () => true,
+    })).toThrow(/first parent|execution Head/iu);
+
+    expect(() => evaluateGitHubReviewGate({
+      event: event(reviewBody({ external: `- Operation evidence: ${JSON.stringify(fixture.change)}` })),
+      changedPaths: [...Object.keys(fixture.artifacts), "src/app/page.tsx"],
+      diff: "",
+      workflow,
+      artifactLoader: (reference) => fixture.artifacts[reference],
+      authorityLoader: () => fixture.authority,
+      evidenceCommit: { ...fixture.evidenceCommit, changedPaths: [...fixture.evidenceCommit.changedPaths, "src/app/page.tsx"] },
+      isAuthorityAncestor: () => true,
+    })).toThrow(/only the six|evidence files/iu);
   });
 
   it("accepts only a same-repository Dependabot GitHub Actions version-only diff", () => {
