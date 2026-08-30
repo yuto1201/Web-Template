@@ -70,6 +70,20 @@ describe("repository policy", () => {
     "Codex is barred from external operations.",
     "Claude and Codex must delegate external operations to Codex.",
     "Claude and Codex may operate, but only Codex owns deployments.",
+    "Claude and Codex may operate, while Claude cannot deploy production.",
+    "Codex and Claude may operate, while Codex cannot deploy production.",
+    "Claude and Codex share authority, although Codex is barred from DNS changes.",
+    "Codex and Claude share authority, although Claude is barred from DNS changes.",
+    "Claude and Codex may operate, Claude cannot change DNS.",
+    "Codex and Claude may operate, Codex cannot change DNS.",
+    "Claude and Codex may operate; Claude cannot change DNS.",
+    "Codex and Claude may operate; Codex cannot change DNS.",
+    "Claude and Codex may operate (although Claude cannot call provider APIs).",
+    "Codex and Claude may operate (although Codex cannot call provider APIs).",
+    "Claude (and Codex) may operate (although Codex cannot deploy production).",
+    "Codex (and Claude) may operate (although Claude cannot deploy production).",
+    "Claude and Codex share receipts, and Codex and Claude share targets, while Claude cannot deploy.",
+    "Claude reviewer remains read-only, while Codex cannot deploy production.",
   ])("detects actor-asymmetric operator restriction: %s", (content) => {
     expect(detectActorAsymmetry(content)).toMatch(/actor-specific/iu);
   });
@@ -81,6 +95,11 @@ describe("repository policy", () => {
     "Generated evaluator and auditor roles remain read-only, and model family is used only for independent cross-model review.",
     "Claude and Codex must not switch authenticated accounts automatically.",
     "Only Claude and Codex in operator roles may use account-bound receipts.",
+    "CLAUDE, and codex must not switch authenticated accounts automatically.",
+    "Codex / Claude must not switch authenticated accounts automatically.",
+    "Claude (and Codex) must not switch authenticated accounts automatically.",
+    "Codex (and Claude) must not switch authenticated accounts automatically.",
+    "Claude reviewer remains read-only.",
   ])("allows shared authority and read-only independent review policy: %s", (content) => {
     expect(detectActorAsymmetry(content)).toBeNull();
   });

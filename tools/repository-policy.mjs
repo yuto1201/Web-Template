@@ -64,13 +64,43 @@ const secretPatterns = [
 ];
 
 const actorPattern = /\b(?:claude|codex)\b/iu;
-const actorReviewerRolePattern = /\b(?:claude|codex)(?:\s+and\s+(?:claude|codex))?\s+(?:reviewers?|evaluators?|auditors?)\b/iu;
-const jointActorSubjectPattern = /\b(?:claude\s+and\s+codex|codex\s+and\s+claude)\b/iu;
-const directionalActorPattern = /\b(?:(?:belongs?\s+)?(?:to|with|for|from)\s+(?:claude|codex)|(?:but|except)\s+(?:only\s+)?(?:claude|codex)|claude[- ](?:only|owned)|codex[- ](?:only|owned)|only\s+(?:claude(?!\s+and\s+codex)|codex(?!\s+and\s+claude)))\b/iu;
+const jointActorSpanPatterns = [
+  /\b(?:claude(?:\s*(?:,\s*)?and\s+|\s*[&/+]\s*)codex|codex(?:\s*(?:,\s*)?and\s+|\s*[&/+]\s*)claude)\b/giu,
+  /\b(?:claude\s*\(\s*and\s+codex|codex\s*\(\s*and\s+claude)\b\s*\)/giu,
+];
+const reviewerActorSpanPattern = /\b(?:claude|codex)(?:['’]s)?\s+(?:reviewers?|evaluators?|auditors?)\b/giu;
 const reviewIndependencePattern = /\b(?:approv(?:e|al|es|ed|ing)|audit(?:or|ors|ed|ing)?|cross[- ]model|evaluat(?:e|or|ors|ed|ing|ion)|review(?:er|ers|ed|ing|s)?)\b/iu;
 const operatorSurfacePattern = /\b(?:authenticated|cloudflare|command|deploy(?:ment|ments|ed|ing)?|dns|external\s+(?:operation|operations|service|services)|github|mcp|provider|shell|supabase|tool|tools|vercel)\b/iu;
 const actorRestrictionPattern = /\b(?:alone|barred|belongs?\s+to|cannot|can(?:['’]t)|delegat(?:e|es|ed|ing|ion|ions)|den(?:y|ies|ied)|disallow(?:ed|s)?|exclusive|exclusively|forbid(?:den|s)?|hand[- ]?off|limited\s+to|may\s+not|must\s+not|mustn(?:['’]t)|not\s+allowed|only|owned|owner|ownership|owns|prohibit(?:ed|s|ion)?|remains?\s+(?:an?\s+)?(?:claude|codex)\s+(?:operation|operator|work)|reserved|restricted|shall\s+not|sole|stays?\s+with)\b/iu;
 const canonicalOperatorParityPattern = /\bclaude\b[^.!?。！？\n]{0,160}\bhas\s+the\s+same\s+account-bound\s+authority\s+as\s+codex\b/iu;
+
+/** @param {string} content */
+function segmentPolicyClauses(content) {
+  return content.split(/[.!?。！？;\n]+/u).map((clause) => clause.trim()).filter(Boolean);
+}
+
+/** @param {string} clause */
+function removeJointActorSpans(clause) {
+  return jointActorSpanPatterns.reduce(
+    (result, pattern) => result.replace(pattern, " shared-actor-pair "),
+    clause,
+  );
+}
+
+/** @param {string} clause */
+function removeReviewerActorSpans(clause) {
+  return clause.replace(reviewerActorSpanPattern, " read-only-reviewer-role ");
+}
+
+/** @param {string} clause */
+function removeNonOperatorActorSpans(clause) {
+  return removeReviewerActorSpans(removeJointActorSpans(clause));
+}
+
+/** @param {string} clause */
+function hasStandaloneActorRestriction(clause) {
+  return actorPattern.test(clause) && actorRestrictionPattern.test(clause);
+}
 
 /** @param {string} content */
 export function detectActorAsymmetry(content) {
@@ -78,18 +108,12 @@ export function detectActorAsymmetry(content) {
     return "Actor-specific Claude guard policy remains.";
   }
 
-  const clauses = content.split(/[.!?。！？;\n]+/u);
-  for (const clause of clauses) {
-    if (!actorPattern.test(clause) || !actorRestrictionPattern.test(clause)) {
+  for (const clause of segmentPolicyClauses(content)) {
+    const standalonePolicy = removeNonOperatorActorSpans(clause);
+    if (!hasStandaloneActorRestriction(standalonePolicy)) {
       continue;
     }
-    if (actorReviewerRolePattern.test(clause)) {
-      continue;
-    }
-    if (jointActorSubjectPattern.test(clause) && !directionalActorPattern.test(clause)) {
-      continue;
-    }
-    if (reviewIndependencePattern.test(clause) && !operatorSurfacePattern.test(clause)) {
+    if (reviewIndependencePattern.test(standalonePolicy) && !operatorSurfacePattern.test(standalonePolicy)) {
       continue;
     }
     return `Actor-specific operator delegation, ownership, or restriction remains: ${clause.trim()}`;
