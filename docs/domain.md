@@ -5,26 +5,20 @@ Cloudflare is authoritative DNS; Vercel serves the application. Claude and Codex
 ## Safe ordering
 
 1. Inspect the exact Cloudflare account, active zone, target hostname, CAA constraints, and an identity-only snapshot of every unrelated record. Record `caaStatus` as `absent` or `allows-vercel`; any unresolved CAA policy fails schema validation.
-2. Add the hostname to the canonical Vercel project first.
-3. Confirm Vercel project-domain ownership (`verified: true`) separately from DNS configuration (`misconfigured` / configured), then read the live recommended routing record. DNS configuration may still be pending at planning time.
-4. Give both provider observations their actual UTC `observedAt`, then run `node tools/domain-workflow.mjs plan --input <live-input> --output .artifacts/cloudflare-domain-plan.json`. The planner assigns `plannedAt` from its own clock and rejects provider observations older than five minutes or from the future.
-5. Re-read Cloudflare after `plannedAt` and immediately before apply. `apply-preflight` rejects a changed snapshot, an observation that is not post-plan, a current read older than two minutes, a plan older than ten minutes, or an update without the exact record ID. Execute only its returned `request.method`, `request.path`, and `request.body`; `null` means no mutation. The one permitted record stays `proxied: false` with automatic TTL.
-6. Re-read the target and unrelated record identities, then run `verify-dns`. This creates a plan-bound SHA-256 proof and retains the live record ID needed for rollback.
-7. Wait for Vercel domain verification and TLS, then verify `/` and `/health` over the custom hostname. Run `verify-release` within ten minutes with `--evidence`, `--plan`, and `--dns`; stale, expired/wrong-host TLS, or evidence from another DNS plan is rejected.
+2. Confirm that the hostname is already attached to the canonical Vercel project and that project-domain ownership is `verified: true`; adding or removing a Vercel project domain is an unsupported configuration mutation and must not be inferred from this runbook.
+3. Read the live Vercel-recommended routing record. DNS configuration may still be pending at planning time.
+4. Give both provider observations their actual UTC `observedAt`, then run `node tools/domain-workflow.mjs plan --input <live-input> --output .artifacts/cloudflare-domain-plan.json`. The provider-free planner assigns `plannedAt` from its own clock and rejects observations older than five minutes or from the future. Its output is readiness evidence only and cannot authorize mutation.
+5. Submit a strict `cloudflare.upsert_dns` request whose frozen constraints contain the zone ID, hostname, record type, target, `proxied: false`, and the Vercel routing source with recommendation digest. The Cloudflare guarded adapter obtains its own live preflight, claim-time, and postflight observations and executes only that exact upsert with provider idempotency.
+6. Re-read the target and unrelated record identities through the adapter. The strict result must show one exact target record and no unrelated-record identity change before finalization.
+7. Wait for Vercel domain verification and TLS, then run provider-free DNS and release readiness checks. They may report state, but cannot finalize an authenticated mutation from caller-authored JSON.
 
-The desired content is accepted only from a `source: vercel-api` observation bound to the canonical Vercel team, project, and hostname. Because the CLI cannot cryptographically attest a hand-built JSON file, the guarded operator must obtain the value from the live provider response through the same authenticated surface and preserve the observation evidence. CNAME targets must match Vercel's documented `*.vercel-dns[-N].com` form; other targets fail closed.
+The desired content is accepted only from a `source: vercel-api` observation bound to the canonical Vercel team, project, and hostname. The guarded adapter obtains the value from the live provider response through the same authenticated surface; caller-authored JSON is never identity or target provenance. CNAME targets must match Vercel's documented `*.vercel-dns[-N].com` form; other targets fail closed.
 
 ## Diff and rollback
 
 The live input stores only public DNS state: the prior target record (zero or one) and unrelated record IDs, types, names, and modification timestamps. It does not store Cloudflare tokens, cookies, or credentials. After mutation, unrelated identities must be byte-for-byte identical and exactly one target record must match the planned type, name, content, TTL, and `proxied: false` setting.
 
-Rollback is deliberately narrow:
-
-- if the plan action was `create`, `rollback-preflight` permits deletion of only the created target record by its newly verified ID;
-- if the plan action was `update`, `rollback-preflight` permits restoration of only the exact prior record ID and body captured in `rollback.priorTargetRecords`;
-- never bulk-replace the zone or infer a rollback from current state.
-
-Before executing either rollback, re-read Cloudflare and run `rollback-preflight --current <current> --plan <plan>` within two minutes of that read. Execute only its returned request. Restore or delete DNS first. Removing the hostname from the Vercel project is a separate destructive recovery authorization after DNS state is confirmed and only when the project-domain association was created by this change. DNS apply and rollback both require fresh receipts and an authoritative exact-Head gate.
+The plan retains the prior target record and unrelated-record identities so a future reviewed recovery operation can be specified exactly. It does not authorize rollback. `apply-preflight` and `rollback-preflight` are legacy mutation commands and fail closed; Cloudflare DNS rollback and Vercel project-domain removal are not registered operations. A failure or ambiguous response requires live provider-state inspection, preservation of the prior-state evidence, and a later Issue that registers the exact recovery operation. Never bulk-replace the zone or infer a rollback from current state.
 
 ## Explicit approval boundary
 
@@ -39,3 +33,5 @@ Domain transfer, nameserver replacement, broad DNS replacement, and Cloudflare p
 - A restrictive CAA record that prevents Vercel certificate issuance: stop before DNS mutation and resolve it as a separately reviewed DNS change.
 - TLS or smoke failure: preserve the prior-record rollback evidence and do not report the domain complete.
 - Provider login required: pause at authentication rather than changing accounts or bypassing the login boundary.
+
+The only registered Cloudflare mutation is `cloudflare.upsert_dns`. Domain transfer, nameserver replacement, proxy enablement, broad replacement, and every Cloudflare rollback remain unsupported.

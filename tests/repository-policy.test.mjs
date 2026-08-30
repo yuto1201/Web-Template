@@ -58,12 +58,12 @@ describe("repository policy", () => {
     expect(template).not.toMatch(/^- Redacted receipt ID:/mu);
   });
 
-  it("documents receipt, claim marker, and finalized marker evidence without invented IDs", async () => {
+  it("documents the committed structured external-operation lifecycle", async () => {
     const workflow = await readFile(path.resolve("docs/workflow.md"), "utf8");
-    expect(workflow).toMatch(/preflight receipt ID[^.]*canonical `receiptId`/iu);
-    expect(workflow).toMatch(/execution claim reference[^.]*`<mutation-digest>\.claim\.json`/iu);
-    expect(workflow).toMatch(/finalized result receipt ID[^.]*same canonical `receiptId`/iu);
-    expect(workflow).toMatch(/`<mutation-digest>\.finalized\.json`/u);
+    expect(workflow).toMatch(/six unique committed references[^:]*: request, preflight, claim, mutation, result, and finalized/iu);
+    expect(workflow).toMatch(/preflight and result[^.]*share one redacted `receiptId`/iu);
+    expect(workflow).toMatch(/claim carries the fresh observation digest[^.]*mutation carries the provider idempotency-key digest/iu);
+    expect(workflow).toMatch(/committed `evidence\/external-operations\/`/u);
   });
 
   it("requires receipts for every approved authenticated operation on a new Mac", async () => {

@@ -37,7 +37,7 @@ afterAll(async () => {
 function liveInput() {
   return {
     schemaVersion: 1,
-    source: "codex-live-inspection",
+    source: "operator-live-inspection",
     cloudflare: {
       observedAt: "2026-08-21T07:30:00.000Z",
       accountId: canonicalAuthority.accounts.cloudflare.accountId,
@@ -341,5 +341,13 @@ describe("Cloudflare domain workflow", () => {
     const malformed = spawnSync(process.execPath, [workflowPath, "lint", "--output"], { cwd: repositoryRoot, encoding: "utf8" });
     expect(malformed.status).not.toBe(0);
     expect(malformed.stderr).toMatch(/Expected --name value options/u);
+  });
+
+  it("fails closed for legacy apply and rollback mutation commands", () => {
+    for (const command of ["apply-preflight", "rollback-preflight"]) {
+      const result = spawnSync(process.execPath, [workflowPath, command], { cwd: repositoryRoot, encoding: "utf8" });
+      expect(result.status, command).not.toBe(0);
+      expect(result.stderr, command).toMatch(/unsupported.*guarded adapter|provider-specific guarded adapter/iu);
+    }
   });
 });

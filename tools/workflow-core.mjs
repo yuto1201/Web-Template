@@ -1834,7 +1834,7 @@ export function validateCleanupPlan(value, root) {
 }
 
 /**
- * Re-derive every local cleanup fact from git. Remote PR/branch facts remain Codex-collected provider evidence.
+ * Re-derive every local cleanup fact from git. Remote PR/branch facts remain provider evidence collected by the active account-bound external operator.
  * @param {unknown} evidenceValue
  * @param {string} root
  */

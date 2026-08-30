@@ -40,6 +40,9 @@ async function run() {
   const [command, ...args] = process.argv.slice(2);
   const values = parseOptions(args);
   if (values.root) throw new Error("--root is not permitted; domain ownership is repository-bound.");
+  if (["apply-preflight", "rollback-preflight"].includes(command)) {
+    throw new Error(`Unsupported legacy mutation command: ${command}. Use the provider-specific guarded adapter with a registered operation.`);
+  }
   let result;
   if (command === "lint") result = validateDomainPolicy();
   else if (command === "plan") result = createDomainPlan(await readJson(required(values, "input")));

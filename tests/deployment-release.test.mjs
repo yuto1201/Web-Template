@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { rm } from "node:fs/promises";
 import { providerPlaceholders } from "../tools/template-core.mjs";
@@ -11,6 +13,7 @@ const activeFixture = await providerCoreModule({
   prefix: "release-active-",
 });
 const { validateReleaseEvidence, validateRemoteSchemaOrder } = activeFixture.module;
+const deploymentWorkflowPath = path.resolve("tools/deployment-workflow.mjs");
 
 afterAll(async () => {
   await rm(activeFixture.root, { recursive: true, force: true });
@@ -97,5 +100,13 @@ describe("Vercel release evidence", () => {
       contractRequiresExplicitApproval: true,
       productionReset: "forbidden",
     });
+  });
+
+  it("fails closed for legacy deployment authorization and release commands", () => {
+    for (const command of ["preflight", "verify-release"]) {
+      const result = spawnSync(process.execPath, [deploymentWorkflowPath, command], { cwd: path.resolve("."), encoding: "utf8" });
+      expect(result.status, command).not.toBe(0);
+      expect(result.stderr, command).toMatch(/unsupported.*guarded adapter|provider-specific guarded adapter/iu);
+    }
   });
 });

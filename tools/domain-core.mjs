@@ -104,7 +104,7 @@ const vercelObservationSchema = z.object({
 }).strict();
 const liveInputSchema = z.object({
   schemaVersion: z.literal(1),
-  source: z.literal("codex-live-inspection"),
+  source: z.literal("operator-live-inspection"),
   cloudflare: cloudflareSnapshotSchema,
   vercel: vercelObservationSchema,
 }).strict();

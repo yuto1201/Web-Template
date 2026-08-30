@@ -8,7 +8,7 @@ Create every migration through the repository-pinned CLI, then edit the generate
 npm exec -- supabase migration new describe_the_change
 ```
 
-Never edit a migration already applied to a hosted project. Add a forward-only recovery migration instead. Hosted link, push, reset, and SQL execution require an implementer or external-operator using account-bound authority: protected-main Supabase account and exact project ref, frozen Issue purpose and migration digests, fresh preflight/claim/result receipts, and exact-Head review for hosted migration or Auth-policy changes. A missing project ref fails closed.
+Never edit a migration already applied to a hosted project. Add a forward-only recovery migration instead. The registered hosted mutation is only `supabase.apply_migrations`: it requires an implementer or external-operator using the Supabase guarded adapter, the protected-main account and exact project ref, frozen Issue purpose, an ordered list of migration paths and content digests, fresh preflight/claim/postflight observations, provider idempotency, and exact-Head review. A missing project ref or changed migration byte fails closed. Hosted reset, arbitrary SQL execution, and Supabase Auth-policy mutation are unsupported operations; legacy CLI compatibility does not authorize them.
 
 ## Exposed schema checklist
 
@@ -29,7 +29,7 @@ Local API defaults are `public` and `graphql_public`, a 1,000-row response limit
 
 Private schemas, idempotency keys, revision columns, RPC functions, and audit tables are optional product patterns. They are not installed by this neutral baseline.
 
-Destructive hosted reset, schema drop, or down migration is not implied by a normal migration authorization. Use expand → deploy → contract; a contract step needs its own explicit authorization, exact target, reviewed recovery plan, and fresh provider evidence.
+Destructive hosted reset, schema drop, or down migration is not implied by a normal migration authorization and is not registered for execution. Use expand → deploy → contract; a future contract step needs a separately registered operation with explicit authorization, exact target, reviewed recovery plan, and fresh provider evidence.
 
 ## Verification
 

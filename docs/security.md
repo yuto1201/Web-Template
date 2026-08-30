@@ -13,10 +13,12 @@
 Claude and Codex have equal account-bound authority when acting as implementer or external-operator. The operator label does not authenticate a provider account, and normal application permission prompts do not replace repository authorization. Every repository-approved authenticated use must match the protected-main authority snapshot, Issue purpose, service mode, exact target, execution role, and guarded receipt flow described in [the authority runbook](authority.md).
 
 - GitHub, Supabase, Vercel, and Cloudflare are `repository-active` only within frozen Issue scope.
-- Linear is `explicit-user-purpose-only`; a missing explicit user purpose or null stable workspace/user/team ID denies both reads and writes.
+- Linear is `explicit-user-purpose-only`; no operation is registered, so every Linear read and write is denied even if stable IDs are later populated. A later Issue must add a strict operation before use.
 - Evaluator and auditor roles are read-only and cannot access secrets, execute operations, create receipts, or self-approve. Cross-model independence remains mandatory.
 - Account or target mismatch fails closed without automatic account, profile, team, or project switching.
-- High-risk writes rerun exact-Head review, and destructive actions require exact target and recovery evidence.
+- Supported high-risk writes rerun exact-Head review, and destructive actions require exact target and recovery evidence.
+- GitHub ruleset updates, Supabase Auth-policy updates, Vercel configuration or rollback, and Cloudflare rollback are explicitly unsupported and fail closed.
+- Mutation claims live in the Git common directory for sibling-worktree exclusion. Separate-clone safety requires a provider-enforced idempotency key; an operation without one cannot execute. Authorized reads are fresh-receipt checked but not permanently deduplicated.
 
 Repository checks detect actor-specific deny/delegation text and require the generated operator entrypoints to remain in parity. This is workflow enforcement, not an OS sandbox: processes sharing an OS user may reach the same filesystem, keychain, browser, CLI, API, or MCP credentials.
 
