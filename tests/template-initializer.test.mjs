@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   discoverOccurrences,
   initializeTemplate,
+  listTrackedFiles,
   normalizeInitializationConfig,
   projectTokens,
   readTemplateState,
@@ -13,6 +14,15 @@ import {
 
 /** @type {string[]} */
 const temporaryRoots = [];
+
+/** @param {string} root @param {string[]} args @returns {string} */
+function git(root, args) {
+  const command = spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true });
+  if (command.status !== 0 || command.error) {
+    throw new Error(`git ${args.join(" ")} failed: ${command.error?.message ?? command.stderr}`);
+  }
+  return command.stdout;
+}
 
 afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -117,6 +127,8 @@ async function sourceFixture() {
   }, null, 2)}\n`, "utf8");
   const initialState = { schemaVersion: 2, status: "template-source", project, occurrences: {} };
   await writeFile(path.join(root, "config", "template.json"), `${JSON.stringify(initialState, null, 2)}\n`, "utf8");
+  git(root, ["init", "--quiet"]);
+  git(root, ["add", "README.md", "package.json", "provider-notes.txt", "config/domain.json", "config/ownership.json", "config/template.json"]);
   initialState.occurrences = await discoverOccurrences(root, projectTokens(project));
   await writeFile(path.join(root, "config", "template.json"), `${JSON.stringify(initialState, null, 2)}\n`, "utf8");
   return root;
@@ -128,11 +140,7 @@ async function initializedVerifierFixture() {
   await mkdir(path.join(root, "tools"));
   await copyFile(path.resolve("tools/template-core.mjs"), path.join(root, "tools", "template-core.mjs"));
   await copyFile(path.resolve("tools/verify-template-instantiation.mjs"), path.join(root, "tools", "verify-template-instantiation.mjs"));
-  /** @param {string[]} args */
-  const git = (...args) => spawnSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true });
-  if (git("init", "--quiet").status !== 0 || git("add", "config/template.json", "package.json", "tools/template-core.mjs", "tools/verify-template-instantiation.mjs").status !== 0) {
-    throw new Error("Failed to create initialized verifier fixture.");
-  }
+  git(root, ["add", "config/template.json", "package.json", "tools/template-core.mjs", "tools/verify-template-instantiation.mjs"]);
   return root;
 }
 
@@ -186,16 +194,33 @@ function configuration() {
 }
 
 describe("template initialization", () => {
-  it("ignores Git administrative files while retaining ordinary project files in source scans", async () => {
+  it("scans tracked source files while excluding untracked files", async () => {
     const root = await sourceFixture();
     const project = sourceProject();
-    await writeFile(path.join(root, ".git"), `gitdir: /workspace/${project.resourceTargets.github.repository}/.git/worktrees/fixture\n`, "utf8");
-    await writeFile(path.join(root, "ordinary.txt"), `${project.resourceTargets.github.repository}\n`, "utf8");
+    await writeFile(path.join(root, "tracked.txt"), `${project.resourceTargets.github.repository}\n`, "utf8");
+    await writeFile(path.join(root, "untracked.txt"), `${project.resourceTargets.github.repository}\n`, "utf8");
+    git(root, ["add", "tracked.txt"]);
 
     const occurrences = await discoverOccurrences(root, projectTokens(project));
 
-    expect(occurrences.githubRepository).not.toHaveProperty(".git");
-    expect(occurrences.githubRepository).toHaveProperty("ordinary.txt", 1);
+    expect(listTrackedFiles(root)).toContain("tracked.txt");
+    expect(listTrackedFiles(root)).not.toContain("untracked.txt");
+    expect(occurrences.githubRepository).toHaveProperty("tracked.txt", 1);
+    expect(occurrences.githubRepository).not.toHaveProperty("untracked.txt");
+  });
+
+  it("explicitly excludes .superpowers even when a token-bearing file is tracked", async () => {
+    const root = await sourceFixture();
+    const project = sourceProject();
+    await mkdir(path.join(root, ".superpowers"));
+    await writeFile(path.join(root, ".superpowers", "review.md"), `${project.resourceTargets.github.repository}\n`, "utf8");
+    git(root, ["add", "--force", ".superpowers/review.md"]);
+
+    const occurrences = await discoverOccurrences(root, projectTokens(project));
+
+    expect(git(root, ["ls-files", "--cached"])).toContain(".superpowers/review.md");
+    expect(listTrackedFiles(root)).not.toContain(".superpowers/review.md");
+    expect(occurrences.githubRepository).not.toHaveProperty(".superpowers/review.md");
   });
 
   it("reports clean-room verification as not applicable for an initialized repository", async () => {

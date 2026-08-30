@@ -1,8 +1,8 @@
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { discoverOccurrences, projectTokens, readTemplateState } from "./template-core.mjs";
+import { discoverOccurrences, listTrackedFiles, projectTokens, readTemplateState } from "./template-core.mjs";
 
 /** @param {string} command @param {string[]} args @param {string} cwd @param {string} label */
 function run(command, args, cwd, label) {
@@ -15,13 +15,18 @@ function run(command, args, cwd, label) {
 
 /** @param {string} source @param {string} target */
 async function copyProject(source, target) {
-  const listing = run("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], source, "enumerate template files");
-  for (const relative of listing.split("\0").filter(Boolean)) {
+  const trackedFiles = listTrackedFiles(source);
+  for (const relative of trackedFiles) {
     const from = path.join(source, relative);
     const to = path.join(target, relative);
+    const metadata = await lstat(from);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) {
+      throw new Error(`Tracked template entry must be a regular file and not a symbolic link: ${relative}.`);
+    }
     await mkdir(path.dirname(to), { recursive: true });
     await copyFile(from, to);
   }
+  return trackedFiles;
 }
 
 const source = process.cwd();
@@ -39,7 +44,9 @@ if (sourceState.status === "initialized") {
   const temporaryParent = path.resolve(os.tmpdir());
   const target = await mkdtemp(path.join(temporaryParent, "web-starter-clean-room-"));
   try {
-    await copyProject(source, target);
+    const trackedFiles = await copyProject(source, target);
+    run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
+    run("git", ["add", "-A"], target, "index clean-room template files");
     run(process.execPath, [npmCli, "ci"], target, "install clean-room dependencies");
     const config = {
       schemaVersion: 2,
@@ -90,16 +97,15 @@ if (sourceState.status === "initialized") {
     await mkdir(inputDirectory, { recursive: true });
     const inputPath = path.join(inputDirectory, "template-init.json");
     await writeFile(inputPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-    const first = run(process.execPath, ["tools/initialize-template.mjs", "--config", inputPath], target, "first initialization");
-    const second = run(process.execPath, ["tools/initialize-template.mjs", "--config", inputPath], target, "idempotence check");
+    const first = run(process.execPath, [npmCli, "run", "template:init", "--", "--config", inputPath], target, "first initialization");
+    const second = run(process.execPath, [npmCli, "run", "template:init", "--", "--config", inputPath], target, "idempotence check");
     if (!first.includes('"status": "initialized"') || !second.includes('"status": "idempotent"')) {
       throw new Error("Initialization did not report initialized then idempotent status.");
     }
-    const leakage = await discoverOccurrences(target, projectTokens(sourceState.project));
+    const leakage = await discoverOccurrences(target, projectTokens(sourceState.project), trackedFiles);
     const leakedFiles = [...new Set(Object.values(leakage).flatMap((files) => Object.keys(files)))];
     if (leakedFiles.length > 0) throw new Error(`Template source values leaked into clean-room output: ${leakedFiles.join(", ")}`);
 
-    run("git", ["init", "--quiet"], target, "initialize clean-room git repository");
     run("git", ["add", "-A"], target, "stage clean-room files for policy inspection");
     run(process.execPath, [npmCli, "run", "workstation:doctor"], target, "verify clean-room workstation contract");
     run(process.execPath, [npmCli, "run", "check"], target, "run clean-room repository checks");

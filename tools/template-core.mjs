@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { lstat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const providerPlaceholders = Object.freeze({
@@ -377,23 +378,44 @@ export function projectTokens(project) {
   return Object.fromEntries(Object.entries(tokens).filter(([, token]) => typeof token === "string" && token.length > 0));
 }
 
-/** @param {string} root @param {string} [relative] @returns {Promise<string[]>} */
-async function textFiles(root, relative = "") {
-  const directory = path.join(root, relative);
-  const entries = await readdir(directory, { withFileTypes: true });
+/** @param {string} root @returns {string[]} */
+export function listTrackedFiles(root) {
+  const command = spawnSync("git", ["ls-files", "--cached", "-z"], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  if (command.status !== 0 || command.error || typeof command.stdout !== "string") {
+    throw new Error(`Unable to enumerate tracked template files with git ls-files.\n${command.error?.message ?? command.stderr ?? ""}`.trim());
+  }
+
   const files = [];
-  for (const entry of entries) {
-    const child = relative ? path.join(relative, entry.name) : entry.name;
-    if (entry.isDirectory()) {
-      if (!ignoredDirectories.has(entry.name)) files.push(...await textFiles(root, child));
-      continue;
-    }
-    if (entry.name === ".git") continue;
-    if (!entry.isFile() || ignoredFileExtensions.has(path.extname(entry.name).toLowerCase())) continue;
-    if ((entry.name === ".env" || entry.name.startsWith(".env.")) && entry.name !== ".env.example") continue;
-    const content = await readFile(path.join(root, child));
+  for (const relative of command.stdout.split("\0").filter(Boolean)) {
+    const segments = relative.split("/");
+    assert(
+      !path.isAbsolute(relative) && !/^[A-Za-z]:\//u.test(relative) && !relative.includes("\\") &&
+        path.posix.normalize(relative) === relative && segments.every((segment) => segment && segment !== "." && segment !== ".."),
+      `Tracked template path is unsafe: ${JSON.stringify(relative)}.`,
+    );
+    if (!segments.includes(".superpowers")) files.push(relative);
+  }
+  return files.toSorted();
+}
+
+/** @param {string} root @param {string[]} trackedFiles @returns {Promise<string[]>} */
+async function textFiles(root, trackedFiles) {
+  const files = [];
+  for (const relative of trackedFiles) {
+    const segments = relative.split("/");
+    if (segments.slice(0, -1).some((segment) => ignoredDirectories.has(segment))) continue;
+    const name = segments.at(-1) ?? "";
+    const metadata = await lstat(path.join(root, relative));
+    if (!metadata.isFile() || metadata.isSymbolicLink() || ignoredFileExtensions.has(path.extname(name).toLowerCase())) continue;
+    if ((name === ".env" || name.startsWith(".env.")) && name !== ".env.example") continue;
+    const content = await readFile(path.join(root, relative));
     if (content.includes(0)) continue;
-    files.push(child.split(path.sep).join("/"));
+    files.push(relative);
   }
   return files.toSorted();
 }
@@ -409,11 +431,11 @@ function count(content, token) {
   return matches;
 }
 
-/** @param {string} root @param {Record<string, string>} tokens */
-export async function discoverOccurrences(root, tokens) {
+/** @param {string} root @param {Record<string, string>} tokens @param {string[]} [trackedFiles] */
+export async function discoverOccurrences(root, tokens, trackedFiles = listTrackedFiles(root)) {
   /** @type {Record<string, Record<string, number>>} */
   const result = Object.fromEntries(Object.keys(tokens).map((key) => [key, {}]));
-  for (const relative of await textFiles(root)) {
+  for (const relative of await textFiles(root, trackedFiles)) {
     const content = await readFile(path.join(root, relative), "utf8");
     for (const [key, token] of Object.entries(tokens)) {
       const occurrences = count(content, token);

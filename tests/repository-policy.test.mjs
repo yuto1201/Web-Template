@@ -80,6 +80,23 @@ describe("repository policy", () => {
     expect(onboarding).toMatch(/run `npm ci` before template initialization/iu);
   });
 
+  it("exercises template initialization through the public package script", async () => {
+    const packageJson = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
+    const verifier = await readFile(path.resolve("tools/verify-template-instantiation.mjs"), "utf8");
+
+    expect(packageJson.scripts["template:init"]).toBe("node tools/initialize-template.mjs");
+    expect(verifier.match(/\[npmCli, "run", "template:init", "--", "--config", inputPath\]/gu)).toHaveLength(2);
+    expect(verifier).not.toContain('["tools/initialize-template.mjs", "--config", inputPath]');
+  });
+
+  it("uses the shared tracked-index file list for clean-room copies", async () => {
+    const verifier = await readFile(path.resolve("tools/verify-template-instantiation.mjs"), "utf8");
+
+    expect(verifier).toContain("const trackedFiles = listTrackedFiles(source);");
+    expect(verifier).not.toContain('"--others"');
+    expect(verifier).not.toContain('"--exclude-standard"');
+  });
+
   it("migrates normative policy to account-bound operator parity", async () => {
     const normativePaths = [
       "AGENTS.md",
