@@ -237,7 +237,7 @@ describe("workflow contracts", () => {
     expect(() => validate({ ...request, environment: "preview" })).toThrow(/environment/u);
     expect(() => validate({ ...request, target: { ...request.target, identifier: "resourceTargets.vercel" } })).toThrow(/target reference|identifier/u);
     for (const requiredField of ["intent", "reversibility", "recovery"]) {
-      const missing = { ...request };
+      const missing = /** @type {Record<string, any>} */ ({ ...request });
       delete missing[requiredField];
       expect(() => validate(missing), requiredField).toThrow();
     }

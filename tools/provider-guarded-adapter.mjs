@@ -135,7 +135,7 @@ export function executeGuardedProviderOperation(configuration) {
     async execute(input) {
       const loaded = await readExternalOperationRequest(input.root, input.requestPath);
       const request = loaded.request;
-      if (request.service !== undefined && request.service !== service) throw new Error("Guarded adapter service mismatch.");
+      if (request.authorization.service !== service) throw new Error("Guarded adapter service mismatch.");
       if (!request.operation.startsWith(`${service}.`)) throw new Error("Guarded adapter operation does not belong to its provider.");
       if (request.executionSurface !== providerClient.surface) throw new Error("Operation request surface does not match the provider adapter surface.");
       const rawRequest = JSON.parse(await readFile(path.resolve(input.root, input.requestPath), "utf8"));
@@ -228,10 +228,17 @@ export function executeGuardedProviderOperation(configuration) {
       };
       const resultReceipt = {
         schemaVersion: 1,
-        ...Object.fromEntries([
-          "receiptId", "requestId", "service", "operatorLabel", "executionRole", "executionSurface",
-          "authorityDigest", "issueContractDigest", "authorizationDigest", "requestDigest", "mutationDigest",
-        ].map((key) => [key, receipt[key]])),
+        receiptId: receipt.receiptId,
+        requestId: receipt.requestId,
+        service: receipt.service,
+        operatorLabel: receipt.operatorLabel,
+        executionRole: receipt.executionRole,
+        executionSurface: receipt.executionSurface,
+        authorityDigest: receipt.authorityDigest,
+        issueContractDigest: receipt.issueContractDigest,
+        authorizationDigest: receipt.authorizationDigest,
+        requestDigest: receipt.requestDigest,
+        mutationDigest: receipt.mutationDigest,
         preflight: {
           accountObservation: first.account,
           targetObservation: first.target,

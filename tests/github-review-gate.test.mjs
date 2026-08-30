@@ -66,6 +66,7 @@ function externalLifecycle() {
   const receiptId = "receipt-github-merge-1";
   const observationDigest = `sha256:${"1".repeat(64)}`;
   const idempotencyKeyDigest = `sha256:${"2".repeat(64)}`;
+  /** @type {Record<string, Record<string, any>>} */
   const artifacts = {
     [`${prefix}/request.json`]: { operation: "github.merge_pr", operatorLabel: "codex", executionRole: "external-operator" },
     [`${prefix}/preflight.json`]: { receiptId },
@@ -74,6 +75,7 @@ function externalLifecycle() {
     [`${prefix}/result.json`]: { receiptId },
     [`${prefix}/finalized.json`]: { outcome: "succeeded" },
   };
+  /** @param {string} name */
   const binding = (name) => ({ reference: `${prefix}/${name}.json`, digest: digestValue(artifacts[`${prefix}/${name}.json`]) });
   const change = {
     schemaVersion: 1,

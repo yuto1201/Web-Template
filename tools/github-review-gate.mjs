@@ -9,6 +9,7 @@ const shaPattern = /^[0-9a-f]{40}$/u;
 const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 const receiptIdPattern = /^receipt-[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const externalEvidencePathPattern = /^evidence\/external-operations\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.json$/u;
+/** @type {Record<string, string>} */
 const operationServices = {
   "github.read_issue": "github",
   "github.push_branch": "github",
@@ -49,7 +50,7 @@ function canonicalize(value) {
 /** @param {unknown} value */
 function digestValue(value) {
   const copy = value && typeof value === "object" && !Array.isArray(value) ? { ...value } : value;
-  if (copy && typeof copy === "object" && !Array.isArray(copy)) delete copy.digest;
+  if (copy && typeof copy === "object" && !Array.isArray(copy)) delete /** @type {Record<string, unknown>} */ (copy).digest;
   return `sha256:${createHash("sha256").update(JSON.stringify(canonicalize(copy)), "utf8").digest("hex")}`;
 }
 
@@ -64,7 +65,7 @@ function record(value, label) {
   return /** @type {Record<string, any>} */ (value);
 }
 
-/** @param {unknown} value */
+/** @param {unknown} value @returns {boolean} */
 function containsRawEmail(value) {
   if (typeof value === "string") return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
   if (Array.isArray(value)) return value.some(containsRawEmail);
@@ -108,7 +109,7 @@ function parseExternalChanges(body) {
       "mutation", "result", "finalized", "outcome",
     ], "Operation evidence");
     assert(change.schemaVersion === 1, "Operation evidence schemaVersion must be 1.");
-    assert(operationServices[change.operation] === change.service, "Operation evidence service does not match its registered operation.");
+    assert(operationServices[String(change.operation)] === change.service, "Operation evidence service does not match its registered operation.");
     assert(["codex", "claude"].includes(change.operatorLabel), "Operation evidence operator label is invalid.");
     assert(["implementer", "external-operator"].includes(change.executionRole), "Operation evidence execution role is invalid.");
     assert(["gpt", "claude"].includes(change.modelFamily), "Operation evidence model family is invalid.");
@@ -250,11 +251,13 @@ export function evaluateGitHubReviewGate({ event, changedPaths, diff, workflow, 
   if (externalChanges.length === 0) {
     assert(committedExternalPaths.length === 0, "Committed external-operation artifacts are missing structured external lifecycle evidence.");
   } else {
-    assert(typeof artifactLoader === "function", "Structured external changes require a committed artifact loader.");
+    if (typeof artifactLoader !== "function") throw new Error("Structured external changes require a committed artifact loader.");
+    /** @type {Set<string>} */
     const referencedPaths = new Set();
     for (const change of externalChanges) {
       assert(change.exactHeadSha === headSha, "External change exact Head SHA must match the current Head SHA.");
       assert(change.operatorLabel === evidence.primaryOperatorLabel && change.modelFamily === evidence.primaryModelFamily, "External change operator/model must match the reviewed primary implementation.");
+      /** @type {Record<string, Record<string, any>>} */
       const artifacts = {};
       for (const phase of ["request", "preflight", "claim", "mutation", "result", "finalized"]) {
         const binding = change[phase];

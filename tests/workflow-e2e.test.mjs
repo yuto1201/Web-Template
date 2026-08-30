@@ -52,7 +52,7 @@ describe("provider-free Issue workflow simulation", { timeout: 20_000 }, () => {
       await expect(stat(path.join(root, artifact))).resolves.toBeDefined();
     }
 
-    const state = JSON.parse(await readFile(path.join(root, ".artifacts", "issues", "42", "state.json"), "utf8"));
+    const state = /** @type {{transitions: Array<{current: string}>}} */ (JSON.parse(await readFile(path.join(root, ".artifacts", "issues", "42", "state.json"), "utf8")));
     expect(state.transitions.map((transition) => transition.current)).toEqual([
       "claimed",
       "in-progress",

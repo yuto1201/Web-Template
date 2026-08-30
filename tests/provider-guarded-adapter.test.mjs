@@ -48,6 +48,7 @@ function githubClient(authority, options = {}) {
     service: "github",
     surface: "github-cli",
     idempotencyMode: () => options.idempotency ?? "provider-enforced",
+    /** @param {{phase: string, request: Record<string, any>}} input */
     async collectObservation({ phase, request }) {
       return {
         account: { ...authority.accounts.github, ...authority.observations.github },
@@ -63,6 +64,7 @@ function githubClient(authority, options = {}) {
         },
       };
     },
+    /** @param {{request: Record<string, any>, idempotencyKey: string}} input */
     async execute({ request, idempotencyKey }) {
       executions += 1;
       if (request.operation === "github.read_issue") {

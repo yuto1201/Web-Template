@@ -1503,7 +1503,8 @@ function loadCommittedExternalEvidence(root, headShaValue, reference) {
 
 /** @param {any[]} changes @param {any} contract @param {any} packet @param {string} currentHeadSha @param {string} root */
 function validateExternalChangeLifecycle(changes, contract, packet, currentHeadSha, root) {
-  const declaredEvidencePaths = packet.changedPaths.filter((candidate) => candidate.startsWith("evidence/external-operations/"));
+  const changedPaths = /** @type {string[]} */ (packet.changedPaths);
+  const declaredEvidencePaths = changedPaths.filter((candidate) => candidate.startsWith("evidence/external-operations/"));
   if (changes.length === 0) {
     if (declaredEvidencePaths.length > 0) {
       throw new Error("Committed external-operation artifacts require structured external change lifecycle evidence.");
@@ -1512,8 +1513,9 @@ function validateExternalChangeLifecycle(changes, contract, packet, currentHeadS
   }
   const referencedPaths = new Set();
   for (const change of changes) {
-    const definition = operationDefinitions[change.operation];
-    const authorization = contract.externalAuthorizations.find(({ operation }) => operation === change.operation);
+    const operation = operationSchema.parse(change.operation);
+    const definition = operationDefinitions[operation];
+    const authorization = contract.externalAuthorizations.find(/** @param {any} candidate */ (candidate) => candidate.operation === operation);
     if (!authorization) throw new Error(`External change operation ${change.operation} is absent from the frozen Issue contract.`);
     if (change.service !== definition.service || change.accountRef !== authorization.accountRef || change.targetRef !== authorization.targetRef) {
       throw new Error(`External change ${change.operation} does not match its frozen service/account/target authorization.`);
@@ -1528,7 +1530,7 @@ function validateExternalChangeLifecycle(changes, contract, packet, currentHeadS
     const artifacts = {};
     for (const phase of phases) {
       const binding = change[phase];
-      if (!packet.changedPaths.includes(binding.reference)) {
+      if (!changedPaths.includes(binding.reference)) {
         throw new Error(`External change ${phase} reference is not a committed changed artifact.`);
       }
       referencedPaths.add(binding.reference);
