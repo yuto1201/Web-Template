@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Check out trusted base
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
 
       - name: Check out candidate
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
