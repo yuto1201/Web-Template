@@ -122,7 +122,7 @@ function refineExecutionPolicy(value, context) {
     ["lowRiskPathRules", "Low-risk"],
     ["highRiskPathRules", "High-risk"],
   ])) {
-    const ruleKeys = value[key].map((rule) => `${rule.type}:${rule.path}`);
+    const ruleKeys = value[key].map(/** @param {{type:string,path:string}} rule */ (rule) => `${rule.type}:${rule.path}`);
     if (new Set(ruleKeys).size !== ruleKeys.length) {
       context.addIssue({ code: "custom", path: [key], message: `${label} path rules must be unique.` });
     }
@@ -139,7 +139,7 @@ function refineExecutionPolicy(value, context) {
       context.addIssue({ code: "custom", path: [key], message: `${key} must be unique.` });
     }
   }
-  if (value.routineDeliveryOperations.some((operation) => value.highRiskOperations.includes(operation))) {
+  if (value.routineDeliveryOperations.some(/** @param {string} operation */ (operation) => value.highRiskOperations.includes(operation))) {
     context.addIssue({ code: "custom", message: "Routine and high-risk operations must not overlap." });
   }
 }

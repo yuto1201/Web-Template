@@ -96,7 +96,7 @@ describe("execution policy", () => {
   });
 
   it("treats the pre-migration protected policy as never low risk", () => {
-    const legacyPolicy = structuredClone(policy);
+    const legacyPolicy = /** @type {Record<string, any>} */ (structuredClone(policy));
     delete legacyPolicy.lowRiskPathRules;
     delete legacyPolicy.verificationPathRules;
     const parsed = parseProtectedExecutionPolicy(legacyPolicy);
