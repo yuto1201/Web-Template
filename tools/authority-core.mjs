@@ -141,6 +141,9 @@ const cloudflareObservationAccountSchema = z.object({
   if (!value.loginEmailSha256 && !value.loginEmail) {
     context.addIssue({ code: "custom", message: "Cloudflare account identity requires an email fingerprint or email." });
   }
+  if (value.loginEmailSha256 && value.loginEmail && emailFingerprint(value.loginEmail) !== value.loginEmailSha256) {
+    context.addIssue({ code: "custom", message: "Cloudflare email fingerprint does not match the raw email." });
+  }
 });
 const cloudflareObservationTargetSchema = cloudflareTargetSchema.extend({ zonePlan: z.enum(["Free", "Pro", "Business", "Enterprise"]) }).strict();
 const linearObservationAccountSchema = z.object({
@@ -156,6 +159,9 @@ const linearObservationAccountSchema = z.object({
 }).strict().superRefine((value, context) => {
   if (!value.userEmailSha256 && !value.userEmail) {
     context.addIssue({ code: "custom", message: "Linear account identity requires an email fingerprint or email." });
+  }
+  if (value.userEmailSha256 && value.userEmail && emailFingerprint(value.userEmail) !== value.userEmailSha256) {
+    context.addIssue({ code: "custom", message: "Linear email fingerprint does not match the raw email." });
   }
 });
 const linearObservationTargetSchema = linearTargetSchema;
@@ -356,7 +362,8 @@ export function evaluateAccountObservation(authorityValue, observationValue) {
     const previousIdentity = observedIdentity(observation.service, observation.previousAccount, observation.previousTarget);
     if (canonicalJson(currentIdentity.account) !== canonicalJson(previousIdentity.account)) throw new Error("account switch is not allowed.");
     if (canonicalJson(currentIdentity.target) !== canonicalJson(previousIdentity.target)) throw new Error("target switch is not allowed.");
-    evaluateIdentity(authority, observation.service, observation.previousAccount, observation.previousTarget);
+    const previous = evaluateIdentity(authority, observation.service, observation.previousAccount, observation.previousTarget);
+    current.warnings = [...new Set([...current.warnings, ...previous.warnings])].toSorted();
   }
   return { ok: true, accountRef: current.accountRef, targetRef: current.targetRef, warnings: current.warnings };
 }

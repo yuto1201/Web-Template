@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +15,10 @@ const canonicalAuthority = JSON.parse(readFileSync(path.join(root, "config", "ow
 
 function copy(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function fingerprint(value) {
+  return createHash("sha256").update(value.trim().toLowerCase(), "utf8").digest("hex");
 }
 
 function githubObservation(overrides = {}) {
@@ -43,6 +48,24 @@ function cloudflareObservation(overrides = {}) {
       ...overrides,
     },
     target: { ...canonicalAuthority.resourceTargets.cloudflare, zonePlan: "Free" },
+  };
+}
+
+function linearObservation(authority, overrides = {}) {
+  return {
+    service: "linear",
+    account: {
+      workspaceName: authority.accounts.linear.workspaceName,
+      workspaceSlug: authority.accounts.linear.workspaceSlug,
+      workspaceUrl: authority.accounts.linear.workspaceUrl,
+      workspaceId: authority.accounts.linear.workspaceId,
+      userName: authority.accounts.linear.userName,
+      userEmailSha256: authority.accounts.linear.userEmailSha256,
+      userId: authority.accounts.linear.userId,
+      role: authority.accounts.linear.requiredRole,
+      ...overrides,
+    },
+    target: { ...authority.resourceTargets.linear },
   };
 }
 
@@ -104,6 +127,18 @@ describe("canonical account authority", () => {
     expect(result.warnings).toContainEqual(expect.stringMatching(/public repository count/u));
   });
 
+  it("merges unique GitHub warnings from previous and current observations deterministically", () => {
+    const authority = parseAuthority(canonicalAuthority);
+    const observation = githubObservation({ publicRepositories: 10 });
+    observation.previousAccount = githubObservation({ displayName: "Previous display name", publicRepositories: 10 }).account;
+    observation.previousTarget = { ...canonicalAuthority.resourceTargets.github };
+
+    expect(evaluateAccountObservation(authority, observation).warnings).toEqual([
+      "GitHub display name differs from the configured observation.",
+      "GitHub public repository count differs from the configured observation.",
+    ]);
+  });
+
   it("rejects Cloudflare role and zone plan mismatches", () => {
     const authority = parseAuthority(canonicalAuthority);
     expect(() => evaluateAccountObservation(authority, cloudflareObservation({ role: "Administrator" }))).toThrow(/role/u);
@@ -111,6 +146,31 @@ describe("canonical account authority", () => {
     const wrongPlan = cloudflareObservation();
     wrongPlan.target.zonePlan = "Pro";
     expect(() => evaluateAccountObservation(authority, wrongPlan)).toThrow(/zone plan/u);
+  });
+
+  it("rejects contradictory Cloudflare raw email and supplied fingerprint", () => {
+    const configured = copy(canonicalAuthority);
+    configured.accounts.cloudflare.loginEmailSha256 = fingerprint("expected@example.test");
+    const authority = parseAuthority(configured);
+
+    expect(() => evaluateAccountObservation(authority, cloudflareObservation({
+      loginEmail: "contradictory@example.test",
+      loginEmailSha256: configured.accounts.cloudflare.loginEmailSha256,
+    }))).toThrow(/email fingerprint/u);
+  });
+
+  it("rejects contradictory Linear raw email and supplied fingerprint", () => {
+    const configured = copy(canonicalAuthority);
+    configured.accounts.linear.workspaceId = "workspace_123";
+    configured.accounts.linear.userId = "user_123";
+    configured.resourceTargets.linear.teamId = "team_123";
+    configured.accounts.linear.userEmailSha256 = fingerprint("expected@example.test");
+    const authority = parseAuthority(configured);
+
+    expect(() => evaluateAccountObservation(authority, linearObservation(configured, {
+      userEmail: "contradictory@example.test",
+      userEmailSha256: configured.accounts.linear.userEmailSha256,
+    }))).toThrow(/email fingerprint/u);
   });
 
   it("rejects Vercel team and plan mismatches", () => {
@@ -126,6 +186,15 @@ describe("canonical account authority", () => {
     switched.previousTarget = { ...canonicalAuthority.resourceTargets.github };
 
     expect(() => evaluateAccountObservation(authority, switched)).toThrow(/account switch/u);
+  });
+
+  it("rejects a target-only switch between preflight and result", () => {
+    const authority = parseAuthority(canonicalAuthority);
+    const switched = githubObservation();
+    switched.previousAccount = githubObservation().account;
+    switched.previousTarget = { ...canonicalAuthority.resourceTargets.github, repositoryId: 1340840342 };
+
+    expect(() => evaluateAccountObservation(authority, switched)).toThrow(/target switch/u);
   });
 
   it("requires an explicit single-line purpose and stable Linear IDs", () => {
