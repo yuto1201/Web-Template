@@ -16,9 +16,13 @@
 
 生成後に baseline の migration、Auth、deployment、domain 機能を変更または削除する場合は、`config/acceptance.json` の証拠パスと検証コマンドも同じ Issue で更新します。古い完了証拠を残したまま機能だけを外す変更は `npm run audit:trace` が拒否します。
 
+すべてのサイトで `/terms`（利用規約）と `/privacy`（プライバシーポリシー）、共通フッターのリンクを維持します。初期化直後は未確認のひな形で構いませんが、公開前には [法務ページのチェックリスト](legal-pages.md)を完了し、サービス固有の文面と運営者の確認結果を記録してください。
+
 ## 2. ローカル準備完了を確認する
 
 `npm run readiness` の `local.status` が `ready` なら、アプリ名、package slug、所有者設定、公開ホスト名、ローカルポートの整合が取れています。プロバイダーごとの `needs-codex` はライブ有効化が未完了という既存の機械可読 status 名であり、operator authority を Codex に限定する意味ではありません。
+
+local readinessはテーマ確定/UI-readyではありません。対象ユーザー・MVP確定後、app仕様Issueで [design-system.md](../specs/design-system.md)にdraftと代表画面の確認計画を記録します。Bootstrapはテーマ未確定でも完了可能ですが、その状態を明記します。次の承認済みUI Issueで確認用prototypeをPC/スマホでユーザーへ提示し、承認を記録してから残りのページUIへ共通設定を展開します。テーマと独立した準備/backend作業を止めず、テーマ専用Issueや毎ページの再承認は一律に追加しません。テーマ確認はライブ有効化・公開許可とも別です。
 
 `.env.example` を `.env.local` へコピーし、ブラウザ公開可能な Supabase URL と publishable key だけを設定します。service-role key やプロバイダートークンを `NEXT_PUBLIC_*` に設定してはいけません。
 
@@ -30,10 +34,10 @@ Claude と Codex は implementer / external-operator として同じ account-bou
 2. 個人 Supabase organization を確認し、プロジェクト作成または既存 project ref の採用を事前報告する。
 3. migration、RLS、grant、Auth redirect をローカルで検証してから、remote schema を expand → deploy → contract の順で適用する。
 4. 個人 Vercel scope/project を確認し、Development・Preview・Production の環境変数名を検証してから Preview を作成する。
-5. Preview の smoke と production preflight が通った後だけ Production を更新する。
+5. Preview の smoke、production preflight、[両法務ページの公開前確認](legal-pages.md)が完了した後だけ Production を更新する。公開 Preview を含め、ひな形のままサービス公開完了としない。
 6. Vercel にドメインを登録し、提示された最新の A/CNAME を読み取る。
 7. 個人 Cloudflare account/zone を確認し、対象1件だけを DNS-only で適用する。
-8. DNS、TLS、`/`、`/health` を確認してライブ準備完了を記録する。
+8. DNS、TLS、`/`、`/health`、ログアウト状態の `/terms` と `/privacy` およびフッターのリンクを確認してライブ準備完了を記録する。
 
 GitHub・Supabase・Vercel・Cloudflare は `repository-active` ですが、Issue scope を超えて使えるという意味ではありません。Linear は `explicit-user-purpose-only` で、現在は操作自体が未登録のため、目的や stable IDs が揃っても read/write とも fail closed です。高リスク write は production provider client が実装済みの場合に限り、exact-Head gate を再実行し、preflight → one-time claim → result/finalize の順に redacted receipt を残します。このリリースで production client があるのは GitHub Issue read と exact-Head squash merge だけです。
 

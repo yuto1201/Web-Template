@@ -6,6 +6,7 @@
 | --- | --- |
 | `product.md` | Template goals, users, and non-goals |
 | `architecture.md` | Runtime components and trust boundaries |
+| [design-system.md](design-system.md) | App-wide theme, representative confirmation and shared UI rules |
 | `account-bound-authority.md` | Shared Claude/Codex authority, account gates, and external-operation receipts |
 | `acceptance.md` | Template-level completion criteria |
 | `decisions.md` | Accepted decisions and supersession history |

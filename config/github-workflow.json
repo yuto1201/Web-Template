@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "operations": ["list_issues", "read_issue", "create_issue", "push_branch", "read_pr", "create_pr", "update_pr", "ready_pr", "read_checks"],
+  "requestTtlSeconds": 900,
+  "claimNamespace": "refs/notes/github-workflow/"
+}

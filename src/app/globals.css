@@ -432,11 +432,65 @@ footer p {
   font-weight: 700;
 }
 
-footer span {
+.legal-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  font-size: 0.9rem;
+}
+
+.legal-links a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  text-underline-offset: 0.3em;
+}
+
+.legal-document {
+  max-width: 48rem;
+  padding-block: 3rem 5rem;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+.legal-heading {
+  margin-block: 3rem 2rem;
+}
+
+.legal-heading h1 {
+  max-width: none;
+  font-size: clamp(2rem, 5vw, 3.25rem);
+  line-height: 1.4;
+  letter-spacing: -0.03em;
+}
+
+.legal-heading > p:last-child {
   color: var(--ink-soft);
-  font-family: var(--font-utility);
-  font-size: 0.68rem;
-  text-align: right;
+}
+
+.legal-draft {
+  padding: 1.5rem;
+  border-inline-start: 4px solid var(--violet);
+  background: var(--white);
+}
+
+.legal-draft p {
+  margin-bottom: 0;
+}
+
+.legal-sections section {
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.legal-sections h2 {
+  font-size: 1.3rem;
+  line-height: 1.6;
+}
+
+.legal-sections p {
+  color: var(--ink-soft);
 }
 
 .auth-shell {
