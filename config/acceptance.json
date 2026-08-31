@@ -78,6 +78,12 @@
       "title": "Required public Terms of Use and Privacy Policy pages",
       "evidence": ["src/app/terms/page.tsx", "src/app/privacy/page.tsx", "src/components/legal-document.tsx", "src/components/site-footer.tsx", "src/app/layout.tsx", "src/proxy.ts", "tests/legal-pages.test.tsx", "tests/legal-proxy.test.ts", "tests/e2e/legal-pages.spec.ts", "AGENTS.md", "specs/product.md", "specs/acceptance.md", "docs/legal-pages.md", "docs/activation.md"],
       "commands": ["audit:trace", "test", "test:e2e", "check", "template:verify"]
+    },
+    {
+      "issue": 39,
+      "title": "Site-wide theme confirmation before product UI implementation",
+      "evidence": ["specs/design-system.md", "specs/README.md", "specs/product.md", "specs/acceptance.md", "specs/decisions.md", "AGENTS.md", "README.md", "docs/workflow.md", "docs/activation.md", "tests/acceptance-trace.test.mjs"],
+      "commands": ["audit:trace", "check:docs", "test", "check", "template:verify"]
     }
   ]
 }

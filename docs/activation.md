@@ -22,6 +22,8 @@
 
 `npm run readiness` の `local.status` が `ready` なら、アプリ名、package slug、所有者設定、公開ホスト名、ローカルポートの整合が取れています。プロバイダーごとの `needs-codex` はライブ有効化が未完了という既存の機械可読 status 名であり、operator authority を Codex に限定する意味ではありません。
 
+local readinessはテーマ確定/UI-readyではありません。対象ユーザー・MVP確定後、app仕様Issueで [design-system.md](../specs/design-system.md)にdraftと代表画面の確認計画を記録します。Bootstrapはテーマ未確定でも完了可能ですが、その状態を明記します。次の承認済みUI Issueで確認用prototypeをPC/スマホでユーザーへ提示し、承認を記録してから残りのページUIへ共通設定を展開します。テーマと独立した準備/backend作業を止めず、テーマ専用Issueや毎ページの再承認は一律に追加しません。テーマ確認はライブ有効化・公開許可とも別です。
+
 `.env.example` を `.env.local` へコピーし、ブラウザ公開可能な Supabase URL と publishable key だけを設定します。service-role key やプロバイダートークンを `NEXT_PUBLIC_*` に設定してはいけません。
 
 ## 3. Account-bound operator がライブ接続を有効化する

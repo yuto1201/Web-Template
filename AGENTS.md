@@ -48,6 +48,8 @@ This is an operational repository policy, not OS-level or cryptographic isolatio
 
 ## Engineering rules
 
+- Before individual product-page UI implementation, confirm the app-wide theme with the user using a representative desktop/mobile preview and record the evidence in `specs/design-system.md`. Only the bounded confirmation prototype may precede confirmation; bootstrap can end theme-pending and independent setup/backend work can continue. Existing template styles are not an accepted app theme.
+- Reuse the confirmed theme through shared tokens/components across all pages, including login, legal and error states. Reconfirm material direction changes, not each page or minor adjustment; follow `specs/design-system.md` without adding a separate approval system.
 - Every generated website must retain public Terms of Use (`/terms`) and Privacy Policy (`/privacy`) pages and shared footer links. Before public release, replace unreviewed outlines with app-specific, owner-reviewed content; never invent operator/data practices or treat passing tests as legal approval. Follow `docs/legal-pages.md`.
 - Treat browser-exposed variables as public. Never place service-role keys or provider tokens in `NEXT_PUBLIC_*` values.
 - Keep server-only modules separate from client components.
