@@ -23,6 +23,8 @@ npm run check
 
 初期化の詳細と外部サービスの順序は [activation runbook](docs/activation.md) を参照してください。
 
+生成するすべてのサイトに、利用規約（`/terms`）とプライバシーポリシー（`/privacy`）、共通フッターのリンクを残します。初期状態は**未確認のひな形**です。公開前に運営者・サービス内容・実際のデータの扱いに合わせて確定してください。[文書の作成・公開前チェック](docs/legal-pages.md)を参照してください。ローカル検証成功は法務確認の完了を意味しません。
+
 Cursor Cloud ではローカル認証情報をコピーせず、生成済み環境と run-bound activation を使います。準備、read-only evaluator、個人アカウント照合、失効手順は [Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md) を参照してください。
 
 ## 作業PCをMacへ移す

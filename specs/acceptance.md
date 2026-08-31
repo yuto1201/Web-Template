@@ -4,6 +4,8 @@ The template is complete only when all of the following are evidenced:
 
 - A fresh clone installs and passes the documented local checks on the pinned Node/npm major versions.
 - The Next.js application builds with strict TypeScript and keeps server-only values out of browser bundles.
+- Terms of Use (`/terms`) and Privacy Policy (`/privacy`) are public, provider-independent pages linked from the shared application footer. Route presence, anonymous access, keyboard navigation and mobile/desktop readability have regression coverage.
+- Template legal outlines are visibly unreviewed. Generated websites must replace them with app-specific, owner-reviewed content before public release; bootstrap or automated-test success is not legal approval.
 - Supabase migrations apply in order to a clean database and pass RLS/grant tests for anonymous and authenticated roles.
 - Sign-in, sign-out, refresh, and protected-route behavior work with real Supabase sessions.
 - Pull requests receive CI and exact-Head cross-model review before squash merge: normal risk needs one different observed family, while high risk needs approved OpenAI and Anthropic family results.

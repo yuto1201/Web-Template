@@ -19,6 +19,7 @@ The repository owner creates a new repository from this GitHub template, fills i
 
 ## Required qualities
 
+- Every generated website includes public Terms of Use at `/terms` and a Privacy Policy at `/privacy`, reachable from a shared footer without login. The template ships explicit unreviewed customization outlines; each app must finalize them against its actual service/data practices before public release.
 - Secure by default, especially at browser/server and anonymous/authenticated boundaries
 - Reproducible on Windows and GitHub Actions
 - Issue-driven and resumable after interruption

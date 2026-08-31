@@ -48,6 +48,7 @@ This is an operational repository policy, not OS-level or cryptographic isolatio
 
 ## Engineering rules
 
+- Every generated website must retain public Terms of Use (`/terms`) and Privacy Policy (`/privacy`) pages and shared footer links. Before public release, replace unreviewed outlines with app-specific, owner-reviewed content; never invent operator/data practices or treat passing tests as legal approval. Follow `docs/legal-pages.md`.
 - Treat browser-exposed variables as public. Never place service-role keys or provider tokens in `NEXT_PUBLIC_*` values.
 - Keep server-only modules separate from client components.
 - Database changes are forward-only Supabase migrations with explicit RLS and grants.

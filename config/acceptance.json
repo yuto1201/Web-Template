@@ -72,6 +72,12 @@
       "title": "Risk-tiered verification and bounded delivery cadence",
       "evidence": ["specs/risk-tiered-verification.md", "config/execution.json", "config/workflow.json", "tools/execution-policy.mjs", "tools/ci-change-plan.mjs", "tools/github-review-gate.mjs", "tools/workflow-core.mjs", ".github/workflows/ci.yml", "docs/workflow.md", "docs/verification.md", "tests/execution-policy.test.mjs", "tests/ci-change-plan.test.mjs", "tests/github-review-gate.test.mjs", "tests/workflow-gate.test.mjs", "tests/repository-policy.test.mjs"],
       "commands": ["check:fast", "check:docs", "policy", "test", "check"]
+    },
+    {
+      "issue": 37,
+      "title": "Required public Terms of Use and Privacy Policy pages",
+      "evidence": ["src/app/terms/page.tsx", "src/app/privacy/page.tsx", "src/components/legal-document.tsx", "src/components/site-footer.tsx", "src/app/layout.tsx", "src/proxy.ts", "tests/legal-pages.test.tsx", "tests/legal-proxy.test.ts", "tests/e2e/legal-pages.spec.ts", "AGENTS.md", "specs/product.md", "specs/acceptance.md", "docs/legal-pages.md", "docs/activation.md"],
+      "commands": ["audit:trace", "test", "test:e2e", "check", "template:verify"]
     }
   ]
 }
