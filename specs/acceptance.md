@@ -4,6 +4,8 @@ The template is complete only when all of the following are evidenced:
 
 - A fresh clone installs and passes the documented local checks on the pinned Node/npm major versions.
 - The Next.js application builds with strict TypeScript and keeps server-only values out of browser bundles.
+- Generated repositories retain [design-system.md](design-system.md), an initially unconfirmed app-theme record and a representative desktop/mobile confirmation step before individual product-page UI implementation. A bounded nonfunctional preview is allowed before confirmation; bootstrap and independent backend work are not blocked by theme-pending status.
+- Shared tokens/components keep all pages, including login, legal and error states, consistent with the user-confirmed direction. Major direction changes require reconfirmation; minor adjustments do not. Trace/link/clean-room checks and model review do not substitute for genuine visual approval or public-release readiness.
 - Terms of Use (`/terms`) and Privacy Policy (`/privacy`) are public, provider-independent pages linked from the shared application footer. Route presence, anonymous access, keyboard navigation and mobile/desktop readability have regression coverage.
 - Template legal outlines are visibly unreviewed. Generated websites must replace them with app-specific, owner-reviewed content before public release; bootstrap or automated-test success is not legal approval.
 - Supabase migrations apply in order to a clean database and pass RLS/grant tests for anonymous and authenticated roles.

@@ -12,7 +12,7 @@ describe("acceptance trace", () => {
     });
 
     expect(command.status, command.stderr).toBe(0);
-    expect(JSON.parse(command.stdout)).toMatchObject({ ok: true, issues: 13 });
+    expect(JSON.parse(command.stdout)).toMatchObject({ ok: true, issues: 14 });
   });
 
   it("retains legal surfaces and their regression checks in the trace", async () => {
@@ -31,5 +31,23 @@ describe("acceptance trace", () => {
       "tests/e2e/legal-pages.spec.ts",
     ]));
     expect(legal?.commands).toEqual(expect.arrayContaining(["audit:trace", "test", "test:e2e"]));
+  });
+
+  it("requires theme decisions and their workflow entrypoints in the audited evidence", async () => {
+    const trace = JSON.parse(await readFile("config/acceptance.json", "utf8"));
+    const theme = trace.issues.find(/** @param {{ issue: number }} entry */ (entry) => entry.issue === 39);
+
+    expect(theme?.evidence).toEqual(expect.arrayContaining([
+      "specs/design-system.md",
+      "specs/README.md",
+      "specs/product.md",
+      "specs/acceptance.md",
+      "specs/decisions.md",
+      "AGENTS.md",
+      "README.md",
+      "docs/workflow.md",
+      "docs/activation.md",
+    ]));
+    expect(theme?.commands).toEqual(expect.arrayContaining(["audit:trace", "check", "template:verify"]));
   });
 });

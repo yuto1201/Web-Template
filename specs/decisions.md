@@ -71,3 +71,13 @@ Decisions are append-only. To change one, add a new entry that explicitly supers
 - Content boundary: the template provides explicitly unreviewed Japanese customization outlines, not binding service terms or a compliance certification. Actual operator/contact details, data practices and dates must be confirmed for each application before public release. Unknown values are not invented from repository account identifiers.
 - Verification: fast tests check required routes, shared layout links and the exact public-route boundary; browser tests cover navigation, accessibility and mobile layout. These tests do not determine legal adequacy or automatically authorize publication. Follow `docs/legal-pages.md` for the owner review checklist.
 - Scope: no consent database, cookie banner, billing system, legal version-management subsystem or provider-policy change is introduced.
+
+## D-010: Confirm the site-wide theme once before page implementation
+
+- Status: accepted
+- Date: 2026-08-31
+- Decision: after target users/MVP are known, capture the application theme in `specs/design-system.md`. Bootstrap records a draft and preview plan; the next authorized UI Issue may build a bounded nonfunctional representative preview before confirmation. Record genuine desktop/mobile user confirmation before implementing the remaining pages. Existing template CSS/fonts are an unapproved baseline.
+- Consistency: use shared tokens/components for all surfaces, including login, legal and error states. Reconfirm material direction changes, not every page, token addition/rename or minor adjustment. Keep theme-independent work moving within its authorized scope.
+- Reason: early visual alignment prevents page-by-page drift without creating repeated approval waits. Claude and Grok consultations favored a short specification and existing workflow integration over a new theme JSON/CI system.
+- Evidence boundary: confirmation records reference the specification revision, representative artifacts, date and actual user approval. Local readiness, tests and model review are not visual approval or release authorization. This accepted workflow decision does not itself accept an application's theme.
+- Scope: no template redesign, new CI gate, mandatory design platform, additional theme-only Issue or change to risk/account/review policy.
