@@ -84,6 +84,12 @@
       "title": "Site-wide theme confirmation before product UI implementation",
       "evidence": ["specs/design-system.md", "specs/README.md", "specs/product.md", "specs/acceptance.md", "specs/decisions.md", "AGENTS.md", "README.md", "docs/workflow.md", "docs/activation.md", "tests/acceptance-trace.test.mjs"],
       "commands": ["audit:trace", "check:docs", "test", "check", "template:verify"]
+    },
+    {
+      "issue": 41,
+      "title": "Account-bound routine GitHub workflow transport",
+      "evidence": ["config/github-workflow.json", "tools/github-workflow-core.mjs", "tools/github-workflow-client.mjs", "tools/github-workflow-git.mjs", "tools/github-workflow.mjs", "tests/github-workflow.test.mjs", "tests/github-workflow-client.test.mjs", "docs/github-workflow.md", "docs/authority.md", "docs/workflow.md", "specs/decisions.md", "AGENTS.md"],
+      "commands": ["audit:trace", "test", "check", "template:verify"]
     }
   ]
 }

@@ -14,7 +14,7 @@ The template is complete only when all of the following are evidenced:
 - Claude and Codex have equal account-bound authority in implementer/external-operator roles, while evaluator/auditor roles remain read-only and cannot self-approve.
 - Operator label, execution role, model family, account identity, service mode, and exact target are recorded and validated as independent values.
 - Provider authorization is derived from protected `main`, frozen to an Issue purpose and exact target, and cannot be changed by candidate-branch retargeting.
-- GitHub, Supabase, Vercel, and Cloudflare remain repository-active only within Issue scope; Linear denies every read and write because no operation is registered, even if an explicit user purpose and stable IDs are later supplied.
+- GitHub, Supabase, Vercel, and Cloudflare remain repository-active only within declared scope; D-011 permits bounded approved pre-Issue GitHub intake, while other operations remain Issue-bound. Linear denies every read and write because no operation is registered, even if an explicit user purpose and stable IDs are later supplied.
 - Preflight receipts, one-time execution claims, redacted results, and finalization prove pre/post account and target continuity without automatic switching or ambiguous retries.
 - Every repository-content-derived high-risk write reruns the authoritative exact-Head gate; destructive actions also prove exact scope and recovery.
 - Cursor Cloud retains its generated environment, hooks, read-only evaluators, surface/model/risk separation, and run-bound provider activation; it uses the same protected personal accounts rather than weakening Claude/Codex parity.

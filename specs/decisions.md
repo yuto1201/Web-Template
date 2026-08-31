@@ -81,3 +81,13 @@ Decisions are append-only. To change one, add a new entry that explicitly supers
 - Reason: early visual alignment prevents page-by-page drift without creating repeated approval waits. Claude and Grok consultations favored a short specification and existing workflow integration over a new theme JSON/CI system.
 - Evidence boundary: confirmation records reference the specification revision, representative artifacts, date and actual user approval. Local readiness, tests and model review are not visual approval or release authorization. This accepted workflow decision does not itself accept an application's theme.
 - Scope: no template redesign, new CI gate, mandatory design platform, additional theme-only Issue or change to risk/account/review policy.
+
+## D-011: Separate routine GitHub collaboration from infrastructure evidence
+
+- Status: accepted
+- Date: 2026-08-31
+- Supersedes: the blanket Issue-before-any-authenticated-read interpretation of D-007 for the bounded GitHub intake operations only; other authority and risk decisions remain in force.
+- Decision: provide a protected-main-policy, same-account GitHub collaboration lane for approved proposal intake, bounded observations, exact Issue branch push and draft PR lifecycle. Preserve the existing guarded exact-Head squash merge and infrastructure evidence lane.
+- Reason: ordinary push/PR iterations must not require source evidence-only commits or a permanent raw-CLI exception. Claude/Grok consultation identified the bootstrapping and repeated-write gap; lookup-before-create alone does not prevent duplicate attempts across clones.
+- Safety: freeze approved input, open Issue content, protected authority and exact Head; use atomic shared local claims and create-only provider refs for one-use fencing. No automatic retry, account switch, claim cleanup, main push, non-fast-forward update or candidate self-authorization. Ready retains authoritative reviews; merge remains separate.
+- Limits: proposal approval/model identity are operational attestations, not cryptographic proof. Metadata API races are detected by fresh/post-state observations, not an atomic transaction. Ambiguous claimed writes require read-only inspection and separately authorized recovery. See `docs/github-workflow.md`.
