@@ -17,7 +17,7 @@ describe("acceptance trace", () => {
 
   it("retains legal surfaces and their regression checks in the trace", async () => {
     const trace = JSON.parse(await readFile("config/acceptance.json", "utf8"));
-    const legal = trace.issues.find((entry) => entry.issue === 37);
+    const legal = trace.issues.find(/** @param {{ issue: number }} entry */ (entry) => entry.issue === 37);
 
     expect(legal?.evidence).toEqual(expect.arrayContaining([
       "src/app/terms/page.tsx",
