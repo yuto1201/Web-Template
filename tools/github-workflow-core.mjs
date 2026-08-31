@@ -42,7 +42,8 @@ const policySchema = z.object({ schemaVersion: z.literal(1), operations: z.array
 const requestSchema = z.object({
   schemaVersion: z.literal(1), requestId: z.uuid(), intent: z.unknown(),
   mainSha: sha, authorityDigest: digest, policyDigest: digest,
-  bindingDigest: digest.nullable(), issuedAt: z.iso.datetime(), expiresAt: z.iso.datetime(),
+  binding: z.object({ issueDigest: digest, pullDigest: digest.nullable() }).strict().nullable(),
+  issuedAt: z.iso.datetime(), expiresAt: z.iso.datetime(),
 }).strict();
 
 /** @typedef {z.infer<typeof commonSchema> & z.infer<typeof operationSchema>} Intent */
@@ -151,7 +152,7 @@ async function conditions(root, client, context, intent) {
     if (intent.operation === "ready_pr" && !pull.draft) throw new Error("PR is already ready; inspect instead of replaying.");
     pullDigest = digestValue(pull);
   }
-  return digestValue({ issueDigest, pullDigest });
+  return { issueDigest, pullDigest };
 }
 
 /** @param {Awaited<ReturnType<Client['pull']>>} pull @param {ReturnType<typeof protectedContext>} context @param {{branch:string,headSha:string,prNumber?:number}} inputs */
@@ -166,9 +167,9 @@ export async function planGitHubWorkflow(root, value) {
   const context = protectedContext(root, intent); // No credentials until protected policy authorizes the shape.
   const client = await createGitHubWorkflowClient();
   const identity = await observe(client, context);
-  const bindingDigest = await conditions(root, client, context, intent);
+  const binding = await conditions(root, client, context, intent);
   const issuedAt = new Date();
-  const request = { schemaVersion: /** @type {const} */ (1), requestId: randomUUID(), intent, mainSha: context.commitSha, authorityDigest: context.digest, policyDigest: context.policyDigest, bindingDigest, issuedAt: issuedAt.toISOString(), expiresAt: new Date(issuedAt.getTime() + context.policy.requestTtlSeconds * 1000).toISOString() };
+  const request = { schemaVersion: /** @type {const} */ (1), requestId: randomUUID(), intent, mainSha: context.commitSha, authorityDigest: context.digest, policyDigest: context.policyDigest, binding, issuedAt: issuedAt.toISOString(), expiresAt: new Date(issuedAt.getTime() + context.policy.requestTtlSeconds * 1000).toISOString() };
   const directory = await journal(root);
   await immutable(path.join(directory, `request-${request.requestId}.json`), request);
   await immutable(path.join(directory, `preflight-${request.requestId}.json`), { requestId: request.requestId, requestDigest: digestValue(request), ...identity, issuedAt: request.issuedAt });
@@ -203,25 +204,27 @@ export async function runGitHubWorkflow(root, value) {
   if (digestValue(saved) !== digestValue(request) || preflight.requestDigest !== digestValue(request)) throw new Error("Request differs from the immutable approved plan.");
   const client = await createGitHubWorkflowClient();
   await observe(client, context);
-  if (await conditions(root, client, context, request.intent) !== request.bindingDigest) throw new Error("Issue or PR contract changed after planning.");
+  if (digestValue(await conditions(root, client, context, request.intent)) !== digestValue(request.binding)) throw new Error("Issue or PR contract changed after planning.");
   if (request.intent.operation === "ready_pr") await runAuthoritativePremergeGate(root, request.intent.inputs.issue);
   const semantic = semanticDigest(context, request.intent);
   const attemptId = randomUUID();
   let claimed = false;
   try {
     if (isWrite(request.intent)) {
+      currentContext(root, request);
       // Atomic local create protects worktrees; provider create-only ref also protects independent clones.
       try { await immutable(path.join(directory, `claim-${semantic.slice(7)}.json`), { requestId: request.requestId, attemptId, semantic, createdAt: new Date().toISOString() }); }
       catch { throw new Error("Operation is already claimed or journal is unsafe; inspect only, do not retry."); }
       claimed = true;
       const ref = `${context.policy.claimNamespace}${semantic.slice(7)}`;
+      currentContext(root, request);
       const remoteClaim = await client.claim(context.repository, ref, context.commitSha);
       if (remoteClaim.ref !== ref || remoteClaim.sha !== context.commitSha) throw new Error("Provider claim was not confirmed.");
       currentContext(root, request);
       await observe(client, context);
-      if (await conditions(root, client, context, request.intent) !== request.bindingDigest) throw new Error("Issue or PR changed before execution.");
+      if (digestValue(await conditions(root, client, context, request.intent)) !== digestValue(request.binding)) throw new Error("Issue or PR changed before execution.");
     }
-    const result = await execute(root, client, context, request.intent);
+    const result = await execute(root, client, context, request);
     await observe(client, context);
     await immutable(path.join(directory, `result-${attemptId}.json`), { requestId: request.requestId, operation: request.intent.operation, semantic, status: "observed", resultDigest: digestValue(result), finishedAt: new Date().toISOString() });
     return result;
@@ -231,8 +234,11 @@ export async function runGitHubWorkflow(root, value) {
   }
 }
 
-/** @param {string} root @param {Client} client @param {ReturnType<typeof protectedContext>} context @param {Intent} intent */
-async function execute(root, client, context, intent) {
+/** @param {string} root @param {Client} client @param {ReturnType<typeof protectedContext>} context @param {Request} request */
+async function execute(root, client, context, request) {
+  // Network observations and review gates may have consumed the request's remaining lifetime.
+  currentContext(root, request);
+  const intent = request.intent;
   const repository = context.repository;
   switch (intent.operation) {
     case "list_issues": return client.listIssues(repository);
@@ -261,15 +267,17 @@ async function execute(root, client, context, intent) {
     case "ready_pr": {
       const pull = await client.pull(repository, intent.inputs.prNumber);
       assertPull(pull, context, intent.inputs);
+      if (digestValue(pull) !== request.binding?.pullDigest) throw new Error("PR changed from the frozen readiness plan.");
       await runAuthoritativePremergeGate(root, intent.inputs.issue);
       if (git(root, ["rev-parse", "HEAD"]) !== intent.inputs.headSha) throw new Error("Head changed during authoritative review gate.");
       const fresh = await client.pull(repository, intent.inputs.prNumber);
       assertPull(fresh, context, intent.inputs);
-      if (fresh.nodeId !== pull.nodeId || workflowContentDigest(fresh) !== workflowContentDigest(pull)) throw new Error("PR changed during authoritative review gate.");
+      if (digestValue(fresh) !== request.binding?.pullDigest) throw new Error("PR changed during authoritative review gate.");
+      currentContext(root, request);
       await client.readyPull(repository, fresh.nodeId);
       const observed = await client.pull(repository, intent.inputs.prNumber);
       assertPull(observed, context, intent.inputs);
-      if (observed.draft) throw new Error("Ready post-state mismatch.");
+      if (observed.draft || digestValue({ ...observed, draft: true }) !== request.binding?.pullDigest) throw new Error("Ready post-state mismatch.");
       return observed;
     }
   }

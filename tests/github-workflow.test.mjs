@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile, readdir, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { planGitHubWorkflow, runGitHubWorkflow, workflowContentDigest } from "../tools/github-workflow-core.mjs";
 
 const mocks = vi.hoisted(() => ({ factory: vi.fn(), gate: vi.fn() }));
@@ -75,6 +75,7 @@ function input(operation, inputs, extra = {}) {
 
 describe("guarded daily GitHub workflow", () => {
   beforeEach(() => { mocks.factory.mockReset(); mocks.gate.mockReset(); });
+  afterEach(() => vi.restoreAllMocks());
 
   it("refuses candidate-only policy before opening any provider connection", async () => {
     const f = await fixture(false);
@@ -220,6 +221,79 @@ describe("guarded daily GitHub workflow", () => {
     const resultFile = records.find((name) => name.startsWith("result-"));
     if (!resultFile) throw new Error("Missing result");
     expect(JSON.parse(await readFile(path.join(f.root, ".git/github-workflow-v1", resultFile), "utf8")).status).toBe("ambiguous-inspect-only");
+  });
+
+  it.each([{ at: 1, claims: 0 }, { at: 2, claims: 1 }])("rechecks expiry after slow observation $at before the next side effect", async ({ at, claims }) => {
+    const f = await fixture();
+    const request = await planGitHubWorkflow(f.root, input("create_issue", { title: "Approved", body: "AC-1" }));
+    const actual = await f.client.observe();
+    let observations = 0;
+    f.client.observe.mockImplementation(async () => {
+      observations += 1;
+      if (observations === at) vi.spyOn(Date, "now").mockReturnValue(Date.parse(request.expiresAt) + 1);
+      return actual;
+    });
+    await expect(runGitHubWorkflow(f.root, request)).rejects.toThrow();
+    expect(f.client.claim).toHaveBeenCalledTimes(claims);
+    expect(f.client.createIssue).not.toHaveBeenCalled();
+  });
+
+  it("rechecks protected main after slow post-claim observations", async () => {
+    const f = await fixture();
+    const request = await planGitHubWorkflow(f.root, input("create_issue", { title: "Approved", body: "AC-1" }));
+    const actual = await f.client.observe();
+    let observations = 0;
+    f.client.observe.mockImplementation(async () => {
+      observations += 1;
+      if (observations === 2) git(f.root, ["update-ref", "refs/heads/main", f.headSha]);
+      return actual;
+    });
+    await expect(runGitHubWorkflow(f.root, request)).rejects.toThrow();
+    expect(f.client.claim).toHaveBeenCalledTimes(1);
+    expect(f.client.createIssue).not.toHaveBeenCalled();
+  });
+
+  it("rechecks expiry after the final ready gate before changing PR state", async () => {
+    const f = await fixture();
+    f.state.remoteHead = f.headSha;
+    await f.client.createPull("fixture-user/app", { branch: "codex/41-workflow", title: "Initial", body: "Closes #41" });
+    const request = await planGitHubWorkflow(f.root, input("ready_pr", { issue: 41, branch: "codex/41-workflow", headSha: f.headSha, prNumber: 51 }));
+    let gates = 0;
+    mocks.gate.mockImplementation(async () => {
+      gates += 1;
+      if (gates === 2) vi.spyOn(Date, "now").mockReturnValue(Date.parse(request.expiresAt) + 1);
+      return { ok: true };
+    });
+    await expect(runGitHubWorkflow(f.root, request)).rejects.toThrow();
+    expect(f.client.readyPull).not.toHaveBeenCalled();
+  });
+
+  it("rejects unapproved PR content changed during the ready mutation", async () => {
+    const f = await fixture();
+    f.state.remoteHead = f.headSha;
+    await f.client.createPull("fixture-user/app", { branch: "codex/41-workflow", title: "Initial", body: "Closes #41" });
+    const request = await planGitHubWorkflow(f.root, input("ready_pr", { issue: 41, branch: "codex/41-workflow", headSha: f.headSha, prNumber: 51 }));
+    f.client.readyPull.mockImplementation(async () => {
+      Object.assign(f.state.pull, { draft: false, body: "Unapproved concurrent change" });
+      return { nodeId: "PR_51", draft: false };
+    });
+    await expect(runGitHubWorkflow(f.root, request)).rejects.toThrow(/inspect provider state/i);
+    expect(f.client.readyPull).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps readiness bound to planned content even if its first final read observes drift", async () => {
+    const f = await fixture();
+    f.state.remoteHead = f.headSha;
+    await f.client.createPull("fixture-user/app", { branch: "codex/41-workflow", title: "Initial", body: "Closes #41" });
+    const request = await planGitHubWorkflow(f.root, input("ready_pr", { issue: 41, branch: "codex/41-workflow", headSha: f.headSha, prNumber: 51 }));
+    let reads = 0;
+    f.client.pull.mockImplementation(async () => {
+      reads += 1;
+      if (reads === 3) f.state.pull.body = "Closes #41\nUnapproved replacement";
+      return structuredClone(f.state.pull);
+    });
+    await expect(runGitHubWorkflow(f.root, request)).rejects.toThrow(/inspect provider state/i);
+    expect(f.client.readyPull).not.toHaveBeenCalled();
   });
 
   it("never retries an ambiguous mutation and records post-state failures", async () => {
