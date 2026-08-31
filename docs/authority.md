@@ -23,7 +23,7 @@ Model-family values are review metadata, not authenticated principals. The gate 
 
 `config/ownership.json` schema v2 is the canonical account, service-policy, resource-target, and warning-only observation registry. Names and IDs are public identifiers, not proof of current authentication. Runtime authorization uses the version loaded from the protected `main` commit recorded in the frozen Issue contract. A candidate branch that changes ownership cannot use its candidate bytes to authorize its own push, PR, merge, deployment, or cleanup; those changes become usable only by a later Issue after reviewed merge to protected `main`.
 
-- GitHub, Supabase, Vercel, and Cloudflare are `repository-active`. This means they are eligible for repository work, not generally authorized. Every authenticated read or write still needs an Issue-scoped declared purpose, a frozen account reference, an exact target, environment and operation constraints, and any required exact-Head review.
+- GitHub, Supabase, Vercel, and Cloudflare are `repository-active`. This means they are eligible for repository work, not generally authorized. Every authenticated read or write still needs a declared purpose, a frozen account reference, an exact target, operation constraints, and any required exact-Head review. Routine GitHub intake has the narrowly defined pre-Issue proposal/read exception in [GitHub collaboration](github-workflow.md); other operations retain Issue-scoped authorization.
 - Linear is `explicit-user-purpose-only`. Account registration alone denies all authenticated reads and writes. The user must explicitly state the purpose, the Issue must freeze that purpose as `user-directed`, and protected-main authority must already contain non-null stable workspace, user, and team IDs. No Linear operation is registered, so all Linear access remains denied even after those IDs are populated. A later Issue must register an exact operation before Linear can be used.
 - `user-directed` is invalid for repository-active services and cannot bypass normal Issue scope.
 
@@ -44,7 +44,7 @@ The request generator supplies `intent`, `reversibility`, `recovery`, repository
 
 ## Request, receipt, claim, and result
 
-Repository-approved authenticated operations use this sequence:
+Repository-approved authenticated operations use this sequence. The legacy adapter uses the frozen Issue contract above; the routine GitHub lane uses the protected policy and frozen collaboration request described in [GitHub collaboration](github-workflow.md).
 
 1. The guarded provider adapter reads the current account and exact target through the same authenticated surface and creates a fresh preflight receipt bound to the authority, Issue, request, mutation, surface, timestamps, expiry, account, and target digests.
 2. The adapter validates the preflight receipt, including service purpose, stable identity, target, freshness, and exact-Head gate where required.
@@ -63,12 +63,14 @@ The following high-risk operations are explicitly unsupported and fail closed un
 
 The repository removes actor-specific external-service restrictions. The application settings retain only exact `.env` and `.env.*` read denials as a secret-file protection layer. No shell, network, MCP, GitHub, Supabase, Vercel, Cloudflare, or provider category is denied by operator label.
 
+The preceding registry/client inventory describes the legacy provider adapter. Separately, `github:workflow` implements the routine operations in protected-main `config/github-workflow.json`. It does not make the legacy push/PR/delete contracts executable, change merge authorization, or activate another provider.
+
 Cursor Cloud is a separate execution surface, not a separate authority source. Its parent operator uses the same protected account and target registry as Claude and Codex, but every Cursor provider request must also bind a fresh `.artifacts/cursor/<run-id>.json` activation to the current `cursor/<issue>-<slug>` branch, exact Head, and all configured provider identities. Cursor consultants, evaluators, and auditors remain read-only and cannot inherit the parent connector authority.
 
 ## Common safeguards
 
 - Never expose tokens, cookies, private keys, service-role keys, raw email addresses, complete authentication responses, or secret values.
-- Read-only authenticated access still needs account, service, purpose, and exact-target validation. If it exposes protected provider data or supplies evidence for a mutation, it also needs authoritative exact-Head review.
+- Read-only authenticated access still needs account, service, purpose, and exact-target validation. Routine GitHub Issue/PR/check observations use their frozen collaboration request without a source-code review gate; they cannot substitute for the authoritative reviews required by ready/merge or other high-risk operations. Other protected provider-data reads retain their registered exact-Head requirements.
 - Every supported repository-content-derived high-risk write reruns the current authoritative gate: GitHub merge, hosted Supabase migrations, Vercel deployment, and Cloudflare DNS upsert.
 - A destructive action needs explicit Issue authorization, exact resources, a reviewed diff, recovery/rollback evidence, and a fresh preflight. Never broaden a target or infer bulk cleanup.
 - Repository policy, secrets, exact-Head review, protected-main authority, receipt claim/finalize, database expand/deploy/contract, Preview-before-Production, DNS-only default, and template clean-room leakage checks remain in force for both operator labels.

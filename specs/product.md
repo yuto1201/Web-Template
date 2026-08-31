@@ -19,6 +19,8 @@ The repository owner creates a new repository from this GitHub template, fills i
 
 ## Required qualities
 
+- Every generated application confirms its site-wide theme after target users/MVP are known and before individual product-page UI implementation. Use one representative desktop/mobile preview and shared tokens/components across all pages, including login and legal surfaces. Bootstrap may remain theme-pending; minor adjustments and independent backend work do not require repeated visual approval. Follow [design-system.md](design-system.md).
+- Every generated website includes public Terms of Use at `/terms` and a Privacy Policy at `/privacy`, reachable from a shared footer without login. The template ships explicit unreviewed customization outlines; each app must finalize them against its actual service/data practices before public release.
 - Secure by default, especially at browser/server and anonymous/authenticated boundaries
 - Reproducible on Windows and GitHub Actions
 - Issue-driven and resumable after interruption

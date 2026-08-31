@@ -5,6 +5,7 @@ The canonical state names, transitions, model-family review mapping, and privile
 ## 1. Define
 
 - Create a GitHub Issue with a goal, in-scope work, out-of-scope work, acceptance criteria, and dependencies.
+- Use [guarded GitHub collaboration](github-workflow.md) for approved proposal intake, branch push, draft PR creation/update, readiness and observations. Do not invent Issue 0 or use raw CLI as a permanent bypass.
 - Keep a single coherent outcome per Issue.
 - Resolve material architecture or account questions before implementation.
 - Snapshot the accepted Issue contract into `.artifacts/issues/<issue>/issue-contract.json`. Its digest freezes the goal, numbered `AC-*` criteria, dependencies, and allowlisted external operations for the run.
@@ -22,7 +23,10 @@ The canonical state names, transitions, model-family review mapping, and privile
 - Make the smallest complete change that satisfies the Issue.
 - Keep external provider operations separate from local code changes and run supported operations only through the provider-specific guarded adapter's request/preflight/claim/mutation/result/finalized lifecycle.
 - A provider operation is executable only when both its strict registry contract and a production provider client exist. This release exposes `npm run provider:github`; registered Supabase, Vercel, and Cloudflare mutations remain non-executable until later Issues add their clients.
+- Routine collaboration additionally uses `npm run github:workflow`; the existing `provider:github` transport retains exact-Head squash merge. Routine requests use their own protected policy and local journal, not the legacy pre-merge infrastructure evidence lane.
 - Update durable specifications and decisions in the same change.
+- For product UI, follow [the site-wide theme contract](../specs/design-system.md): draft after users/MVP are known; record user confirmation of a representative desktop/mobile preview before implementing individual pages. Only the bounded nonfunctional confirmation prototype may precede confirmation. Bootstrap records the draft/next step without building UI; independent authorized setup/backend work may continue.
+- Reuse shared tokens/components on every surface and record minor changes in the Issue/PR without per-page approval. Reconfirm only material direction changes. Theme confirmation does not replace the existing risk-derived verification/review or authorize external operations.
 - Persist state transitions so an interrupted run resumes from recorded evidence instead of inference.
 - Use focused tests or `npm run check:fast` during the inner loop. Ask reviewers for one complete pass and batch findings before revising instead of starting a new round per finding.
 - Treat 30 changed files or 3,000 changed lines as advisory scope limits. Split oversized work into independently safe Issues, or record why atomic delivery is justified; never lower risk to fit the limit.
@@ -92,6 +96,8 @@ At most one pre-merge provider mutation may be declared by a pull request. Execu
 
 PR merge is the delivery action itself and cannot be attested inside the PR it merges. It is authorized by the protected-base exact-Head gate and records its result outside that candidate PR. Issue #33 specifically uses the protected-main v1 delivery path; candidate v2 authority never authorizes its own delivery.
 
+The one-mutation/evidence-successor rule above applies to legacy provider changes, not routine collaboration. Issue/branch/PR operations from `github:workflow` keep immutable receipts in the Git common directory and provider-enforced claim refs. Do not put these in `externalChanges` or create a source commit for each push/PR operation. This separation does not exempt infrastructure writes or merge from their existing gates.
+
 PR `externalChanges` evidence is structured rather than free-form. Each entry records service, operation, operator label, execution role, model family, protected account and target references, service mode, exact executed Head, outcome, and six unique committed references with SHA-256 digests: request, preflight, claim, mutation, result, and finalized. The preflight and result must share one redacted `receiptId`; claim carries the fresh observation digest; mutation carries the provider idempotency-key digest. The local and GitHub gates load all six files from the reviewed commit, reject a digest or linkage mismatch, and reject committed external-operation files when `externalChanges` is empty. Record only redacted fields—never tokens, secrets, raw email addresses, or raw provider identity observations.
 
 Write claims use the Git common directory so sibling worktrees share one-use state. Each supported write requires provider-enforced idempotency for separate-clone safety; execution fails closed when the provider operation offers none. Read-only operations still require a fresh authorization and receipt but may repeat within their explicit freshness window.
@@ -99,6 +105,8 @@ Write claims use the Git common directory so sibling worktrees share one-use sta
 The registered contract names are `github.read_issue`, `github.push_branch`, `github.create_pr`, `github.merge_pr`, `github.delete_branch`, `supabase.inspect_project`, `supabase.apply_migrations`, `vercel.inspect_project`, `vercel.deploy_preview`, `vercel.deploy_production`, `cloudflare.inspect_zone`, and `cloudflare.upsert_dns`. Only `github.read_issue` and `github.merge_pr` have a production provider client in this release; all other registered names remain non-executable. GitHub ruleset updates, Supabase Auth-policy updates, Vercel configuration and rollback, and Cloudflare rollback are unsupported and denied until separately registered.
 
 ## Commands
+
+For the separate routine command schemas and recovery limits, see [GitHub collaboration](github-workflow.md). The registry inventory above remains the inventory of the legacy adapter, not an authorization to invoke raw Git or GitHub CLI.
 
 ```bash
 # Provider-free end-to-end fixture

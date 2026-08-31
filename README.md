@@ -23,6 +23,10 @@ npm run check
 
 初期化の詳細と外部サービスの順序は [activation runbook](docs/activation.md) を参照してください。
 
+対象ユーザー・MVPが固まったら、[サイト全体のテーマ](specs/design-system.md)をdraftにまとめます。次の承認済みUI Issueで代表画面をPC・スマホで確認し、テーマを確定してから各ページを実装します。既存の配色・フォントは未承認の初期値です。Bootstrapはテーマ未確定でも完了でき、独立した準備/backend作業も進められますが、UI-readyとは区別します。毎ページの承認は不要で、大きな方向転換だけ再確認します。
+
+生成するすべてのサイトに、利用規約（`/terms`）とプライバシーポリシー（`/privacy`）、共通フッターのリンクを残します。初期状態は**未確認のひな形**です。公開前に運営者・サービス内容・実際のデータの扱いに合わせて確定してください。[文書の作成・公開前チェック](docs/legal-pages.md)を参照してください。ローカル検証成功は法務確認の完了を意味しません。
+
 Cursor Cloud ではローカル認証情報をコピーせず、生成済み環境と run-bound activation を使います。準備、read-only evaluator、個人アカウント照合、失効手順は [Cursor Cloud onboarding](docs/onboarding-cursor-cloud.md) を参照してください。
 
 ## 作業PCをMacへ移す
@@ -42,7 +46,7 @@ npm run workstation:doctor -- --require-env --require-docker
 
 `npm run readiness` は次を別々に表示します。
 
-- `local.status: ready`: package slug、所有者設定、URL、ローカルポートが整合し、ローカル実装を開始できる。
+- `local.status: ready`: package slug、所有者設定、URL、ローカルポートが整合している。テーマ確定/UI-readyの判定ではなく、UI実装には上記の確認工程が別途必要。
 - `liveProviders.*.status: needs-codex`: 対象の個人アカウントや hosted project がまだ確定していないことを示す既存の機械可読 status 名。operator 権限を Codex に限定する意味ではありません。
 
 ローカル準備完了は、デプロイやドメイン公開の成功を意味しません。Claude と Codex は implementer / external-operator として同権ですが、operator label と実際のアカウント認証は別物です。認証済み操作は protected `main` の authority、Issue の宣言目的、service mode、exact target、fresh receipt が一致した場合だけ行います。GitHub・Supabase・Vercel・Cloudflare は `repository-active` です。Linear は `explicit-user-purpose-only` ですが、現在は操作自体が未登録なので、ユーザーが目的を明示して stable IDs を登録しても read/write とも fail closed です。

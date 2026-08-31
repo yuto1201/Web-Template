@@ -32,6 +32,7 @@
     "generate": "node tools/generate-agent-wrappers.mjs",
     "workflow": "node tools/issue-workflow.mjs",
     "provider:github": "node tools/github-provider-operation.mjs",
+    "github:workflow": "node tools/github-workflow.mjs",
     "check:generated": "node tools/generate-agent-wrappers.mjs --check",
     "check:fast": "npm run lint && npm run typecheck && npm test",
     "check:docs": "npm run template:source-check && npm run policy && npm run check:links && npm run audit:trace && npm run check:generated",
