@@ -12,7 +12,7 @@ describe("acceptance trace", () => {
     });
 
     expect(command.status, command.stderr).toBe(0);
-    expect(JSON.parse(command.stdout)).toMatchObject({ ok: true, issues: 14 });
+    expect(JSON.parse(command.stdout)).toMatchObject({ ok: true, issues: 15 });
   });
 
   it("retains legal surfaces and their regression checks in the trace", async () => {
@@ -49,5 +49,15 @@ describe("acceptance trace", () => {
       "docs/activation.md",
     ]));
     expect(theme?.commands).toEqual(expect.arrayContaining(["audit:trace", "check", "template:verify"]));
+  });
+
+  it("retains routine transport contracts, client and negative tests", async () => {
+    const trace = JSON.parse(await readFile("config/acceptance.json", "utf8"));
+    const workflow = trace.issues.find(/** @param {{issue:number}} entry */ (entry) => entry.issue === 41);
+    expect(workflow?.evidence).toEqual(expect.arrayContaining([
+      "config/github-workflow.json", "tools/github-workflow-core.mjs", "tools/github-workflow-client.mjs",
+      "tools/github-workflow-git.mjs", "tools/github-workflow.mjs", "tests/github-workflow.test.mjs",
+      "tests/github-workflow-client.test.mjs", "docs/github-workflow.md",
+    ]));
   });
 });
