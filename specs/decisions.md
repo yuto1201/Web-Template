@@ -62,3 +62,12 @@ Decisions are append-only. To change one, add a new entry that explicitly supers
 - CI: preserve all required status-context names. Each job may complete through a validated lightweight path only when trusted classification explicitly disables its expensive checks; missing, malformed, unavailable, bootstrap, and protected-main-push classification runs the full path.
 - Efficiency: use focused checks or `check:fast` while editing, batch findings, target two review rounds, and run one final full check for normal/high at the exact review Head. Required CI on that unchanged Head satisfies the merge-time rerun. Changes expected above 30 files or 3,000 lines should be split or carry an atomicity rationale.
 - Invariants: candidate policy and PR claims cannot lower risk. Authority/security/workflow/agent-contract/provider/auth/database/deployment/DNS/tool paths remain high risk; account binding, secrets, destructive-action controls, external-operation receipts, and required exact-Head evidence are not relaxed.
+
+## D-009: Legal documents are required website surfaces
+
+- Status: accepted
+- Date: 2026-08-31
+- Decision: all websites generated from this template retain `/terms`, `/privacy`, and shared footer links. Both exact routes bypass session refresh and render without provider configuration; no other route gains an authentication exemption.
+- Content boundary: the template provides explicitly unreviewed Japanese customization outlines, not binding service terms or a compliance certification. Actual operator/contact details, data practices and dates must be confirmed for each application before public release. Unknown values are not invented from repository account identifiers.
+- Verification: fast tests check required routes, shared layout links and the exact public-route boundary; browser tests cover navigation, accessibility and mobile layout. These tests do not determine legal adequacy or automatically authorize publication. Follow `docs/legal-pages.md` for the owner review checklist.
+- Scope: no consent database, cookie banner, billing system, legal version-management subsystem or provider-policy change is introduced.

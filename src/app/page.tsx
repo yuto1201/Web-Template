@@ -91,10 +91,6 @@ export default function Home() {
         </section>
       </main>
 
-      <footer>
-        <p>Ready to become something specific.</p>
-        <span>Next.js · Supabase · Vercel · Cloudflare DNS</span>
-      </footer>
     </>
   );
 }
