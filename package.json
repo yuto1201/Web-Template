@@ -50,7 +50,7 @@
     "check": "npm run template:source-check && npm run policy && npm run check:links && npm run audit:trace && npm run check:generated && npm run deployment:lint && npm run domain:lint && npm run lint && npm run typecheck && npm test && npm run test:boundary && npm run test:client-scan && npm run build:ci"
   },
   "dependencies": {
-    "@supabase/ssr": "0.12.4",
+    "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.112.3",
     "next": "16.3.1",
     "react": "19.2.8",
